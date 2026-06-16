@@ -69,12 +69,46 @@ def _enrich_with_detail(page, ev: ScrapedEvent) -> ScrapedEvent:
         page.goto(ev.url, wait_until="domcontentloaded", timeout=30_000)
         page.wait_for_timeout(1_500)
         soup = BeautifulSoup(_page_html(page), "lxml")
-        org_el = soup.select_one(".ep-organizer-name")
-        if org_el:
-            ev = replace(ev, organizer=org_el.get_text(strip=True))
+        name, url = _extract_organizer(soup)
+        if name:
+            ev = replace(ev, organizer=name, organizer_url=url)
     except Exception:
         pass
     return ev
+
+
+def _extract_organizer(soup) -> tuple[str, str]:
+    org_el = soup.select_one(".ep-organizer-name")
+    if not org_el:
+        return "", ""
+    name = org_el.get_text(strip=True)
+    # Case 1: the element itself is a link
+    if org_el.name == "a":
+        return name, org_el.get("href", "")
+    # Case 2: name is wrapped in a parent <a>
+    parent_a = org_el.find_parent("a")
+    if parent_a:
+        return name, parent_a.get("href", "")
+    # Case 3: .ep-organizer container has a direct child link
+    container = soup.select_one(".ep-organizer")
+    if container:
+        link = container.find("a", href=True)
+        if link:
+            return name, link["href"]
+    # Case 4: any link whose href contains /org/ (allevents.in organizer path)
+    org_link = soup.select_one("a[href*='/org/']")
+    if org_link:
+        return name, org_link.get("href", "")
+    # Case 5: happeningnext.com uses Facebook Graph API for organizer avatars.
+    # Extract the username and build a Facebook profile URL as the organizer link.
+    # e.g. src="https://graph.facebook.com/karposmm/picture?..." → facebook.com/karposmm
+    if container:
+        img = container.find("img", src=True)
+        if img:
+            m = re.search(r"graph\.facebook\.com/([^/?]+)/picture", img["src"])
+            if m:
+                return name, f"https://www.facebook.com/{m.group(1)}"
+    return name, ""
 
 
 def _page_html(page) -> str:
