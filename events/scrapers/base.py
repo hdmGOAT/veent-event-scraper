@@ -13,7 +13,7 @@ from typing import Iterable
 from django.utils import timezone
 from django.utils.text import slugify
 
-from events.models import Event, Venue
+from events.models import Event, Organizer, Venue
 
 
 @dataclass
@@ -36,6 +36,22 @@ class ScrapedVenue:
     amenities: dict = field(default_factory=dict)
     rating: float | None = None
     price_level: str = ""
+
+
+@dataclass
+class ScrapedOrganizer:
+    name: str
+    website: str = ""
+    email: str = ""
+    phone: str = ""
+    address: str = ""
+    city: str = ""
+    country: str = ""
+    facebook_url: str = ""
+    instagram_url: str = ""
+    description: str = ""
+    external_id: str = ""
+    source_url: str = ""
 
 
 @dataclass
@@ -153,6 +169,48 @@ def save_events(source: str, events: Iterable[ScrapedEvent]) -> dict:
             updated += 1
         else:
             Event.objects.create(slug=_unique_slug(Event, se.name), **fields)
+            created += 1
+
+    return {"source": source, "created": created, "updated": updated}
+
+
+def save_organizers(source: str, organizers: Iterable[ScrapedOrganizer]) -> dict:
+    """Persist scraped organizers, upserting on (source, external_id) when present.
+
+    ``status`` is intentionally never overwritten on re-scrape so that admin
+    confirm/reject decisions survive subsequent runs.
+    """
+    now = timezone.now()
+    created = updated = 0
+
+    for so in organizers:
+        existing = None
+        if so.external_id:
+            existing = Organizer.objects.filter(
+                source=source, external_id=so.external_id
+            ).first()
+        if existing is None:
+            existing = Organizer.objects.filter(source=source, name=so.name).first()
+
+        contact_fields = dict(
+            name=so.name, website=so.website, email=so.email, phone=so.phone,
+            address=so.address, city=so.city, country=so.country,
+            facebook_url=so.facebook_url, instagram_url=so.instagram_url,
+            description=so.description, source=source, source_url=so.source_url,
+            external_id=so.external_id, scraped_at=now,
+        )
+
+        if existing:
+            for k, v in contact_fields.items():
+                setattr(existing, k, v)
+            existing.save()
+            updated += 1
+        else:
+            Organizer.objects.create(
+                slug=_unique_slug(Organizer, so.name),
+                status=Organizer.STATUS_PENDING,
+                **contact_fields,
+            )
             created += 1
 
     return {"source": source, "created": created, "updated": updated}

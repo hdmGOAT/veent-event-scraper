@@ -126,3 +126,56 @@ class Event(models.Model):
 
     def get_absolute_url(self):
         return reverse("events:event_detail", args=[self.slug])
+
+
+class Organizer(models.Model):
+    """An event organizer scraped from a partner directory."""
+
+    STATUS_PENDING = "pending"
+    STATUS_CONFIRMED = "confirmed"
+    STATUS_REJECTED = "rejected"
+    STATUS_CHOICES = [
+        (STATUS_PENDING, "Pending Review"),
+        (STATUS_CONFIRMED, "Confirmed"),
+        (STATUS_REJECTED, "Rejected"),
+    ]
+
+    name = models.CharField(max_length=255)
+    slug = models.SlugField(max_length=255, unique=True)
+    status = models.CharField(
+        max_length=20, choices=STATUS_CHOICES, default=STATUS_PENDING, db_index=True,
+    )
+    website = models.URLField(blank=True)
+    email = models.EmailField(blank=True)
+    phone = models.CharField(max_length=80, blank=True)
+    address = models.CharField(max_length=500, blank=True)
+    city = models.CharField(max_length=120, blank=True)
+    country = models.CharField(max_length=120, blank=True)
+    facebook_url = models.URLField(blank=True)
+    instagram_url = models.URLField(blank=True)
+    description = models.TextField(blank=True)
+
+    # Provenance / scraping metadata
+    source = models.CharField(
+        max_length=120, blank=True,
+        help_text="Identifier of the scraper/source this record came from.",
+    )
+    source_url = models.URLField(blank=True)
+    external_id = models.CharField(max_length=255, blank=True, db_index=True)
+    scraped_at = models.DateTimeField(null=True, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["name"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["source", "external_id"],
+                condition=models.Q(external_id__gt=""),
+                name="unique_organizer_source_external_id",
+            )
+        ]
+
+    def __str__(self):
+        return self.name
