@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import Event, Venue
+from .models import Event, Organizer, Venue
 
 
 @admin.register(Venue)
@@ -44,3 +44,22 @@ class EventAdmin(admin.ModelAdmin):
         ("Provenance", {"fields": ("source", "source_url", "external_id", "scraped_at")}),
         ("Timestamps", {"fields": ("created_at", "updated_at")}),
     )
+
+
+@admin.register(Organizer)
+class OrganizerAdmin(admin.ModelAdmin):
+    list_display = ("name", "status", "email", "phone", "website", "facebook_url", "source", "updated_at")
+    list_filter = ("status", "source")
+    list_editable = ("status",)
+    search_fields = ("name", "email", "website", "phone")
+    prepopulated_fields = {"slug": ("name",)}
+    readonly_fields = ("created_at", "updated_at", "scraped_at")
+    actions = ["confirm_organizers", "reject_organizers"]
+
+    @admin.action(description="Mark selected organizers as Confirmed")
+    def confirm_organizers(self, request, queryset):
+        queryset.update(status=Organizer.STATUS_CONFIRMED)
+
+    @admin.action(description="Mark selected organizers as Rejected")
+    def reject_organizers(self, request, queryset):
+        queryset.update(status=Organizer.STATUS_REJECTED)
