@@ -9,6 +9,7 @@ from .happeningnext import HappeningNextCDOScraper
 from .myruntime import MyRuntimeScraper
 from .places import GooglePlacesVenueScraper
 from .racemeister import RacemeisterPartnersScraper
+from .racemeister_events import RacemeisterEventsScraper
 
 # key -> scraper class. Add new scrapers here.
 SCRAPERS = {
@@ -16,6 +17,7 @@ SCRAPERS = {
     "allevents_cdo": AllEventsCDOScraper,
     "happeningnext_cdo": HappeningNextCDOScraper,
     "racemeister_partners": RacemeisterPartnersScraper,
+    "racemeister_events": RacemeisterEventsScraper,
     "myruntime": MyRuntimeScraper,
 }
 

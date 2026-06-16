@@ -23,7 +23,7 @@ _BASE_URL = "https://myruntime.com"
 _API_URL = f"{_BASE_URL}/appEventsService/api/v1/getAppEvents"
 _EVENTS_PAGE = f"{_BASE_URL}/events"
 _HEADERS = {
-    "User-Agent": "Mozilla/5.0 (compatible; VeentScraper/1.0; +https://veent.io)"
+    "User-Agent": "Mozilla/5.0 (compatible; EventScraper/1.0)"
 }
 _TIMEOUT = 20
 

@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 _HEADERS = {
     "User-Agent": (
-        "Mozilla/5.0 (compatible; VeentScraper/1.0; +https://veent.io)"
+        "Mozilla/5.0 (compatible; EventScraper/1.0)"
     )
 }
 _TIMEOUT = 15

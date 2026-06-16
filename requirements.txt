@@ -1,6 +1,7 @@
 asgiref==3.11.1
 playwright
 playwright-stealth
+pycryptodome==3.23.0
 scrapling[all]
 beautifulsoup4==4.15.0
 certifi==2026.5.20
