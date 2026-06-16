@@ -1,12 +1,29 @@
 {% extends "base.html" %}
 {% block title %}{{ venue.name }} · Veent{% endblock %}
+
+{% block extra_head %}
+  {% if venue.latitude is not None %}
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+          integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+  {% endif %}
+{% endblock %}
+
 {% block content %}
   <p><a href="{% url 'events:venue_list' %}">← All venues</a></p>
   <h1>{{ venue.name }}</h1>
   {% if venue.address or venue.city %}
     <p class="muted">{{ venue.address }}{% if venue.city %}{% if venue.address %}, {% endif %}{{ venue.city }}{% endif %}{% if venue.country %}, {{ venue.country }}{% endif %}</p>
   {% endif %}
-  {% if venue.website %}<p><a href="{{ venue.website }}" target="_blank" rel="noopener">Website →</a></p>{% endif %}
+
+  <div class="meta">
+    {% if venue.website %}<div><a href="{{ venue.website }}" target="_blank" rel="noopener">Website →</a></div>{% endif %}
+    {% if venue.latitude is not None %}<div class="muted" style="font-size:.85rem">Coordinates: {{ venue.latitude|floatformat:5 }}, {{ venue.longitude|floatformat:5 }}</div>{% endif %}
+    {% if venue.source %}<div>Source: <span class="source-tag">{{ venue.source }}</span>{% if venue.source_url %} · <a href="{{ venue.source_url }}" target="_blank" rel="noopener">view on source →</a>{% endif %}</div>{% endif %}
+  </div>
+
+  {% if venue.latitude is not None %}
+    <div id="venue-map"></div>
+  {% endif %}
 
   <h2>Events</h2>
   <div class="grid">
@@ -19,4 +36,22 @@
       <div class="empty">No events recorded for this venue yet.</div>
     {% endfor %}
   </div>
+{% endblock %}
+
+{% block extra_body %}
+  {% if venue.latitude is not None %}
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+            integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+    <script>
+      (function () {
+        var lat = {{ venue.latitude }}, lng = {{ venue.longitude }};
+        var map = L.map("venue-map").setView([lat, lng], 16);
+        L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+          maxZoom: 19,
+          attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+        }).addTo(map);
+        L.marker([lat, lng]).addTo(map).bindPopup("{{ venue.name|escapejs }}");
+      })();
+    </script>
+  {% endif %}
 {% endblock %}

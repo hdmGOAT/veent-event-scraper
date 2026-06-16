@@ -28,7 +28,14 @@
     .stats { display:flex; gap:1.5rem; margin-bottom:1rem; }
     .pill { background:var(--card); border:1px solid var(--border); border-radius:20px; padding:.2rem .7rem; font-size:.85rem; color:var(--muted); }
     .empty { text-align:center; padding:3rem 1rem; color:var(--muted); }
+    .meta { margin:.5rem 0; font-size:.9rem; }
+    .meta div { margin:.15rem 0; }
+    .source-tag { display:inline-block; background:var(--card); border:1px solid var(--border);
+                  border-radius:6px; padding:.1rem .5rem; font-size:.75rem; color:var(--muted); }
+    #venue-map { height:380px; border-radius:10px; border:1px solid var(--border); margin:1rem 0 1.5rem; }
+    .leaflet-popup-content a { color:#1a4cff; }
   </style>
+  {% block extra_head %}{% endblock %}
 </head>
 <body>
   <header>
@@ -42,5 +49,6 @@
   <main>
     {% block content %}{% endblock %}
   </main>
+  {% block extra_body %}{% endblock %}
 </body>
 </html>

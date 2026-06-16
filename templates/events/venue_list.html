@@ -1,20 +1,68 @@
 {% extends "base.html" %}
 {% block title %}Venues · Veent{% endblock %}
+
+{% block extra_head %}
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+{% endblock %}
+
 {% block content %}
   <h1>Venues</h1>
   <form class="search" method="get" action="{% url 'events:venue_list' %}">
     <input type="search" name="q" value="{{ query }}" placeholder="Search venues, cities…">
     <button type="submit">Search</button>
   </form>
+
+  {% if map_venues %}
+    <div id="venue-map"></div>
+  {% endif %}
+
   <div class="grid">
     {% for venue in venues %}
       <div class="card">
         <h3><a href="{{ venue.get_absolute_url }}">{{ venue.name }}</a></h3>
         {% if venue.city %}<div class="muted">{{ venue.city }}{% if venue.country %}, {{ venue.country }}{% endif %}</div>{% endif %}
+        {% if venue.address %}<div class="muted" style="font-size:.85rem">{{ venue.address }}</div>{% endif %}
+        <div class="meta">
+          {% if venue.website %}<div><a href="{{ venue.website }}" target="_blank" rel="noopener">Website →</a></div>{% endif %}
+          {% if venue.latitude is not None %}<div class="muted" style="font-size:.8rem">{{ venue.latitude|floatformat:5 }}, {{ venue.longitude|floatformat:5 }}</div>{% endif %}
+        </div>
         <span class="pill">{{ venue.event_count }} event{{ venue.event_count|pluralize }}</span>
+        {% if venue.source %}<span class="source-tag">{{ venue.source }}</span>{% endif %}
       </div>
     {% empty %}
-      <div class="empty">No venues yet. Run <code>python manage.py scrape</code> to populate data.</div>
+      <div class="empty">No venues yet. Run <code>python manage.py scrape_venues</code> to populate data.</div>
     {% endfor %}
   </div>
+{% endblock %}
+
+{% block extra_body %}
+  {% if map_venues %}
+    {{ map_venues|json_script:"venue-data" }}
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+            integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+    <script>
+      (function () {
+        var venues = JSON.parse(document.getElementById("venue-data").textContent);
+        // Default to Cagayan de Oro City center.
+        var map = L.map("venue-map").setView([8.4822, 124.6472], 12);
+        L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+          maxZoom: 19,
+          attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+        }).addTo(map);
+
+        var bounds = [];
+        venues.forEach(function (v) {
+          var marker = L.marker([v.lat, v.lng]).addTo(map);
+          marker.bindPopup('<a href="' + v.url + '">' + v.name + '</a>');
+          bounds.push([v.lat, v.lng]);
+        });
+        if (bounds.length > 1) {
+          map.fitBounds(bounds, { padding: [40, 40] });
+        } else if (bounds.length === 1) {
+          map.setView(bounds[0], 15);
+        }
+      })();
+    </script>
+  {% endif %}
 {% endblock %}

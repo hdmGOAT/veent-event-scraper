@@ -20,6 +20,9 @@ class Venue(models.Model):
         help_text="Identifier of the scraper/source this record came from.",
     )
     source_url = models.URLField(blank=True)
+    # Stable identifier from the source (e.g. Google Places place_id), used to
+    # deduplicate venues on re-scrape.
+    place_id = models.CharField(max_length=255, blank=True, db_index=True)
     scraped_at = models.DateTimeField(null=True, blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
@@ -27,6 +30,13 @@ class Venue(models.Model):
 
     class Meta:
         ordering = ["name"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["source", "place_id"],
+                condition=models.Q(place_id__gt=""),
+                name="unique_venue_source_place_id",
+            )
+        ]
 
     def __str__(self):
         return self.name

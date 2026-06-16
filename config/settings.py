@@ -10,10 +10,34 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/6.0/ref/settings/
 """
 
+import os
 from pathlib import Path
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+
+def _load_dotenv(path):
+    """Minimal, dependency-free .env loader.
+
+    Reads simple ``KEY=value`` lines into ``os.environ`` (without overriding
+    variables already set in the real environment). Keeps secrets out of code
+    and version control — ``.env`` is git-ignored.
+    """
+    if not path.exists():
+        return
+    for raw in path.read_text().splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key and key not in os.environ:
+            os.environ[key] = value
+
+
+_load_dotenv(BASE_DIR / ".env")
 
 
 # Quick-start development settings - unsuitable for production
@@ -26,6 +50,10 @@ SECRET_KEY = 'django-insecure-xnjav(kkizi)fm)3&#v9%tk15#zcue(%f5n0t9x5i8szb9sc7y
 DEBUG = True
 
 ALLOWED_HOSTS = ['localhost', '127.0.0.1', 'testserver']
+
+# Google Places API key for the venue scraper. Set via environment or .env;
+# never hardcode or commit a real key. Empty string when unset.
+PLACES_API_KEY = os.environ.get('PLACES_API_KEY', '')
 
 
 # Application definition

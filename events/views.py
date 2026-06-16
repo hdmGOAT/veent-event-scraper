@@ -36,7 +36,22 @@ def venue_list(request):
         venues = venues.filter(
             Q(name__icontains=query) | Q(city__icontains=query)
         )
-    return render(request, "events/venue_list.html", {"venues": venues, "query": query})
+    # Geocoded venues for the Leaflet map (skip rows without coordinates).
+    map_venues = [
+        {
+            "name": v.name,
+            "url": v.get_absolute_url(),
+            "lat": v.latitude,
+            "lng": v.longitude,
+        }
+        for v in venues
+        if v.latitude is not None and v.longitude is not None
+    ]
+    return render(
+        request,
+        "events/venue_list.html",
+        {"venues": venues, "query": query, "map_venues": map_venues},
+    )
 
 
 def venue_detail(request, slug):
