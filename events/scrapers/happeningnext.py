@@ -19,7 +19,7 @@ from dataclasses import replace
 from datetime import datetime, timezone as dt_timezone, timedelta
 from typing import Iterable
 
-from .base import BaseScraper, ScrapedEvent, ScrapedVenue
+from .base import BaseScraper, ScrapedEvent, ScrapedOrganizer, ScrapedVenue, save_organizers
 
 BASE_URL = "https://happeningnext.com/cagayan%2Bde%2Boro"
 _PHT = dt_timezone(timedelta(hours=8))
@@ -27,6 +27,9 @@ _PHT = dt_timezone(timedelta(hours=8))
 
 class HappeningNextCDOScraper(BaseScraper):
     source = "happeningnext_cdo"
+
+    def __init__(self):
+        self._scraped_organizers: list[ScrapedOrganizer] = []
 
     def fetch(self) -> Iterable[ScrapedEvent]:
         from scrapling.fetchers import StealthyFetcher
@@ -42,8 +45,10 @@ class HappeningNextCDOScraper(BaseScraper):
             events = [ev for card in soup.select(".event-item.card") if (ev := _card_to_event(card))]
 
             for ev in events:
-                ev = _enrich_with_detail(page, ev)
+                ev, org = _enrich_with_detail(page, ev)
                 collected.append(ev)
+                if org:
+                    self._scraped_organizers.append(org)
 
         StealthyFetcher.fetch(
             BASE_URL,
@@ -56,14 +61,21 @@ class HappeningNextCDOScraper(BaseScraper):
 
         yield from collected
 
+    def run(self) -> dict:
+        result = super().run()
+        org_result = save_organizers(self.source, self._scraped_organizers)
+        result["organizers_created"] = org_result["created"]
+        result["organizers_updated"] = org_result["updated"]
+        return result
+
 
 # ---------------------------------------------------------------------------
 # Detail-page enrichment (organizer)
 # ---------------------------------------------------------------------------
 
-def _enrich_with_detail(page, ev: ScrapedEvent) -> ScrapedEvent:
+def _enrich_with_detail(page, ev: ScrapedEvent) -> tuple[ScrapedEvent, ScrapedOrganizer | None]:
     if not ev.url:
-        return ev
+        return ev, None
     from bs4 import BeautifulSoup
     try:
         page.goto(ev.url, wait_until="domcontentloaded", timeout=30_000)
@@ -72,9 +84,17 @@ def _enrich_with_detail(page, ev: ScrapedEvent) -> ScrapedEvent:
         name, url = _extract_organizer(soup)
         if name:
             ev = replace(ev, organizer=name, organizer_url=url)
+            fb_url = url if "facebook.com" in url else ""
+            org = ScrapedOrganizer(
+                name=name,
+                facebook_url=fb_url,
+                external_id=_fb_username(url),
+                source_url=ev.url,
+            )
+            return ev, org
     except Exception:
         pass
-    return ev
+    return ev, None
 
 
 def _extract_organizer(soup) -> tuple[str, str]:
@@ -109,6 +129,11 @@ def _extract_organizer(soup) -> tuple[str, str]:
             if m:
                 return name, f"https://www.facebook.com/{m.group(1)}"
     return name, ""
+
+
+def _fb_username(url: str) -> str:
+    m = re.search(r"facebook\.com/([^/?#]+)", url)
+    return m.group(1) if m else ""
 
 
 def _page_html(page) -> str:
