@@ -6,6 +6,7 @@ unique key. The ``scrape`` management command looks scrapers up by key.
 from .allevents import AllEventsCDOScraper
 from .base import BaseScraper, ScrapedEvent, ScrapedOrganizer, ScrapedVenue
 from .happeningnext import HappeningNextCDOScraper
+from .myruntime import MyRuntimeScraper
 from .places import GooglePlacesVenueScraper
 from .racemeister import RacemeisterPartnersScraper
 
@@ -15,6 +16,7 @@ SCRAPERS = {
     "allevents_cdo": AllEventsCDOScraper,
     "happeningnext_cdo": HappeningNextCDOScraper,
     "racemeister_partners": RacemeisterPartnersScraper,
+    "myruntime": MyRuntimeScraper,
 }
 
 __all__ = ["BaseScraper", "ScrapedEvent", "ScrapedOrganizer", "ScrapedVenue", "SCRAPERS"]
