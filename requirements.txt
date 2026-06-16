@@ -2,9 +2,11 @@ asgiref==3.11.1
 beautifulsoup4==4.15.0
 certifi==2026.5.20
 charset-normalizer==3.4.7
+dj-database-url
 Django
 idna==3.18
 lxml==6.1.1
+psycopg2-binary
 requests==2.34.2
 soupsieve==2.8.4
 sqlparse==0.5.5
