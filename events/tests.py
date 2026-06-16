@@ -106,3 +106,73 @@ class GooglePlacesScraperTests(TestCase):
         result = scraper.run()
         self.assertEqual(result["created"], 1)
         self.assertEqual(Venue.objects.filter(source="google_places").count(), 1)
+
+
+class VenueCategoryAndAmenityTests(TestCase):
+    """Coverage for category / about / amenity capture added on top of the
+    base Places scraper."""
+
+    RICH_PLACE = {
+        "id": "ChIJrich",
+        "displayName": {"text": "Ultra Winds Mountain Resort"},
+        "formattedAddress": "Kitanglad Range, Cagayan de Oro",
+        "location": {"latitude": 8.48, "longitude": 124.65},
+        "primaryType": "resort_hotel",
+        "primaryTypeDisplayName": {"text": "Resort hotel"},
+        "types": ["resort_hotel", "lodging", "point_of_interest"],
+        "editorialSummary": {"text": "Laid-back resort with sweeping views."},
+        "rating": 4.3,
+        "priceLevel": "PRICE_LEVEL_MODERATE",
+        "servesBreakfast": True,
+        "goodForChildren": True,
+        "allowsDogs": False,            # falsy → dropped
+        "liveMusic": None,              # missing/None → dropped
+        "accessibilityOptions": {
+            "wheelchairAccessibleEntrance": True,
+            "wheelchairAccessibleParking": False,
+        },
+        "parkingOptions": {"freeParkingLot": True},
+        "paymentOptions": {},
+    }
+
+    def test_to_venue_extracts_category_about_types(self):
+        v = GooglePlacesVenueScraper._to_venue(self.RICH_PLACE)
+        self.assertEqual(v.primary_type, "resort_hotel")
+        self.assertEqual(v.primary_type_display, "Resort hotel")
+        self.assertEqual(v.types, ["resort_hotel", "lodging", "point_of_interest"])
+        self.assertEqual(v.about, "Laid-back resort with sweeping views.")
+        self.assertEqual(v.rating, 4.3)
+        self.assertEqual(v.price_level, "PRICE_LEVEL_MODERATE")
+
+    def test_normalize_amenities_keeps_only_truthy_and_flattens(self):
+        amenities = GooglePlacesVenueScraper._normalize_amenities(self.RICH_PLACE)
+        self.assertEqual(
+            amenities,
+            {
+                "Serves breakfast": True,
+                "Kid-friendly": True,
+                "Wheelchair-accessible entrance": True,
+                "Free parking lot": True,
+            },
+        )
+        # Falsy / missing flags must not appear.
+        self.assertNotIn("Pet-friendly", amenities)
+        self.assertNotIn("Live music", amenities)
+        self.assertNotIn("Wheelchair-accessible parking", amenities)
+
+    def test_missing_optional_fields_degrade_to_empty(self):
+        v = GooglePlacesVenueScraper._to_venue({"id": "x", "displayName": {"text": "Bare"}})
+        self.assertEqual(v.primary_type_display, "")
+        self.assertEqual(v.about, "")
+        self.assertEqual(v.types, [])
+        self.assertEqual(v.amenities, {})
+        self.assertIsNone(v.rating)
+
+    def test_upsert_persists_new_fields(self):
+        v = GooglePlacesVenueScraper._to_venue(self.RICH_PLACE)
+        save_venues("google_places", [v])
+        row = Venue.objects.get(place_id="ChIJrich")
+        self.assertEqual(row.primary_type_display, "Resort hotel")
+        self.assertEqual(row.about, "Laid-back resort with sweeping views.")
+        self.assertIn("Serves breakfast", row.amenities)
+        self.assertEqual(row.types, ["resort_hotel", "lodging", "point_of_interest"])

@@ -14,6 +14,21 @@ class Venue(models.Model):
     latitude = models.FloatField(null=True, blank=True)
     longitude = models.FloatField(null=True, blank=True)
 
+    # Classification / descriptive metadata (from Places API "About" data).
+    # primary_type is the raw Places type key (e.g. "lodging"); the *_display
+    # field is the human label (e.g. "Hotel") used for UI grouping.
+    primary_type = models.CharField(max_length=120, blank=True)
+    primary_type_display = models.CharField(max_length=120, blank=True, db_index=True)
+    # Full list of Places types for the venue, e.g. ["lodging", "point_of_interest"].
+    types = models.JSONField(default=list, blank=True)
+    # Editorial "about" summary text when the source provides one.
+    about = models.TextField(blank=True)
+    # Flat map of amenity flags the source returned, e.g. {"Serves breakfast": true}.
+    amenities = models.JSONField(default=dict, blank=True)
+    rating = models.FloatField(null=True, blank=True)
+    # Source price level enum string (e.g. "PRICE_LEVEL_MODERATE").
+    price_level = models.CharField(max_length=40, blank=True)
+
     # Provenance / scraping metadata
     source = models.CharField(
         max_length=120, blank=True,

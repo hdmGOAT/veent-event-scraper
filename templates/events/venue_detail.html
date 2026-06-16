@@ -11,15 +11,30 @@
 {% block content %}
   <p><a href="{% url 'events:venue_list' %}">← All venues</a></p>
   <h1>{{ venue.name }}</h1>
+  {% if venue.primary_type_display or venue.rating %}
+    <p>
+      {% if venue.primary_type_display %}<span class="pill">{{ venue.primary_type_display }}</span>{% endif %}
+      {% if venue.rating %}<span class="muted">★ {{ venue.rating|floatformat:1 }}</span>{% endif %}
+    </p>
+  {% endif %}
   {% if venue.address or venue.city %}
     <p class="muted">{{ venue.address }}{% if venue.city %}{% if venue.address %}, {% endif %}{{ venue.city }}{% endif %}{% if venue.country %}, {{ venue.country }}{% endif %}</p>
   {% endif %}
+
+  {% if venue.about %}<p class="about">{{ venue.about }}</p>{% endif %}
 
   <div class="meta">
     {% if venue.website %}<div><a href="{{ venue.website }}" target="_blank" rel="noopener">Website →</a></div>{% endif %}
     {% if venue.latitude is not None %}<div class="muted" style="font-size:.85rem">Coordinates: {{ venue.latitude|floatformat:5 }}, {{ venue.longitude|floatformat:5 }}</div>{% endif %}
     {% if venue.source %}<div>Source: <span class="source-tag">{{ venue.source }}</span>{% if venue.source_url %} · <a href="{{ venue.source_url }}" target="_blank" rel="noopener">view on source →</a>{% endif %}</div>{% endif %}
   </div>
+
+  {% if venue.amenities %}
+    <h2>Amenities</h2>
+    <ul class="chips">
+      {% for label in venue.amenities.keys %}<li class="chip">{{ label }}</li>{% endfor %}
+    </ul>
+  {% endif %}
 
   {% if venue.latitude is not None %}
     <div id="venue-map"></div>

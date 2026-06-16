@@ -31,11 +31,23 @@ def event_detail(request, slug):
 
 def venue_list(request):
     query = request.GET.get("q", "").strip()
+    category = request.GET.get("category", "").strip()
     venues = Venue.objects.annotate(event_count=Count("events"))
     if query:
         venues = venues.filter(
             Q(name__icontains=query) | Q(city__icontains=query)
         )
+    if category:
+        venues = venues.filter(primary_type_display=category)
+    # Order by category so the template can {% regroup %} into sections.
+    venues = venues.order_by("primary_type_display", "name")
+    # Distinct non-empty categories for the filter control (alphabetical).
+    categories = (
+        Venue.objects.exclude(primary_type_display="")
+        .values_list("primary_type_display", flat=True)
+        .distinct()
+        .order_by("primary_type_display")
+    )
     # Geocoded venues for the Leaflet map (skip rows without coordinates).
     map_venues = [
         {
@@ -50,7 +62,13 @@ def venue_list(request):
     return render(
         request,
         "events/venue_list.html",
-        {"venues": venues, "query": query, "map_venues": map_venues},
+        {
+            "venues": venues,
+            "query": query,
+            "category": category,
+            "categories": categories,
+            "map_venues": map_venues,
+        },
     )
 
 

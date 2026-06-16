@@ -28,6 +28,14 @@ class ScrapedVenue:
     source_url: str = ""
     # Stable id from the source (e.g. Google Places place_id) for dedup.
     place_id: str = ""
+    # Classification / descriptive metadata (Places "About" data).
+    primary_type: str = ""
+    primary_type_display: str = ""
+    types: list = field(default_factory=list)
+    about: str = ""
+    amenities: dict = field(default_factory=dict)
+    rating: float | None = None
+    price_level: str = ""
 
 
 @dataclass
@@ -95,6 +103,10 @@ def _upsert_venue(source: str, sv: ScrapedVenue, now) -> tuple[Venue, bool]:
         address=sv.address, city=sv.city, country=sv.country,
         website=sv.website, latitude=sv.latitude, longitude=sv.longitude,
         source=source, source_url=sv.source_url, place_id=sv.place_id,
+        primary_type=sv.primary_type,
+        primary_type_display=sv.primary_type_display,
+        types=sv.types, about=sv.about, amenities=sv.amenities,
+        rating=sv.rating, price_level=sv.price_level,
         scraped_at=now,
     )
     if venue:

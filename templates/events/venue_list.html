@@ -10,6 +10,12 @@
   <h1>Venues</h1>
   <form class="search" method="get" action="{% url 'events:venue_list' %}">
     <input type="search" name="q" value="{{ query }}" placeholder="Search venues, cities…">
+    <select name="category" onchange="this.form.submit()">
+      <option value="">All categories</option>
+      {% for cat in categories %}
+        <option value="{{ cat }}" {% if cat == category %}selected{% endif %}>{{ cat }}</option>
+      {% endfor %}
+    </select>
     <button type="submit">Search</button>
   </form>
 
@@ -17,23 +23,30 @@
     <div id="venue-map"></div>
   {% endif %}
 
-  <div class="grid">
-    {% for venue in venues %}
-      <div class="card">
-        <h3><a href="{{ venue.get_absolute_url }}">{{ venue.name }}</a></h3>
-        {% if venue.city %}<div class="muted">{{ venue.city }}{% if venue.country %}, {{ venue.country }}{% endif %}</div>{% endif %}
-        {% if venue.address %}<div class="muted" style="font-size:.85rem">{{ venue.address }}</div>{% endif %}
-        <div class="meta">
-          {% if venue.website %}<div><a href="{{ venue.website }}" target="_blank" rel="noopener">Website →</a></div>{% endif %}
-          {% if venue.latitude is not None %}<div class="muted" style="font-size:.8rem">{{ venue.latitude|floatformat:5 }}, {{ venue.longitude|floatformat:5 }}</div>{% endif %}
-        </div>
-        <span class="pill">{{ venue.event_count }} event{{ venue.event_count|pluralize }}</span>
-        {% if venue.source %}<span class="source-tag">{{ venue.source }}</span>{% endif %}
+  {% regroup venues by primary_type_display as cat_groups %}
+  {% for group in cat_groups %}
+    <section class="category-group">
+      <h2 class="category-heading">{{ group.grouper|default:"Uncategorized" }}
+        <span class="count">({{ group.list|length }})</span></h2>
+      <div class="grid">
+        {% for venue in group.list %}
+          <div class="card">
+            <h3><a href="{{ venue.get_absolute_url }}">{{ venue.name }}</a></h3>
+            {% if venue.city %}<div class="muted">{{ venue.city }}{% if venue.country %}, {{ venue.country }}{% endif %}</div>{% endif %}
+            {% if venue.address %}<div class="muted" style="font-size:.85rem">{{ venue.address }}</div>{% endif %}
+            <div class="meta">
+              {% if venue.website %}<div><a href="{{ venue.website }}" target="_blank" rel="noopener">Website →</a></div>{% endif %}
+              {% if venue.latitude is not None %}<div class="muted" style="font-size:.8rem">{{ venue.latitude|floatformat:5 }}, {{ venue.longitude|floatformat:5 }}</div>{% endif %}
+            </div>
+            <span class="pill">{{ venue.event_count }} event{{ venue.event_count|pluralize }}</span>
+            {% if venue.source %}<span class="source-tag">{{ venue.source }}</span>{% endif %}
+          </div>
+        {% endfor %}
       </div>
-    {% empty %}
-      <div class="empty">No venues yet. Run <code>python manage.py scrape_venues</code> to populate data.</div>
-    {% endfor %}
-  </div>
+    </section>
+  {% empty %}
+    <div class="empty">No venues yet. Run <code>python manage.py scrape_venues</code> to populate data.</div>
+  {% endfor %}
 {% endblock %}
 
 {% block extra_body %}

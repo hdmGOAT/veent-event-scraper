@@ -23,7 +23,63 @@ from .base import ScrapedVenue, save_venues
 
 SEARCH_URL = "https://places.googleapis.com/v1/places:searchText"
 
+# Scalar amenity booleans returned by Places API (New). Mapping value is the
+# human label surfaced in the UI. Only truthy flags are kept per venue.
+SCALAR_AMENITIES = {
+    "allowsDogs": "Pet-friendly",
+    "goodForChildren": "Kid-friendly",
+    "goodForGroups": "Good for groups",
+    "goodForWatchingSports": "Good for watching sports",
+    "restroom": "Restroom",
+    "servesBreakfast": "Serves breakfast",
+    "servesLunch": "Serves lunch",
+    "servesDinner": "Serves dinner",
+    "servesBrunch": "Serves brunch",
+    "servesBeer": "Serves beer",
+    "servesWine": "Serves wine",
+    "servesCocktails": "Serves cocktails",
+    "servesCoffee": "Serves coffee",
+    "servesDessert": "Serves dessert",
+    "servesVegetarianFood": "Vegetarian options",
+    "outdoorSeating": "Outdoor seating",
+    "liveMusic": "Live music",
+    "menuForChildren": "Kids' menu",
+    "reservable": "Reservable",
+    "takeout": "Takeout",
+    "delivery": "Delivery",
+    "dineIn": "Dine-in",
+    "curbsidePickup": "Curbside pickup",
+}
+
+# Nested amenity objects: {api_field: {sub_key: human label}}.
+NESTED_AMENITIES = {
+    "accessibilityOptions": {
+        "wheelchairAccessibleParking": "Wheelchair-accessible parking",
+        "wheelchairAccessibleEntrance": "Wheelchair-accessible entrance",
+        "wheelchairAccessibleRestroom": "Wheelchair-accessible restroom",
+        "wheelchairAccessibleSeating": "Wheelchair-accessible seating",
+    },
+    "parkingOptions": {
+        "freeParkingLot": "Free parking lot",
+        "paidParkingLot": "Paid parking lot",
+        "freeStreetParking": "Free street parking",
+        "paidStreetParking": "Paid street parking",
+        "valetParking": "Valet parking",
+        "freeGarageParking": "Free garage parking",
+        "paidGarageParking": "Paid garage parking",
+    },
+    "paymentOptions": {
+        "acceptsCreditCards": "Accepts credit cards",
+        "acceptsDebitCards": "Accepts debit cards",
+        "acceptsCashOnly": "Cash only",
+        "acceptsNfc": "Accepts NFC payments",
+    },
+}
+
 # Fields to request. Keeping the mask tight controls billing tier and payload.
+# NOTE: the category/about/amenity fields below move requests into a higher
+# Places API SKU tier (Enterprise / Enterprise + Atmosphere) than the basic
+# location fields — i.e. each call is billed at a higher rate.
 FIELD_MASK = ",".join(
     [
         "places.id",
@@ -32,8 +88,24 @@ FIELD_MASK = ",".join(
         "places.location",
         "places.websiteUri",
         "places.googleMapsUri",
-        "nextPageToken",
+        # Category / classification
+        "places.primaryType",
+        "places.primaryTypeDisplayName",
+        "places.types",
+        # "About" / editorial summary
+        "places.editorialSummary",
+        # Ratings / price
+        "places.rating",
+        "places.userRatingCount",
+        "places.priceLevel",
+        # Amenity objects
+        "places.accessibilityOptions",
+        "places.parkingOptions",
+        "places.paymentOptions",
     ]
+    # Scalar amenity booleans (kept in sync with SCALAR_AMENITIES).
+    + [f"places.{key}" for key in SCALAR_AMENITIES]
+    + ["nextPageToken"]
 )
 
 # Event-relevant venue types, expressed as Text Search queries scoped to CDO.
@@ -92,7 +164,26 @@ class GooglePlacesVenueScraper:
                 break
 
     @staticmethod
-    def _to_venue(place: dict) -> ScrapedVenue:
+    def _normalize_amenities(place: dict) -> dict:
+        """Flatten Places amenity fields into a {label: True} map.
+
+        Keeps only truthy flags so the UI renders just the amenities the place
+        actually has. Scalar booleans and nested option objects are merged into
+        one flat dict keyed by human-readable label.
+        """
+        amenities: dict[str, bool] = {}
+        for key, label in SCALAR_AMENITIES.items():
+            if place.get(key) is True:
+                amenities[label] = True
+        for field_name, sub_map in NESTED_AMENITIES.items():
+            obj = place.get(field_name) or {}
+            for sub_key, label in sub_map.items():
+                if obj.get(sub_key) is True:
+                    amenities[label] = True
+        return amenities
+
+    @classmethod
+    def _to_venue(cls, place: dict) -> ScrapedVenue:
         loc = place.get("location") or {}
         return ScrapedVenue(
             name=(place.get("displayName") or {}).get("text", "").strip(),
@@ -104,6 +195,15 @@ class GooglePlacesVenueScraper:
             longitude=loc.get("longitude"),
             source_url=place.get("googleMapsUri", ""),
             place_id=place.get("id", ""),
+            primary_type=place.get("primaryType", ""),
+            primary_type_display=(
+                place.get("primaryTypeDisplayName") or {}
+            ).get("text", ""),
+            types=place.get("types") or [],
+            about=(place.get("editorialSummary") or {}).get("text", ""),
+            amenities=cls._normalize_amenities(place),
+            rating=place.get("rating"),
+            price_level=place.get("priceLevel", ""),
         )
 
     def fetch_venues(self) -> Iterable[ScrapedVenue]:

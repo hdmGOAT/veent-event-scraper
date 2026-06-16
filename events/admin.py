@@ -5,8 +5,8 @@ from .models import Event, Venue
 
 @admin.register(Venue)
 class VenueAdmin(admin.ModelAdmin):
-    list_display = ("name", "city", "country", "source", "updated_at")
-    list_filter = ("country", "city", "source")
+    list_display = ("name", "primary_type_display", "city", "country", "source", "updated_at")
+    list_filter = ("primary_type_display", "country", "city", "source")
     search_fields = ("name", "address", "city")
     prepopulated_fields = {"slug": ("name",)}
     readonly_fields = ("created_at", "updated_at")
