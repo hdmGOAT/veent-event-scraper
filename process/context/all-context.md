@@ -152,7 +152,7 @@ veent-event-scraper/
     views.py                -- list/detail views with search
     urls.py                 -- app URLConf (namespace "events")
     admin.py                -- VenueAdmin & EventAdmin
-    tests.py                -- test module (currently empty placeholder)
+    tests.py                -- Django TestCase suite (scraper, dedup, verification, review UI)
     migrations/             -- 0001_initial
     scrapers/               -- scraper framework
       base.py               -- BaseScraper + ScrapedEvent/ScrapedVenue + save_events upsert
@@ -163,6 +163,7 @@ veent-event-scraper/
   templates/                -- server-rendered UI
     base.html
     events/                 -- event_list, event_detail, venue_list, venue_detail
+      review/               -- staff /review/ UI: dashboard, venue_detail, _status_control partial
   process/                  -- agent harness workspace (context, plans, protocols)
 ```
 
@@ -183,7 +184,12 @@ Two models in `events/models.py`, both carrying provenance fields (`source`, `so
 `scraped_at`) so every row records where it came from:
 
 - **`Venue`** — physical place: name, unique `slug`, address/city/country, website,
-  lat/long. Ordered by name. `get_absolute_url` → `events:venue_detail`.
+  lat/long. Ordered by name. `get_absolute_url` → `events:venue_detail`. Carries a
+  **`verification_status`** field (`Venue.VerificationStatus` TextChoices: `pending` /
+  `verified` / `rejected`, default `pending`, indexed) — the manual admin review state for
+  whether a venue is genuinely an events venue. Set only by staff (admin actions or the
+  `/review/` UI); **never written by the scraper upsert path**, so a reviewer's decision
+  survives re-scrapes.
 - **`Event`** — a scraped event, optional FK to `Venue` (`on_delete=SET_NULL`,
   `related_name="events"`). Fields: name, unique `slug`, description, `starts_at`/`ends_at`,
   url, image_url, price, category, plus an indexed `external_id`. Ordered by
@@ -219,17 +225,31 @@ from a scraper; yield dataclasses and let `save_events` handle it.
 
 `events/admin.py` registers both models with list displays, filters, search fields,
 `prepopulated_fields` for slugs, `readonly_fields` for timestamps. `EventAdmin` adds
-`autocomplete_fields=("venue",)` and `date_hierarchy="starts_at"`. The admin is the intended
-operator console (review, manage, monitor) per the product direction.
+`autocomplete_fields=("venue",)` and `date_hierarchy="starts_at"`. `VenueAdmin` also exposes
+the manual review workflow: `verification_status` in `list_display`/`list_filter`/
+`list_editable` plus bulk **Mark verified** / **Mark rejected** actions. The admin remains a
+raw-data console; the staff-facing `/review/` UI (below) is the primary verification surface.
 
 ## Web UI
 
-`events/views.py` provides four function-based views — `event_list`, `event_detail`,
-`venue_list`, `venue_detail` — wired in `events/urls.py` under the `events` namespace and
-included at the site root in `config/urls.py` (admin lives at `/admin/`). List views support
-a `?q=` search (icontains across name/description/venue for events; name/city for venues) and
-use `select_related` / `annotate(Count)` to avoid N+1 queries. Templates live in
-`templates/events/`, extending `templates/base.html`.
+`events/views.py` provides four public function-based views — `event_list`, `event_detail`,
+`venue_list`, `venue_detail` — plus three **staff-only review views** (`review_dashboard`,
+`review_venue_detail`, `review_set_status`). All are wired in `events/urls.py` under the
+`events` namespace and included at the site root in `config/urls.py` (admin lives at
+`/admin/`). List views support a `?q=` search (icontains across name/description/venue for
+events; name/city for venues) and use `select_related` / `annotate(Count)` to avoid N+1
+queries. Templates live in `templates/events/`, extending `templates/base.html`.
+
+**Venue review UI (`/review/`):** a UX-friendly alternative to Django admin for the manual
+venue-verification workflow. All three views are gated with `@staff_member_required` (reuses
+Django auth — no new auth system). The dashboard shows status-count cards + filter tabs +
+search + a queue of venue cards; the detail view adds website/map/rating/amenities/recent
+events. `review_set_status` is `@require_POST`, validates against
+`Venue.VerificationStatus.values`, writes with `update_fields` (status only), and returns the
+`templates/events/review/_status_control.html` partial. Status changes are **HTMX**-driven —
+buttons `hx-post` and swap the badge partial in place, no full reload. HTMX is loaded via CDN
+in `base.html`; CSRF rides on `<body hx-headers='{"X-CSRFToken": ...}'>`. Styling extends the
+existing CSS-variable dark design system (no Tailwind, no build step).
 
 ## Key Patterns and Conventions
 
@@ -259,8 +279,10 @@ use `select_related` / `annotate(Count)` to avoid N+1 queries. Templates live in
 
 - `db.sqlite3` is committed in the working tree but git-ignored; it holds demo data from the
   example scraper. Do not rely on it as a source of truth.
-- The repo has **no commits yet** (fresh `git init`). The `events.tests` module is an empty
-  placeholder — there is currently **no test coverage**.
+- `events/tests.py` now holds a real Django `TestCase` suite (21 tests as of 2026-06-16)
+  covering the Places scraper, venue dedup/upsert, the `verification_status` field
+  (including re-scrape preservation), and the `/review/` UI. Run with
+  `./venv/bin/python manage.py test events`.
 - Production hardening (real `SECRET_KEY`, `DEBUG=False`, real DB, env config) is unaddressed
   by design at this stage.
 

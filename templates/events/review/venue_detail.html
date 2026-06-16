@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}Review: {{ venue.name }} · Veent{% endblock %}
+
+{% block content %}
+<p><a href="{% url 'events:review_dashboard' %}">← Back to review</a></p>
+<h1>{{ venue.name }}</h1>
+
+<div class="card" style="margin-bottom:1.5rem;">
+  {% include "events/review/_status_control.html" %}
+</div>
+
+<div class="about">
+  <div class="meta">
+    {% if venue.primary_type_display %}<div><strong>Type:</strong> {{ venue.primary_type_display }}</div>{% endif %}
+    {% if venue.address %}<div><strong>Address:</strong> {{ venue.address }}</div>{% endif %}
+    {% if venue.city %}<div><strong>City:</strong> {{ venue.city }}{% if venue.country %}, {{ venue.country }}{% endif %}</div>{% endif %}
+    {% if venue.rating %}<div><strong>Rating:</strong> {{ venue.rating }}</div>{% endif %}
+    {% if venue.website %}<div><strong>Website:</strong> <a href="{{ venue.website }}" target="_blank" rel="noopener">{{ venue.website }}</a></div>{% endif %}
+    {% if venue.source_url %}<div><strong>Source:</strong> <a href="{{ venue.source_url }}" target="_blank" rel="noopener">View on map / source</a></div>{% endif %}
+    <div><strong>Events:</strong> {{ venue.event_count }}</div>
+  </div>
+  {% if venue.about %}<p class="muted">{{ venue.about }}</p>{% endif %}
+</div>
+
+{% if amenities %}
+  <h3>Amenities</h3>
+  <ul class="chips">
+    {% for label in amenities.keys %}<li class="chip">{{ label }}</li>{% endfor %}
+  </ul>
+{% endif %}
+
+<h3>Recent events</h3>
+{% if events %}
+  <ul>
+    {% for event in events %}
+      <li><a href="{{ event.get_absolute_url }}">{{ event.name }}</a>
+        {% if event.starts_at %}<span class="muted"> — {{ event.starts_at|date:"M j, Y" }}</span>{% endif %}
+      </li>
+    {% endfor %}
+  </ul>
+{% else %}
+  <p class="muted">No events linked to this venue yet.</p>
+{% endif %}
+{% endblock %}

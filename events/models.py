@@ -5,6 +5,11 @@ from django.urls import reverse
 class Venue(models.Model):
     """A physical place where events are held."""
 
+    class VerificationStatus(models.TextChoices):
+        PENDING = "pending", "Pending review"
+        VERIFIED = "verified", "Verified — events venue"
+        REJECTED = "rejected", "Rejected — not an events venue"
+
     name = models.CharField(max_length=255)
     slug = models.SlugField(max_length=255, unique=True)
     address = models.CharField(max_length=500, blank=True)
@@ -28,6 +33,17 @@ class Venue(models.Model):
     rating = models.FloatField(null=True, blank=True)
     # Source price level enum string (e.g. "PRICE_LEVEL_MODERATE").
     price_level = models.CharField(max_length=40, blank=True)
+
+    # Manual admin review of whether this is genuinely an events venue.
+    # Set only by staff in the admin; never written by the scraper upsert path,
+    # so a reviewer's decision survives re-scrapes.
+    verification_status = models.CharField(
+        max_length=20,
+        choices=VerificationStatus.choices,
+        default=VerificationStatus.PENDING,
+        db_index=True,
+        help_text="Manual admin review state for whether this is a real events venue.",
+    )
 
     # Provenance / scraping metadata
     source = models.CharField(

@@ -1,6 +1,8 @@
 from unittest import mock
 
+from django.contrib.auth import get_user_model
 from django.test import TestCase
+from django.urls import reverse
 
 from events.models import Venue
 from events.scrapers.base import ScrapedVenue, save_venues
@@ -176,3 +178,118 @@ class VenueCategoryAndAmenityTests(TestCase):
         self.assertEqual(row.about, "Laid-back resort with sweeping views.")
         self.assertIn("Serves breakfast", row.amenities)
         self.assertEqual(row.types, ["resort_hotel", "lodging", "point_of_interest"])
+
+
+class VenueVerificationTests(TestCase):
+    """Manual admin approve/reject review of venues."""
+
+    def test_new_venue_defaults_to_pending(self):
+        venue = Venue.objects.create(name="Some Hall", slug="some-hall")
+        self.assertEqual(venue.verification_status, Venue.VerificationStatus.PENDING)
+
+    def test_scraped_venue_starts_pending(self):
+        save_venues("google_places", [ScrapedVenue(name="Fresh Venue", place_id="vp-1")])
+        row = Venue.objects.get(place_id="vp-1")
+        self.assertEqual(row.verification_status, Venue.VerificationStatus.PENDING)
+
+    def test_rescrape_preserves_verification_status(self):
+        """A reviewer's decision must survive a re-scrape of the same venue.
+
+        The upsert path writes only scraped fields, so verification_status set
+        by an admin should not be reset to pending on the next scrape run.
+        """
+        source = "google_places"
+        save_venues(source, [ScrapedVenue(name="Reviewed Venue", place_id="vp-keep")])
+        row = Venue.objects.get(place_id="vp-keep")
+        row.verification_status = Venue.VerificationStatus.VERIFIED
+        row.save()
+
+        # Re-scrape the same place with updated details.
+        save_venues(source, [ScrapedVenue(
+            name="Reviewed Venue", place_id="vp-keep",
+            website="https://reviewed.example",
+        )])
+
+        row.refresh_from_db()
+        self.assertEqual(row.website, "https://reviewed.example")  # scrape applied
+        self.assertEqual(row.verification_status, Venue.VerificationStatus.VERIFIED)
+
+
+class ReviewUITests(TestCase):
+    """Staff-only custom venue review UI (dashboard / queue / status endpoint)."""
+
+    def setUp(self):
+        User = get_user_model()
+        self.staff = User.objects.create_user(
+            username="staffer", password="pw12345", is_staff=True
+        )
+        self.dashboard_url = reverse("events:review_dashboard")
+
+    def _venue(self, name, slug, status=Venue.VerificationStatus.PENDING, **kw):
+        return Venue.objects.create(name=name, slug=slug, verification_status=status, **kw)
+
+    def test_dashboard_requires_staff_login(self):
+        # Anonymous → redirected to login.
+        resp = self.client.get(self.dashboard_url)
+        self.assertEqual(resp.status_code, 302)
+        self.assertIn("/admin/login/", resp["Location"])
+
+        # Authenticated but non-staff → still bounced.
+        User = get_user_model()
+        User.objects.create_user(username="plain", password="pw12345")
+        self.client.login(username="plain", password="pw12345")
+        self.assertEqual(self.client.get(self.dashboard_url).status_code, 302)
+
+    def test_dashboard_shows_status_counts(self):
+        self._venue("A", "a", Venue.VerificationStatus.PENDING)
+        self._venue("B", "b", Venue.VerificationStatus.VERIFIED)
+        self._venue("C", "c", Venue.VerificationStatus.REJECTED)
+        self._venue("D", "d", Venue.VerificationStatus.VERIFIED)
+        self.client.login(username="staffer", password="pw12345")
+        resp = self.client.get(self.dashboard_url + "?status=all")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.context["stats"]["pending"], 1)
+        self.assertEqual(resp.context["stats"]["verified"], 2)
+        self.assertEqual(resp.context["stats"]["rejected"], 1)
+        self.assertEqual(resp.context["stats"]["total"], 4)
+
+    def test_queue_filters_by_status(self):
+        self._venue("Pending One", "p1", Venue.VerificationStatus.PENDING)
+        self._venue("Verified One", "v1", Venue.VerificationStatus.VERIFIED)
+        self.client.login(username="staffer", password="pw12345")
+        resp = self.client.get(self.dashboard_url + "?status=pending")
+        names = [v.name for v in resp.context["venues"]]
+        self.assertEqual(names, ["Pending One"])
+
+    def test_set_status_updates_and_returns_partial(self):
+        venue = self._venue("Target", "target", Venue.VerificationStatus.PENDING)
+        self.client.login(username="staffer", password="pw12345")
+        url = reverse("events:review_set_status", args=[venue.slug])
+        resp = self.client.post(url, {"status": Venue.VerificationStatus.VERIFIED})
+        self.assertEqual(resp.status_code, 200)
+        venue.refresh_from_db()
+        self.assertEqual(venue.verification_status, Venue.VerificationStatus.VERIFIED)
+        self.assertContains(resp, "badge-verified")
+
+    def test_set_status_rejects_invalid_value(self):
+        venue = self._venue("Target", "target", Venue.VerificationStatus.PENDING)
+        self.client.login(username="staffer", password="pw12345")
+        url = reverse("events:review_set_status", args=[venue.slug])
+        resp = self.client.post(url, {"status": "bogus"})
+        self.assertEqual(resp.status_code, 400)
+        venue.refresh_from_db()
+        self.assertEqual(venue.verification_status, Venue.VerificationStatus.PENDING)
+
+    def test_set_status_requires_post(self):
+        venue = self._venue("Target", "target")
+        self.client.login(username="staffer", password="pw12345")
+        url = reverse("events:review_set_status", args=[venue.slug])
+        self.assertEqual(self.client.get(url).status_code, 405)
+
+    def test_set_status_requires_staff(self):
+        venue = self._venue("Target", "target", Venue.VerificationStatus.PENDING)
+        url = reverse("events:review_set_status", args=[venue.slug])
+        resp = self.client.post(url, {"status": Venue.VerificationStatus.VERIFIED})
+        self.assertEqual(resp.status_code, 302)  # bounced to login
+        venue.refresh_from_db()
+        self.assertEqual(venue.verification_status, Venue.VerificationStatus.PENDING)
