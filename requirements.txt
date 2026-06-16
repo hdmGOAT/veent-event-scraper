@@ -1,4 +1,7 @@
 asgiref==3.11.1
+playwright
+playwright-stealth
+scrapling[all]
 beautifulsoup4==4.15.0
 certifi==2026.5.20
 charset-normalizer==3.4.7

@@ -49,7 +49,10 @@ class ScrapedEvent:
     price: str = ""
     category: str = ""
     external_id: str = ""
+    # URL of the listing page this event was scraped from.
     source_url: str = ""
+    organizer: str = ""
+    organizer_url: str = ""
     venue: ScrapedVenue | None = None
 
 
@@ -138,6 +141,7 @@ def save_events(source: str, events: Iterable[ScrapedEvent]) -> dict:
             name=se.name, description=se.description, venue=venue,
             starts_at=se.starts_at, ends_at=se.ends_at, url=se.url,
             image_url=se.image_url, price=se.price, category=se.category,
+            organizer=se.organizer, organizer_url=se.organizer_url,
             source=source, source_url=se.source_url,
             external_id=se.external_id, scraped_at=now,
         )

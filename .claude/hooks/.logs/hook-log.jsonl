@@ -94,3 +94,4 @@
 {"ts":"2026-06-16T06:04:52.035Z","hook":"privacy-block","event":"PreToolUse","tool":"Bash","target":"","note":"","dur":2,"status":"ok","exit":0,"error":""}
 {"ts":"2026-06-16T06:05:01.540Z","hook":"scout-block","event":"PreToolUse","tool":"Bash","target":"","note":"","dur":2,"status":"ok","exit":0,"error":""}
 {"ts":"2026-06-16T06:05:01.541Z","hook":"privacy-block","event":"PreToolUse","tool":"Bash","target":"","note":"","dur":2,"status":"ok","exit":0,"error":""}
+{"ts":"2026-06-16T06:18:15.001Z","hook":"session-init","event":"SessionStart","tool":"","target":"","note":"startup","dur":1027,"status":"ok","exit":0,"error":""}

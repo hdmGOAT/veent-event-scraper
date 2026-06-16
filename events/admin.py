@@ -14,10 +14,18 @@ class VenueAdmin(admin.ModelAdmin):
 
 @admin.register(Event)
 class EventAdmin(admin.ModelAdmin):
-    list_display = ("name", "venue", "starts_at", "category", "source", "updated_at")
+    list_display = ("name", "organizer", "venue", "starts_at", "category", "source", "updated_at")
     list_filter = ("category", "source", "starts_at")
-    search_fields = ("name", "description")
+    search_fields = ("name", "description", "organizer")
     prepopulated_fields = {"slug": ("name",)}
     autocomplete_fields = ("venue",)
     date_hierarchy = "starts_at"
-    readonly_fields = ("created_at", "updated_at")
+    readonly_fields = ("source_url", "created_at", "updated_at")
+    fieldsets = (
+        (None, {"fields": ("name", "slug", "description", "venue")}),
+        ("Schedule", {"fields": ("starts_at", "ends_at")}),
+        ("Details", {"fields": ("url", "image_url", "price", "category")}),
+        ("Host / Organizer", {"fields": ("organizer", "organizer_url")}),
+        ("Provenance", {"fields": ("source", "source_url", "external_id", "scraped_at")}),
+        ("Timestamps", {"fields": ("created_at", "updated_at")}),
+    )
