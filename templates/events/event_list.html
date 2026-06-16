@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}Events · Veent{% endblock %}
+{% block content %}
+  <h1>Events</h1>
+  <form class="search" method="get" action="{% url 'events:event_list' %}">
+    <input type="search" name="q" value="{{ query }}" placeholder="Search events, venues…">
+    <button type="submit">Search</button>
+  </form>
+  <div class="stats">
+    <span class="pill">{{ total_count }} total</span>
+    <span class="pill">{{ upcoming_count }} upcoming</span>
+  </div>
+  <div class="grid">
+    {% for event in events %}
+      <div class="card">
+        <h3><a href="{{ event.get_absolute_url }}">{{ event.name }}</a></h3>
+        {% if event.starts_at %}<div class="muted">{{ event.starts_at|date:"D, M j, Y · H:i" }}</div>{% endif %}
+        {% if event.venue %}<div class="muted">{{ event.venue.name }}</div>{% endif %}
+        {% if event.category %}<span class="pill">{{ event.category }}</span>{% endif %}
+      </div>
+    {% empty %}
+      <div class="empty">No events yet. Run <code>python manage.py scrape</code> to populate data.</div>
+    {% endfor %}
+  </div>
+{% endblock %}

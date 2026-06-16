@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}{{ venue.name }} · Veent{% endblock %}
+{% block content %}
+  <p><a href="{% url 'events:venue_list' %}">← All venues</a></p>
+  <h1>{{ venue.name }}</h1>
+  {% if venue.address or venue.city %}
+    <p class="muted">{{ venue.address }}{% if venue.city %}{% if venue.address %}, {% endif %}{{ venue.city }}{% endif %}{% if venue.country %}, {{ venue.country }}{% endif %}</p>
+  {% endif %}
+  {% if venue.website %}<p><a href="{{ venue.website }}" target="_blank" rel="noopener">Website →</a></p>{% endif %}
+
+  <h2>Events</h2>
+  <div class="grid">
+    {% for event in events %}
+      <div class="card">
+        <h3><a href="{{ event.get_absolute_url }}">{{ event.name }}</a></h3>
+        {% if event.starts_at %}<div class="muted">{{ event.starts_at|date:"D, M j, Y · H:i" }}</div>{% endif %}
+      </div>
+    {% empty %}
+      <div class="empty">No events recorded for this venue yet.</div>
+    {% endfor %}
+  </div>
+{% endblock %}

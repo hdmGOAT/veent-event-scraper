@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}Venues · Veent{% endblock %}
+{% block content %}
+  <h1>Venues</h1>
+  <form class="search" method="get" action="{% url 'events:venue_list' %}">
+    <input type="search" name="q" value="{{ query }}" placeholder="Search venues, cities…">
+    <button type="submit">Search</button>
+  </form>
+  <div class="grid">
+    {% for venue in venues %}
+      <div class="card">
+        <h3><a href="{{ venue.get_absolute_url }}">{{ venue.name }}</a></h3>
+        {% if venue.city %}<div class="muted">{{ venue.city }}{% if venue.country %}, {{ venue.country }}{% endif %}</div>{% endif %}
+        <span class="pill">{{ venue.event_count }} event{{ venue.event_count|pluralize }}</span>
+      </div>
+    {% empty %}
+      <div class="empty">No venues yet. Run <code>python manage.py scrape</code> to populate data.</div>
+    {% endfor %}
+  </div>
+{% endblock %}
