@@ -1,6 +1,6 @@
 # Veent Event Scraper - All Context
 
-Last updated: 2026-06-16
+Last updated: 2026-06-16 (rev 2 — Organizer model, myruntime + racemeister scrapers)
 
 This file is the root context entrypoint for the repo.
 
@@ -92,18 +92,17 @@ For most substantial tasks:
 | `planning/` | `process/context/planning/all-planning.md` | plan-shape calibration, planning examples, SIMPLE vs COMPLEX reference docs |
 | `tests/` | `process/context/tests/all-tests.md` | test runner, commands, debugging, gaps |
 
-No `database/`, `auth/`, or `infra/` context groups exist yet. The data layer is intentionally
-documented inline below rather than split into a group, because it is small (two models, one
-migration) and stable. Create a `database/` group only when the schema or migration workflow
-grows enough to need its own durable docs. A `scrapers/` group is the most likely first
-addition once multiple real scrapers exist.
+No `database/`, `auth/`, or `infra/` context groups exist yet. The data layer is documented
+inline below (three models, several migrations). A `scrapers/` context group is now a strong
+candidate — the project has 4 real scrapers with two distinct patterns (event scrapers and
+organizer scrapers). Create it when scraper-specific docs exceed one screen of inline prose.
 
 ## Task Routing Table
 
 | If the task involves... | Start with | Then load |
 |---|---|---|
 | architecture or stack questions | this file | — |
-| adding or changing a scraper | this file (Scraper Framework section) | `events/scrapers/base.py`, `events/scrapers/__init__.py`, `events/scrapers/example.py` |
+| adding or changing a scraper | this file (Scraper Framework section) | `events/scrapers/base.py`, `events/scrapers/__init__.py`, existing scraper for pattern |
 | models / schema / migrations | this file (Data Model section) | `events/models.py`, `events/migrations/` |
 | admin behavior | this file (Admin section) | `events/admin.py` |
 | views / templates / UI | this file (Web UI section) | `events/views.py`, `events/urls.py`, `templates/events/` |
@@ -148,15 +147,19 @@ veent-event-scraper/
     urls.py                 -- root URLConf (admin/ + events app)
     wsgi.py / asgi.py       -- server entrypoints
   events/                   -- the single application
-    models.py               -- Venue & Event models (scraping provenance fields)
-    views.py                -- list/detail views with search
+    models.py               -- Venue, Event, Organizer models (scraping provenance fields)
+    views.py                -- list/detail views with search + staff /review/ UI
     urls.py                 -- app URLConf (namespace "events")
-    admin.py                -- VenueAdmin & EventAdmin
+    admin.py                -- VenueAdmin, EventAdmin, OrganizerAdmin
     tests.py                -- Django TestCase suite (scraper, dedup, verification, review UI)
-    migrations/             -- 0001_initial
+    migrations/             -- 0001_initial … 0007_organizer
     scrapers/               -- scraper framework
-      base.py               -- BaseScraper + ScrapedEvent/ScrapedVenue + save_events upsert
-      example.py            -- ExampleScraper reference implementation (demo data)
+      base.py               -- BaseScraper + ScrapedEvent/ScrapedVenue/ScrapedOrganizer + save_events/save_organizers
+      allevents.py          -- AllEventsCDOScraper (key: allevents_cdo, Playwright)
+      happeningnext.py      -- HappeningNextCDOScraper (key: happeningnext_cdo, Playwright)
+      myruntime.py          -- MyRuntimeScraper (key: myruntime, JSON API)
+      places.py             -- GooglePlacesVenueScraper (key: google_places, Places API)
+      racemeister.py        -- RacemeisterPartnersScraper (key: racemeister_partners, requests+BS4)
       __init__.py           -- SCRAPERS registry {key -> class}
     management/commands/
       scrape.py             -- `manage.py scrape [source] [--list]`
@@ -180,7 +183,7 @@ veent-event-scraper/
 
 ## Data Model
 
-Two models in `events/models.py`, both carrying provenance fields (`source`, `source_url`,
+Three models in `events/models.py`, all carrying provenance fields (`source`, `source_url`,
 `scraped_at`) so every row records where it came from:
 
 - **`Venue`** — physical place: name, unique `slug`, address/city/country, website,
@@ -192,43 +195,81 @@ Two models in `events/models.py`, both carrying provenance fields (`source`, `so
   survives re-scrapes.
 - **`Event`** — a scraped event, optional FK to `Venue` (`on_delete=SET_NULL`,
   `related_name="events"`). Fields: name, unique `slug`, description, `starts_at`/`ends_at`,
-  url, image_url, price, category, plus an indexed `external_id`. Ordered by
-  `starts_at, name`.
+  url, image_url, price, category, `organizer` (CharField), `organizer_url` (URLField),
+  plus an indexed `external_id`. Ordered by `starts_at, name`.
+- **`Organizer`** — an event organizer scraped from partner directories. Fields: name,
+  unique `slug`, **`status`** (`pending` / `confirmed` / `rejected`, default `pending`,
+  indexed), contact fields (website, email, phone, address, city, country, facebook_url,
+  instagram_url, description), plus provenance fields. Ordered by name. The `status` field
+  is **never overwritten on re-scrape** — admin confirm/reject decisions survive subsequent
+  runs. Unique constraint on `(source, external_id)` where `external_id` is non-empty.
 
-**Dedup invariant:** `Event` has a `UniqueConstraint(fields=["source", "external_id"])`
-conditional on `external_id__gt=""` (named `unique_source_external_id`). This is per-source
-upsert dedup. **Cross-source fuzzy matching/merge does not exist yet** and is the main
-data-layer feature on the roadmap — do not assume it when reasoning about duplicates.
+**Dedup invariants:**
+- `Event`: `UniqueConstraint(["source", "external_id"])` conditional on `external_id__gt=""`
+  (named `unique_source_external_id`). Per-source upsert dedup.
+- `Organizer`: same pattern — `UniqueConstraint(["source", "external_id"])` conditional on
+  `external_id__gt=""` (named `unique_organizer_source_external_id`).
+- **Cross-source fuzzy matching/merge does not exist yet** and is the main data-layer feature
+  on the roadmap — do not assume it when reasoning about duplicates.
 
 ## Scraper Framework
 
 The framework keeps individual scrapers tiny by centralizing persistence:
 
 - A scraper subclasses **`BaseScraper`** (`events/scrapers/base.py`), sets a unique
-  `source` key, and implements `fetch()` to **yield `ScrapedEvent` dataclasses** (each may
-  carry a `ScrapedVenue` via its `venue` field).
-- `BaseScraper.run()` collects `fetch()` and calls **`save_events(source, events)`**, which
-  handles slugging (`_unique_slug`), venue upsert (`_upsert_venue`), and event upsert on
-  `(source, external_id)`. It returns `{"source", "created", "updated"}`.
+  `source` key, and implements `fetch()` to yield dataclasses.
+- `BaseScraper.run()` collects `fetch()` and calls the appropriate persistence helper.
 - Scrapers are registered in **`events/scrapers/__init__.py`** under the `SCRAPERS` dict
   (`key -> class`). The `scrape` command resolves scrapers by this key.
-- `events/scrapers/example.py` (`ExampleScraper`, key `example`) is the reference: it
-  contains a commented requests + BeautifulSoup pattern and yields demo data so the UI has
-  content out of the box.
+
+**Two scraper patterns exist:**
+
+1. **Event scrapers** — `fetch()` yields `ScrapedEvent` (optionally carrying a `ScrapedVenue`).
+   `BaseScraper.run()` calls `save_events(source, events)`, which handles slugging
+   (`_unique_slug`), venue upsert (`_upsert_venue`), and event upsert on `(source, external_id)`.
+   Examples: `allevents_cdo` (Playwright), `happeningnext_cdo` (Playwright), `myruntime`
+   (JSON API — also calls `save_organizers` to persist derived organizers).
+
+2. **Organizer scrapers** — `fetch()` yields `ScrapedOrganizer`. The scraper overrides
+   `run()` to call `save_organizers(source, organizers)` directly. `save_organizers` upserts
+   on `(source, external_id)` but **never overwrites `status`** — admin decisions survive
+   re-scrapes. Example: `racemeister_partners` (requests+BS4, two-phase: list then
+   contact enrichment from partner websites).
+
+**`ScrapedEvent` fields:** name, description, starts_at, ends_at, url, image_url, price,
+category, external_id, source_url, organizer (str), organizer_url, venue (ScrapedVenue|None).
+
+**`ScrapedOrganizer` fields:** name, website, email, phone, address, city, country,
+facebook_url, instagram_url, description, external_id, source_url.
 
 **Adding a scraper:** create `events/scrapers/<name>.py` with a `BaseScraper` subclass, set a
-unique `source`, implement `fetch()` to yield `ScrapedEvent` (set `external_id` for dedup),
-and register it in `SCRAPERS`. Persistence is automatic — do not write to the ORM directly
-from a scraper; yield dataclasses and let `save_events` handle it.
+unique `source`, implement `fetch()` to yield the right dataclass, and register it in
+`SCRAPERS`. Persistence is automatic — do not write to the ORM directly from a scraper.
+
+**Current SCRAPERS registry:**
+```python
+{
+    "google_places":       GooglePlacesVenueScraper,   # venue-only, Places API
+    "allevents_cdo":       AllEventsCDOScraper,         # events, Playwright
+    "happeningnext_cdo":   HappeningNextCDOScraper,     # events, Playwright
+    "myruntime":           MyRuntimeScraper,             # events + organizers, JSON API
+    "racemeister_partners":RacemeisterPartnersScraper,   # organizers, requests+BS4
+}
+```
 
 ## Admin
 
-`events/admin.py` registers both models with list displays, filters, search fields,
-`prepopulated_fields` for slugs, `readonly_fields` for timestamps. `EventAdmin` adds
-`autocomplete_fields=("venue",)` and `date_hierarchy="starts_at"`. `VenueAdmin` also exposes
-the manual review workflow: `verification_status` in `list_display`/`list_filter`/
-`list_editable` plus bulk **Mark verified** / **Mark rejected** actions. The admin remains a
-raw-data console; the staff-facing `/review/` UI (below) is the primary verification surface.
+`events/admin.py` registers all three models:
+
+- **`VenueAdmin`** — list display, filters, search, slug prepopulation. Exposes the manual
+  review workflow: `verification_status` in `list_display`/`list_filter`/`list_editable` plus
+  bulk **Mark verified** / **Mark rejected** actions. The admin is a raw-data console; the
+  staff-facing `/review/` UI (below) is the primary verification surface.
+- **`EventAdmin`** — list display includes `organizer`. Fieldsets group host/organizer fields
+  separately. `autocomplete_fields=("venue",)`, `date_hierarchy="starts_at"`.
+- **`OrganizerAdmin`** — `status` in `list_display`/`list_filter`/`list_editable` for
+  inline pending→confirmed/rejected flips. Bulk **Mark Confirmed** / **Mark Rejected** actions.
+  `search_fields` covers name, email, website, phone.
 
 ## Web UI
 
@@ -256,7 +297,7 @@ existing CSS-variable dark design system (no Tailwind, no build step).
 - **Standard Django layout:** project package `config/`, single app `events/`. Function-based
   views, `app_name` URL namespacing, `get_absolute_url` via `reverse`.
 - **Scrapers yield dataclasses, never touch the ORM directly.** All persistence/dedup is
-  centralized in `save_events`. Keep this boundary when adding scrapers.
+  centralized in `save_events` (events) or `save_organizers` (organizers). Keep this boundary.
 - **Provenance on every row:** always set `source` / `source_url` / `scraped_at` (the
   framework does this for you). `external_id` drives dedup — set it whenever the source has a
   stable id.
@@ -288,7 +329,7 @@ existing CSS-variable dark design system (no Tailwind, no build step).
 
 ## Scan Metadata
 
-- Generated: 2026-06-16
-- HEAD: (no commits yet)
-- Mode: merge (scaffolded missing process/ dirs over an existing harness install)
+- Generated: 2026-06-16 (rev 2 updated same day)
 - Package manager: pip (requirements.txt + venv)
+- Active scrapers: 5 (google_places, allevents_cdo, happeningnext_cdo, myruntime, racemeister_partners)
+- Migrations: 0001–0007 applied
