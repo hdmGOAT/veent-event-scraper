@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}Venue Review · Veent{% endblock %}
+
+{% block content %}
+<h1>Venue Review</h1>
+<p class="muted">Check whether each venue is genuinely an events venue, then approve or reject it.</p>
+
+<div class="stat-cards">
+  <div class="stat-card pending"><div class="n">{{ stats.pending }}</div><div class="l">Pending</div></div>
+  <div class="stat-card verified"><div class="n">{{ stats.verified }}</div><div class="l">Verified</div></div>
+  <div class="stat-card rejected"><div class="n">{{ stats.rejected }}</div><div class="l">Rejected</div></div>
+  <div class="stat-card"><div class="n">{{ stats.total }}</div><div class="l">Total</div></div>
+</div>
+
+<div class="tabs">
+  <a href="?status=pending{% if query %}&q={{ query }}{% endif %}" class="{% if status == 'pending' %}active{% endif %}">Pending</a>
+  <a href="?status=verified{% if query %}&q={{ query }}{% endif %}" class="{% if status == 'verified' %}active{% endif %}">Verified</a>
+  <a href="?status=rejected{% if query %}&q={{ query }}{% endif %}" class="{% if status == 'rejected' %}active{% endif %}">Rejected</a>
+  <a href="?status=all{% if query %}&q={{ query }}{% endif %}" class="{% if not status %}active{% endif %}">All</a>
+</div>
+
+<form class="search" method="get">
+  {% if status %}<input type="hidden" name="status" value="{{ status }}">{% endif %}
+  <input type="search" name="q" value="{{ query }}" placeholder="Search by name or city…">
+  <button type="submit">Search</button>
+</form>
+
+{% if venues %}
+  <div class="grid">
+    {% for venue in venues %}
+      <div class="card review-card">
+        <div>
+          <h3><a href="{% url 'events:review_venue_detail' venue.slug %}">{{ venue.name }}</a></h3>
+          <div class="meta">
+            {% if venue.primary_type_display %}<div>{{ venue.primary_type_display }}</div>{% endif %}
+            {% if venue.city %}<div class="muted">{{ venue.city }}{% if venue.country %}, {{ venue.country }}{% endif %}</div>{% endif %}
+            <div class="muted">{{ venue.event_count }} event{{ venue.event_count|pluralize }}</div>
+          </div>
+          {% include "events/review/_status_control.html" %}
+        </div>
+      </div>
+    {% endfor %}
+  </div>
+{% else %}
+  <div class="empty">No venues{% if status %} with status “{{ status }}”{% endif %}{% if query %} matching “{{ query }}”{% endif %}.</div>
+{% endif %}
+{% endblock %}

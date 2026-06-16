@@ -26,3 +26,5 @@ db.sqlite3-journal
 .vscode/
 
 \graphify-out
+
+\.claude\hooks\.logs

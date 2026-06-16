@@ -1,6 +1,9 @@
+from django.contrib.admin.views.decorators import staff_member_required
 from django.db.models import Count, Q
+from django.http import HttpResponseBadRequest
 from django.shortcuts import get_object_or_404, render
 from django.utils import timezone
+from django.views.decorators.http import require_POST
 
 from .models import Event, Venue
 
@@ -77,4 +80,82 @@ def venue_detail(request, slug):
     events = venue.events.all()
     return render(
         request, "events/venue_detail.html", {"venue": venue, "events": events}
+    )
+
+
+# ---------------------------------------------------------------------------
+# Venue review UI (staff-only) — a UX-friendly alternative to Django admin for
+# moving venues through the manual verification workflow.
+# ---------------------------------------------------------------------------
+
+
+@staff_member_required
+def review_dashboard(request):
+    """Status summary + filterable queue of venues to review."""
+    status = request.GET.get("status", Venue.VerificationStatus.PENDING).strip()
+    query = request.GET.get("q", "").strip()
+
+    stats = Venue.objects.aggregate(
+        total=Count("id"),
+        pending=Count("id", filter=Q(verification_status=Venue.VerificationStatus.PENDING)),
+        verified=Count("id", filter=Q(verification_status=Venue.VerificationStatus.VERIFIED)),
+        rejected=Count("id", filter=Q(verification_status=Venue.VerificationStatus.REJECTED)),
+    )
+
+    venues = Venue.objects.annotate(event_count=Count("events"))
+    valid_statuses = set(Venue.VerificationStatus.values)
+    if status in valid_statuses:
+        venues = venues.filter(verification_status=status)
+    else:
+        status = ""  # "all" — no status filter
+    if query:
+        venues = venues.filter(Q(name__icontains=query) | Q(city__icontains=query))
+    # Surface venues with events first — they are the strongest review signal.
+    venues = venues.order_by("-event_count", "name")
+
+    return render(
+        request,
+        "events/review/dashboard.html",
+        {
+            "stats": stats,
+            "venues": venues,
+            "status": status,
+            "query": query,
+            "status_choices": Venue.VerificationStatus.choices,
+        },
+    )
+
+
+@staff_member_required
+def review_venue_detail(request, slug):
+    """Per-venue context plus the status control."""
+    venue = get_object_or_404(Venue.objects.annotate(event_count=Count("events")), slug=slug)
+    events = venue.events.all()[:20]
+    amenities = {k: v for k, v in (venue.amenities or {}).items() if v}
+    return render(
+        request,
+        "events/review/venue_detail.html",
+        {
+            "venue": venue,
+            "events": events,
+            "amenities": amenities,
+            "status_choices": Venue.VerificationStatus.choices,
+        },
+    )
+
+
+@staff_member_required
+@require_POST
+def review_set_status(request, slug):
+    """HTMX action: set a venue's verification status, return the status partial."""
+    venue = get_object_or_404(Venue, slug=slug)
+    status = request.POST.get("status", "").strip()
+    if status not in Venue.VerificationStatus.values:
+        return HttpResponseBadRequest("Invalid status.")
+    venue.verification_status = status
+    venue.save(update_fields=["verification_status", "updated_at"])
+    return render(
+        request,
+        "events/review/_status_control.html",
+        {"venue": venue, "status_choices": Venue.VerificationStatus.choices},
     )

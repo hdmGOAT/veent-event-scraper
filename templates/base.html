@@ -41,15 +41,41 @@
                   border-radius:6px; padding:.1rem .5rem; font-size:.75rem; color:var(--muted); }
     #venue-map { height:380px; border-radius:10px; border:1px solid var(--border); margin:1rem 0 1.5rem; }
     .leaflet-popup-content a { color:#1a4cff; }
+    /* Venue review UI */
+    :root { --ok:#3ecf8e; --warn:#e6b450; --bad:#f06d6d; }
+    .stat-cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:1rem; margin:1rem 0 1.5rem; }
+    .stat-card { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:1rem 1.1rem; }
+    .stat-card .n { font-size:1.8rem; font-weight:700; }
+    .stat-card .l { color:var(--muted); font-size:.85rem; text-transform:uppercase; letter-spacing:.03em; }
+    .stat-card.pending .n { color:var(--warn); }
+    .stat-card.verified .n { color:var(--ok); }
+    .stat-card.rejected .n { color:var(--bad); }
+    .tabs { display:flex; flex-wrap:wrap; gap:.5rem; margin:1rem 0; }
+    .tabs a { padding:.4rem .9rem; border-radius:20px; border:1px solid var(--border); background:var(--card); color:var(--muted); }
+    .tabs a.active { background:var(--accent); border-color:var(--accent); color:#fff; }
+    .tabs a:hover { text-decoration:none; }
+    .badge { display:inline-block; border-radius:20px; padding:.2rem .7rem; font-size:.8rem; font-weight:600; }
+    .badge-pending { background:rgba(230,180,80,.15); color:var(--warn); border:1px solid var(--warn); }
+    .badge-verified { background:rgba(62,207,142,.15); color:var(--ok); border:1px solid var(--ok); }
+    .badge-rejected { background:rgba(240,109,109,.15); color:var(--bad); border:1px solid var(--bad); }
+    .status-control { display:flex; flex-wrap:wrap; align-items:center; gap:.5rem; }
+    .status-control .btn { padding:.35rem .8rem; border-radius:8px; border:1px solid var(--border); background:var(--card); color:var(--fg); cursor:pointer; font-size:.85rem; }
+    .status-control .btn:hover { border-color:var(--accent); }
+    .status-control .btn-verified { color:var(--ok); }
+    .status-control .btn-rejected { color:var(--bad); }
+    .status-control .btn-pending { color:var(--warn); }
+    .review-card { display:flex; justify-content:space-between; align-items:flex-start; gap:1rem; }
   </style>
+  <script src="https://unpkg.com/htmx.org@2.0.3"></script>
   {% block extra_head %}{% endblock %}
 </head>
-<body>
+<body hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'>
   <header>
     <span class="brand">Veent Events</span>
     <nav>
       <a href="{% url 'events:event_list' %}">Events</a>
       <a href="{% url 'events:venue_list' %}">Venues</a>
+      <a href="{% url 'events:review_dashboard' %}">Review</a>
       <a href="/admin/">Admin</a>
     </nav>
   </header>

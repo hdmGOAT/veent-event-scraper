@@ -1,0 +1,21 @@
+{% comment %}
+Self-contained status control for one venue. Swapped in place by HTMX
+(hx-swap="outerHTML") after the review_set_status endpoint runs.
+Context: venue, status_choices.
+{% endcomment %}
+<div class="status-control" id="status-{{ venue.pk }}">
+  <span class="badge badge-{{ venue.verification_status }}">
+    {{ venue.get_verification_status_display }}
+  </span>
+  {% for value, label in status_choices %}
+    {% if value != venue.verification_status %}
+      <button
+        type="button"
+        class="btn btn-{{ value }}"
+        hx-post="{% url 'events:review_set_status' venue.slug %}"
+        hx-vals='{"status": "{{ value }}"}'
+        hx-target="#status-{{ venue.pk }}"
+        hx-swap="outerHTML">{{ label }}</button>
+    {% endif %}
+  {% endfor %}
+</div>
