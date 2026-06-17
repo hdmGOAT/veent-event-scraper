@@ -7,6 +7,7 @@
 	import TableSkeleton from '$lib/components/TableSkeleton.svelte';
 	import type { Organizer, Paginated } from '$lib/types';
 	import { sortRows, toggleSort, type SortState } from '$lib/utils/sort';
+	import { safeUrl } from '$lib/utils/url';
 
 	const tabs = [
 		{ label: 'All', value: '' },
@@ -143,6 +144,9 @@
 						</tr>
 					{:else}
 						{#each sorted as o (o.slug)}
+							{@const websiteUrl = safeUrl(o.website)}
+							{@const facebookUrl = safeUrl(o.facebook_url)}
+							{@const instagramUrl = safeUrl(o.instagram_url)}
 							<tr
 								class="border-t border-border transition-colors duration-100 hover:bg-surface-2"
 							>
@@ -185,9 +189,9 @@
 								</td>
 								<td class="px-4 py-3">
 									<div class="flex items-center justify-end gap-2">
-										{#if o.website}
+										{#if websiteUrl}
 											<a
-												href={o.website}
+												href={websiteUrl}
 												target="_blank"
 												rel="noopener"
 												title="Website"
@@ -196,9 +200,9 @@
 												<Globe size={16} />
 											</a>
 										{/if}
-										{#if o.facebook_url}
+										{#if facebookUrl}
 											<a
-												href={o.facebook_url}
+												href={facebookUrl}
 												target="_blank"
 												rel="noopener"
 												title="Facebook"
@@ -208,9 +212,9 @@
 												<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M22 12a10 10 0 1 0-11.56 9.88v-6.99H7.9V12h2.54V9.8c0-2.5 1.49-3.89 3.78-3.89 1.09 0 2.24.2 2.24.2v2.46h-1.26c-1.24 0-1.63.77-1.63 1.56V12h2.78l-.44 2.89h-2.34v6.99A10 10 0 0 0 22 12z" /></svg>
 											</a>
 										{/if}
-										{#if o.instagram_url}
+										{#if instagramUrl}
 											<a
-												href={o.instagram_url}
+												href={instagramUrl}
 												target="_blank"
 												rel="noopener"
 												title="Instagram"
@@ -219,7 +223,7 @@
 												<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="2" width="20" height="20" rx="5" /><path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z" /><line x1="17.5" y1="6.5" x2="17.51" y2="6.5" /></svg>
 											</a>
 										{/if}
-										{#if !o.website && !o.facebook_url && !o.instagram_url}
+										{#if !websiteUrl && !facebookUrl && !instagramUrl}
 											<span class="text-xs text-muted">—</span>
 										{/if}
 									</div>

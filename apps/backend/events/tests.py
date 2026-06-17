@@ -522,6 +522,14 @@ class CategoryNormalizationTests(TestCase):
     def test_conference_keyword(self):
         self.assertEqual(normalize_category("Tech Conference"), "Conference / Seminar")
 
+    def test_keyword_matching_is_whole_word_not_substring(self):
+        # "art" must not match as a substring inside unrelated words such as
+        # "party" or "smartphone" — those should fall back to title case.
+        self.assertEqual(normalize_category("party"), "Party")
+        self.assertEqual(normalize_category("Smartphone Expo"), "Smartphone Expo")
+        # A genuine whole-word "art" still maps to Arts & Culture.
+        self.assertEqual(normalize_category("Art Exhibit"), "Arts & Culture")
+
     def test_unknown_falls_back_to_title_case(self):
         self.assertEqual(
             normalize_category("Weird Unique Event 2026"),

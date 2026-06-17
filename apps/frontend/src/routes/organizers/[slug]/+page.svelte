@@ -2,10 +2,15 @@
 	import Badge from '$lib/components/Badge.svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import { formatDate } from '$lib/format';
+	import { safeUrl } from '$lib/utils/url';
 	import type { PageData } from './$types';
 
 	let { data }: { data: PageData } = $props();
 	const o = $derived(data.organizer);
+	const websiteUrl = $derived(safeUrl(o?.website));
+	const facebookUrl = $derived(safeUrl(o?.facebook_url));
+	const instagramUrl = $derived(safeUrl(o?.instagram_url));
+	const sourceUrl = $derived(safeUrl(o?.source_url));
 </script>
 
 <svelte:head>
@@ -33,10 +38,10 @@
 				{/if}
 
 				<dl class="mt-5 space-y-3 text-sm">
-					{#if o.website}
+					{#if websiteUrl}
 						<div>
 							<dt class="text-xs uppercase tracking-wider text-muted">Website</dt>
-							<dd class="mt-0.5"><a href={o.website} target="_blank" rel="noopener" class="break-all text-accent hover:underline">{o.website}</a></dd>
+							<dd class="mt-0.5"><a href={websiteUrl} target="_blank" rel="noopener" class="break-all text-accent hover:underline">{o.website}</a></dd>
 						</div>
 					{/if}
 					{#if o.email}
@@ -59,15 +64,15 @@
 					{/if}
 				</dl>
 
-				{#if o.facebook_url || o.instagram_url}
+				{#if facebookUrl || instagramUrl}
 					<div class="mt-5 flex gap-3 border-t border-border pt-4">
-						{#if o.facebook_url}
-							<a href={o.facebook_url} target="_blank" rel="noopener" title="Facebook" class="text-muted hover:text-accent">
+						{#if facebookUrl}
+							<a href={facebookUrl} target="_blank" rel="noopener" title="Facebook" class="text-muted hover:text-accent">
 								<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M22 12a10 10 0 1 0-11.56 9.88v-6.99H7.9V12h2.54V9.8c0-2.5 1.49-3.89 3.78-3.89 1.09 0 2.24.2 2.24.2v2.46h-1.26c-1.24 0-1.63.77-1.63 1.56V12h2.78l-.44 2.89h-2.34v6.99A10 10 0 0 0 22 12z" /></svg>
 							</a>
 						{/if}
-						{#if o.instagram_url}
-							<a href={o.instagram_url} target="_blank" rel="noopener" title="Instagram" class="text-muted hover:text-accent">
+						{#if instagramUrl}
+							<a href={instagramUrl} target="_blank" rel="noopener" title="Instagram" class="text-muted hover:text-accent">
 								<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="20" rx="5" /><path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z" /><line x1="17.5" y1="6.5" x2="17.51" y2="6.5" /></svg>
 							</a>
 						{/if}
@@ -76,8 +81,8 @@
 
 				<div class="mt-5 border-t border-border pt-4 text-xs text-muted">
 					<div>Source: <code>{o.source || '—'}</code></div>
-					{#if o.source_url}
-						<a href={o.source_url} target="_blank" rel="noopener" class="break-all text-accent hover:underline">View source page</a>
+					{#if sourceUrl}
+						<a href={sourceUrl} target="_blank" rel="noopener" class="break-all text-accent hover:underline">View source page</a>
 					{/if}
 					<div class="mt-1">Last scraped: {formatDate(o.scraped_at)}</div>
 				</div>

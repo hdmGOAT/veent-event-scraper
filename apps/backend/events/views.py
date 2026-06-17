@@ -263,7 +263,9 @@ def api_events_by_category(request):
             continue
         buckets[canonical] = buckets.get(canonical, 0) + row["count"]
 
-    ordered = sorted(buckets.items(), key=lambda item: item[1], reverse=True)
+    # Sort by count desc, then name asc so equal counts order deterministically
+    # (otherwise which categories land in "Other" can vary between requests).
+    ordered = sorted(buckets.items(), key=lambda item: (-item[1], item[0]))
 
     data = [{"category": name, "count": count} for name, count in ordered[:TOP_N]]
     other = sum(count for _, count in ordered[TOP_N:])
