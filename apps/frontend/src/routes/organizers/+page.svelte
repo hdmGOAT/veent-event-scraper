@@ -1,8 +1,12 @@
 <script lang="ts">
+	import { Globe } from 'lucide-svelte';
 	import { api } from '$lib/api';
 	import Badge from '$lib/components/Badge.svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
+	import SortHeader from '$lib/components/SortHeader.svelte';
+	import TableSkeleton from '$lib/components/TableSkeleton.svelte';
 	import type { Organizer, Paginated } from '$lib/types';
+	import { sortRows, toggleSort, type SortState } from '$lib/utils/sort';
 
 	const tabs = [
 		{ label: 'All', value: '' },
@@ -17,6 +21,13 @@
 	let data = $state<Paginated<Organizer> | null>(null);
 	let loading = $state(true);
 	let error = $state('');
+
+	let sortState = $state<SortState<Organizer>>({ key: null, direction: 'asc' });
+	const sorted = $derived(sortRows(data?.results ?? [], sortState.key, sortState.direction));
+
+	function sortBy(key: keyof Organizer) {
+		sortState = toggleSort(sortState, key);
+	}
 
 	let timer: ReturnType<typeof setTimeout>;
 	function onSearch(value: string) {
@@ -46,6 +57,10 @@
 	});
 </script>
 
+<svelte:head>
+	<title>Organizers — Veent Admin</title>
+</svelte:head>
+
 <PageHeader title="Organizers" subtitle="Event organizers and their contact details" />
 
 <div class="space-y-5 p-8">
@@ -72,74 +87,158 @@
 		/>
 	</div>
 
-	{#if error}
-		<p class="rounded-lg border border-danger/40 bg-danger-bg/40 px-4 py-3 text-sm text-danger">
-			Failed to load organizers: {error}
-		</p>
-	{/if}
+	<div class="overflow-hidden rounded-lg border border-border bg-surface">
+		<table class="w-full text-left">
+			<thead>
+				<tr class="bg-surface-2">
+					<th class="px-4 py-3">
+						<SortHeader
+							label="Organizer"
+							active={sortState.key === 'name'}
+							direction={sortState.direction}
+							onsort={() => sortBy('name')}
+						/>
+					</th>
+					<th
+						class="px-4 py-3 text-xs font-semibold uppercase tracking-wider text-muted"
+					>
+						Status
+					</th>
+					<th class="px-4 py-3">
+						<SortHeader
+							label="Location"
+							active={sortState.key === 'city'}
+							direction={sortState.direction}
+							onsort={() => sortBy('city')}
+						/>
+					</th>
+					<th
+						class="px-4 py-3 text-xs font-semibold uppercase tracking-wider text-muted"
+					>
+						Contact
+					</th>
+					<th
+						class="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wider text-muted"
+					>
+						Links
+					</th>
+				</tr>
+			</thead>
 
-	{#if loading && !data}
-		<p class="py-10 text-center text-muted">Loading…</p>
-	{:else if data && data.results.length === 0}
-		<p class="py-10 text-center text-muted">No organizers found.</p>
-	{:else if data}
-		<div class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-			{#each data.results as o (o.slug)}
-				<a
-					href="/organizers/{o.slug}"
-					class="group block rounded-xl border border-border bg-surface p-5 transition-colors hover:border-accent/50"
-				>
-					<div class="flex items-start justify-between gap-3">
-						<h3 class="font-semibold text-heading group-hover:text-accent">{o.name}</h3>
-						<Badge status={o.status} />
-					</div>
-					{#if o.city || o.country}
-						<p class="mt-1 text-sm text-muted">{[o.city, o.country].filter(Boolean).join(', ')}</p>
+			{#if loading && !data}
+				<TableSkeleton columns={5} />
+			{:else}
+				<tbody>
+					{#if error}
+						<tr>
+							<td colspan="5" class="px-4 py-10 text-center text-sm text-danger">
+								Failed to load organizers: {error}
+							</td>
+						</tr>
+					{:else if sorted.length === 0}
+						<tr>
+							<td colspan="5" class="px-4 py-10 text-center text-sm text-muted">
+								No organizers found.
+							</td>
+						</tr>
+					{:else}
+						{#each sorted as o (o.slug)}
+							<tr
+								class="border-t border-border transition-colors duration-100 hover:bg-surface-2"
+							>
+								<td class="px-4 py-3">
+									<a
+										href="/organizers/{o.slug}"
+										class="font-medium text-heading hover:text-accent"
+									>
+										{o.name}
+									</a>
+									{#if o.source}
+										<code
+											class="ml-0 mt-0.5 block w-fit rounded bg-bg px-1 font-mono text-xs text-muted"
+										>
+											{o.source}
+										</code>
+									{/if}
+								</td>
+								<td class="px-4 py-3">
+									<Badge status={o.status} />
+								</td>
+								<td class="px-4 py-3 text-sm text-text">
+									{[o.city, o.country].filter(Boolean).join(', ') || '—'}
+								</td>
+								<td class="px-4 py-3 text-sm">
+									{#if o.email}
+										<a
+											href="mailto:{o.email}"
+											class="block truncate text-text hover:text-accent"
+										>
+											{o.email}
+										</a>
+									{/if}
+									{#if o.phone}
+										<span class="block text-muted">{o.phone}</span>
+									{/if}
+									{#if !o.email && !o.phone}
+										<span class="text-muted">—</span>
+									{/if}
+								</td>
+								<td class="px-4 py-3">
+									<div class="flex items-center justify-end gap-2">
+										{#if o.website}
+											<a
+												href={o.website}
+												target="_blank"
+												rel="noopener"
+												title="Website"
+												class="text-muted transition-colors hover:text-accent"
+											>
+												<Globe size={16} />
+											</a>
+										{/if}
+										{#if o.facebook_url}
+											<a
+												href={o.facebook_url}
+												target="_blank"
+												rel="noopener"
+												title="Facebook"
+												class="text-muted transition-colors hover:text-accent"
+											>
+												<!-- lucide dropped brand glyphs; keep brand SVG (see Sidebar convention note) -->
+												<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M22 12a10 10 0 1 0-11.56 9.88v-6.99H7.9V12h2.54V9.8c0-2.5 1.49-3.89 3.78-3.89 1.09 0 2.24.2 2.24.2v2.46h-1.26c-1.24 0-1.63.77-1.63 1.56V12h2.78l-.44 2.89h-2.34v6.99A10 10 0 0 0 22 12z" /></svg>
+											</a>
+										{/if}
+										{#if o.instagram_url}
+											<a
+												href={o.instagram_url}
+												target="_blank"
+												rel="noopener"
+												title="Instagram"
+												class="text-muted transition-colors hover:text-accent"
+											>
+												<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="2" width="20" height="20" rx="5" /><path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z" /><line x1="17.5" y1="6.5" x2="17.51" y2="6.5" /></svg>
+											</a>
+										{/if}
+										{#if !o.website && !o.facebook_url && !o.instagram_url}
+											<span class="text-xs text-muted">—</span>
+										{/if}
+									</div>
+								</td>
+							</tr>
+						{/each}
 					{/if}
+				</tbody>
+			{/if}
+		</table>
+	</div>
 
-					<div class="mt-4 space-y-1.5 text-sm">
-						{#if o.email}
-							<div class="flex items-center gap-2 text-muted">
-								<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2" /><path d="m22 7-10 5L2 7" /></svg>
-								<span class="truncate">{o.email}</span>
-							</div>
-						{/if}
-						{#if o.phone}
-							<div class="flex items-center gap-2 text-muted">
-								<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z" /></svg>
-								<span class="truncate">{o.phone}</span>
-							</div>
-						{/if}
-					</div>
-
-					<div class="mt-4 flex items-center gap-3 text-muted">
-						{#if o.website}
-							<span title="Has website" class="text-accent">
-								<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10" /><line x1="2" y1="12" x2="22" y2="12" /><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" /></svg>
-							</span>
-						{/if}
-						{#if o.facebook_url}
-							<span title="Facebook"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M22 12a10 10 0 1 0-11.56 9.88v-6.99H7.9V12h2.54V9.8c0-2.5 1.49-3.89 3.78-3.89 1.09 0 2.24.2 2.24.2v2.46h-1.26c-1.24 0-1.63.77-1.63 1.56V12h2.78l-.44 2.89h-2.34v6.99A10 10 0 0 0 22 12z" /></svg></span>
-						{/if}
-						{#if o.instagram_url}
-							<span title="Instagram"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="20" rx="5" /><path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z" /><line x1="17.5" y1="6.5" x2="17.51" y2="6.5" /></svg></span>
-						{/if}
-						{#if !o.website && !o.facebook_url && !o.instagram_url && !o.email && !o.phone}
-							<span class="text-xs italic">No contact details</span>
-						{/if}
-					</div>
-				</a>
-			{/each}
-		</div>
-
-		{#if data.pages > 1}
-			<div class="flex items-center justify-between text-sm text-muted">
-				<span>{data.total.toLocaleString()} organizers · page {data.page} of {data.pages}</span>
-				<div class="flex gap-2">
-					<button class="rounded-lg border border-border px-3 py-1.5 enabled:hover:bg-surface-2 disabled:opacity-40" disabled={page <= 1} onclick={() => (page -= 1)}>Previous</button>
-					<button class="rounded-lg border border-border px-3 py-1.5 enabled:hover:bg-surface-2 disabled:opacity-40" disabled={page >= data.pages} onclick={() => (page += 1)}>Next</button>
-				</div>
+	{#if data && data.pages > 1}
+		<div class="flex items-center justify-between text-sm text-muted">
+			<span>{data.total.toLocaleString()} organizers · page {data.page} of {data.pages}</span>
+			<div class="flex gap-2">
+				<button class="rounded-lg border border-border px-3 py-1.5 enabled:hover:bg-surface-2 disabled:opacity-40" disabled={page <= 1} onclick={() => (page -= 1)}>Previous</button>
+				<button class="rounded-lg border border-border px-3 py-1.5 enabled:hover:bg-surface-2 disabled:opacity-40" disabled={page >= data.pages} onclick={() => (page += 1)}>Next</button>
 			</div>
-		{/if}
+		</div>
 	{/if}
 </div>
