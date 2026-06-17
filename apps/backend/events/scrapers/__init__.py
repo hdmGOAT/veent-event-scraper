@@ -6,6 +6,7 @@ unique key. The ``scrape`` management command looks scrapers up by key.
 from .allevents import AllEventsCDOScraper
 from .allevents_api import AllEventsAPIScraper
 from .allevents_ph import AllEventsPHScraper
+from .allevents_ph_organizers import AllEventsPHOrganizersScraper
 from .base import BaseScraper, ScrapedEvent, ScrapedOrganizer, ScrapedVenue
 from .eventbee import EventbeeScraper
 from .eventbrite import EventbriteScraper
@@ -24,6 +25,7 @@ SCRAPERS = {
     "google_places": GooglePlacesVenueScraper,
     "allevents_cdo": AllEventsCDOScraper,
     "allevents_in": AllEventsPHScraper,
+    "allevents_in_organizers": AllEventsPHOrganizersScraper,
     "happeningnext_cdo": HappeningNextCDOScraper,
     "racemeister_partners": RacemeisterPartnersScraper,
     "racemeister_events": RacemeisterEventsScraper,

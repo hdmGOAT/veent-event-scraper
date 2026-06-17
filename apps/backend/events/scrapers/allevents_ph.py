@@ -16,7 +16,7 @@ _MANILA_TZ = ZoneInfo("Asia/Manila")
 
 _CITIES = [
     {"slug": "manila", "city": "Manila"},
-    {"slug": "cebu-city", "city": "Cebu"},
+    # cebu / cebu-city both 404 on allevents.in — verify correct slug manually
     {"slug": "davao", "city": "Davao City"},
     {"slug": "cagayan-de-oro", "city": "Cagayan de Oro"},
 ]
