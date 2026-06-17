@@ -8,6 +8,7 @@ from .base import BaseScraper, ScrapedEvent, ScrapedOrganizer, ScrapedVenue
 from .happeningnext import HappeningNextCDOScraper
 from .myruntime import MyRuntimeScraper
 from .places import GooglePlacesVenueScraper
+from .luma import LumaScraper
 from .planout import PlanoutScraper
 from .racemeister import RacemeisterPartnersScraper
 from .racemeister_events import RacemeisterEventsScraper
@@ -23,6 +24,7 @@ SCRAPERS = {
     "myruntime": MyRuntimeScraper,
     "ticket2me": Ticket2MeScraper,
     "planout": PlanoutScraper,
+    "luma": LumaScraper,
 }
 
 __all__ = ["BaseScraper", "ScrapedEvent", "ScrapedOrganizer", "ScrapedVenue", "SCRAPERS"]
