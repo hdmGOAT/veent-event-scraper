@@ -12,7 +12,7 @@ secret and follow the same auth pattern.
 Add to `.env` (already present — change the value before production):
 
 ```
-SCRAPER_WEBHOOK_SECRET=veent-n8n-scraper-2026
+SCRAPER_WEBHOOK_SECRET=YOUR_WEBHOOK_SECRET_HERE
 ```
 
 Django loads `.env` automatically at startup via the `_load_dotenv` helper in
@@ -179,7 +179,7 @@ path("webhooks/ingest-events/", views.ingest_events_webhook, name="ingest_events
 
 Added:
 ```
-SCRAPER_WEBHOOK_SECRET=veent-n8n-scraper-2026
+SCRAPER_WEBHOOK_SECRET=YOUR_WEBHOOK_SECRET_HERE
 ```
 
 ---
@@ -189,12 +189,12 @@ SCRAPER_WEBHOOK_SECRET=veent-n8n-scraper-2026
 ```bash
 # From a terminal with Django running on port 8000
 curl -X POST http://localhost:8000/webhooks/scrape/ \
-  -H "X-Scraper-Key: veent-n8n-scraper-2026" \
+  -H "X-Scraper-Key: YOUR_WEBHOOK_SECRET_HERE" \
   -H "Content-Type: application/json" \
   -d '{"source": "myruntime"}'
 
 curl -X POST http://localhost:8000/webhooks/ingest-events/ \
-  -H "X-Scraper-Key: veent-n8n-scraper-2026" \
+  -H "X-Scraper-Key: YOUR_WEBHOOK_SECRET_HERE" \
   -H "Content-Type: application/json" \
   -d '{"source": "luma", "events": [{"name": "Test Event", "url": "https://lu.ma/test"}]}'
 ```

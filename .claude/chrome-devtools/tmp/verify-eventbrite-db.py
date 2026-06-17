@@ -1,7 +1,7 @@
 """Verify Eventbrite events in DB match schema requirements."""
 import os, sys, django
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)) + "/../../../..")
-os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)) + "/../../../")
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "apps.backend.config.settings")
 django.setup()
 
 from events.models import Event, Venue, Organizer

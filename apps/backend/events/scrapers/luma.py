@@ -61,7 +61,7 @@ def _price_str(ticket_info: dict) -> str:
     max_p = ticket_info.get("max_price") or {}
     max_cents = max_p.get("cents")
     if max_cents and max_cents != cents:
-        return f"₱{amount:,.0f}–₱{max_cents / 100:,.0f}"
+        return f"₱{amount:,.0f}-₱{max_cents / 100:,.0f}"
     return f"₱{amount:,.0f}"
 
 

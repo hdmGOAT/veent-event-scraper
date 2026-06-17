@@ -70,7 +70,7 @@ def _price_str(ta: dict) -> str:
     min_amt = float(min_val)
     max_val = max_p.get("major_value")
     if max_val and float(max_val) != min_amt:
-        return f"₱{min_amt:,.0f}–₱{float(max_val):,.0f}"
+        return f"₱{min_amt:,.0f}-₱{float(max_val):,.0f}"
     return f"₱{min_amt:,.0f}"
 
 

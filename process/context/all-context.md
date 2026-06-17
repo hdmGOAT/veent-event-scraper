@@ -183,7 +183,7 @@ veent-event-scraper/                  -- monorepo root
         runner.py                     -- subprocess-based scraper runner (trigger_scraper_run, cancel_run)
         categories.py                 -- normalize_category(): display-layer category normalization
         tests.py                      -- Django TestCase suite (97 tests as of 2026-06-17)
-        migrations/                   -- 0001_initial … 0011_run_cancellation (applied)
+        migrations/                   -- 0001_initial … 0012_scraperrun_unique_active_constraint (applied)
         scrapers/
           base.py                     -- BaseScraper + ScrapedEvent/ScrapedVenue/ScrapedOrganizer + save_events/save_organizers
           allevents.py                -- AllEventsCDOScraper (key: allevents_cdo, Playwright)
@@ -290,7 +290,8 @@ Four models in `apps/backend/events/models.py`, all carrying provenance fields (
 - **`Event`** — a scraped event, optional FK to `Venue` (`on_delete=SET_NULL`,
   `related_name="events"`), optional FK to `Organizer` (`organizer_ref`, `on_delete=SET_NULL`).
   Fields: name, unique `slug`, description, `starts_at`/`ends_at`, url, image_url, price,
-  category, `organizer` (CharField), `organizer_url` (URLField), `external_id` (indexed).
+  category, `agent_categories` (JSONField — AI-assigned canonical categories, empty list = not yet classified),
+  `organizer` (CharField), `organizer_url` (URLField), `external_id` (indexed).
   Ordered by `starts_at, name`.
 
 - **`Organizer`** — an event organizer scraped from partner directories. Fields: name, unique
@@ -671,6 +672,6 @@ dev server proxies `/api/*` to the Django backend at `localhost:8000` (configure
 - Generated: 2026-06-16 (rev 2); revised 2026-06-17 (rev 3)
 - Package managers: pnpm (monorepo root + frontend), pip/venv (backend)
 - Active scrapers: 10 (google_places, allevents_cdo, happeningnext_cdo, racemeister_partners, racemeister_events, myruntime, ticket2me, planout, luma, eventbrite)
-- Migrations: 0001–0011 applied
+- Migrations: 0001–0012 applied
 - Backend tests: 97 (all passing, Neon Postgres)
 - Frontend tests: 0 (svelte-check + build are the only automated verification)
