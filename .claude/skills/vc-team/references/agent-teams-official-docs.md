@@ -2,7 +2,6 @@
 
 > **Canonical source:** https://code.claude.com/docs/en/agent-teams
 > **Version captured:** Claude Code v2.1.80 (March 2026)
-> **Update policy:** Re-fetch canonical URL when Claude Code releases new Agent Teams features.
 
 This is a **self-contained knowledge base** -- AI agents should NOT need to re-fetch the URL.
 

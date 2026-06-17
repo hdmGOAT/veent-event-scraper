@@ -20,6 +20,12 @@ db.sqlite3-journal
 .env
 .env.*
 
+# Node / pnpm / Turborepo monorepo
+node_modules/
+.turbo/
+apps/frontend/.svelte-kit/
+apps/frontend/build/
+
 # Editors / OS
 .DS_Store
 .idea/
