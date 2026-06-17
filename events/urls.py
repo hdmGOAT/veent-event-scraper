@@ -9,6 +9,8 @@ urlpatterns = [
     path("events/<slug:slug>/", views.event_detail, name="event_detail"),
     path("venues/", views.venue_list, name="venue_list"),
     path("venues/<slug:slug>/", views.venue_detail, name="venue_detail"),
+    path("organizers/", views.organizer_list, name="organizer_list"),
+    path("organizers/<slug:slug>/", views.organizer_detail, name="organizer_detail"),
     # Staff-only venue review UI
     path("review/", views.review_dashboard, name="review_dashboard"),
     path("review/venues/<slug:slug>/", views.review_venue_detail, name="review_venue_detail"),

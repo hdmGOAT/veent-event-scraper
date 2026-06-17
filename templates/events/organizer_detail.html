@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}{{ organizer.name }} · Veent{% endblock %}
+
+{% block content %}
+  <p><a href="{% url 'events:organizer_list' %}">← All organizers</a></p>
+  <h1>{{ organizer.name }}</h1>
+  {% if organizer.address or organizer.city %}
+    <p class="muted">{{ organizer.address }}{% if organizer.city %}{% if organizer.address %}, {% endif %}{{ organizer.city }}{% endif %}{% if organizer.country %}, {{ organizer.country }}{% endif %}</p>
+  {% endif %}
+
+  {% if organizer.description %}<p class="about">{{ organizer.description }}</p>{% endif %}
+
+  <div class="meta">
+    {% if organizer.website %}<div><a href="{{ organizer.website }}" target="_blank" rel="noopener">Website →</a></div>{% endif %}
+    {% if organizer.email %}<div><a href="mailto:{{ organizer.email }}">{{ organizer.email }}</a></div>{% endif %}
+    {% if organizer.phone %}<div class="muted">{{ organizer.phone }}</div>{% endif %}
+    {% if organizer.facebook_url %}<div><a href="{{ organizer.facebook_url }}" target="_blank" rel="noopener">Facebook →</a></div>{% endif %}
+    {% if organizer.instagram_url %}<div><a href="{{ organizer.instagram_url }}" target="_blank" rel="noopener">Instagram →</a></div>{% endif %}
+    {% if organizer.source %}<div>Source: <span class="source-tag">{{ organizer.source }}</span>{% if organizer.source_url %} · <a href="{{ organizer.source_url }}" target="_blank" rel="noopener">view on source →</a>{% endif %}</div>{% endif %}
+  </div>
+
+  <h2>Events</h2>
+  <div class="grid">
+    {% for event in events %}
+      <div class="card">
+        <h3><a href="{{ event.get_absolute_url }}">{{ event.name }}</a></h3>
+        {% if event.starts_at %}<div class="muted">{{ event.starts_at|date:"D, M j, Y · H:i" }}</div>{% endif %}
+      </div>
+    {% empty %}
+      <div class="empty">No events recorded for this organizer yet.</div>
+    {% endfor %}
+  </div>
+{% endblock %}

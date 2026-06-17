@@ -193,3 +193,14 @@ class Organizer(models.Model):
 
     def __str__(self):
         return self.name
+
+    def get_absolute_url(self):
+        return reverse("events:organizer_detail", args=[self.slug])
+
+    @property
+    def is_public(self):
+        """Whether this organizer is publicly visible. Mirrors the queryset
+        filter used by the public organizer views: everything except rejected.
+        Use this before rendering a link to the organizer's detail page so we
+        never emit a link that would 404."""
+        return self.status != self.STATUS_REJECTED
