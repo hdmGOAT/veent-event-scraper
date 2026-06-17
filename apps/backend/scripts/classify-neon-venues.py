@@ -240,7 +240,7 @@ def main():
         return
 
     num_batches = (total + BATCH_SIZE - 1) // BATCH_SIZE
-    print(f"Found {total} unclassified venue(s) → {num_batches} batch(es) of {BATCH_SIZE}")
+    print(f"Found {total} unclassified venue(s) -> {num_batches} batch(es) of {BATCH_SIZE}")
 
     if args.dry_run:
         print("[dry-run] No writes. Remove --dry-run to apply.")
