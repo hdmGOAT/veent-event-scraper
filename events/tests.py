@@ -293,3 +293,93 @@ class ReviewUITests(TestCase):
         self.assertEqual(resp.status_code, 302)  # bounced to login
         venue.refresh_from_db()
         self.assertEqual(venue.verification_status, Venue.VerificationStatus.PENDING)
+
+
+class ResolveOrganizerTests(TestCase):
+    """Covers the FK resolution helper and the display-name property."""
+
+    def _org(self, name, slug, website="", source="src"):
+        from events.models import Organizer
+
+        return Organizer.objects.create(
+            name=name, slug=slug, website=website, source=source,
+        )
+
+    def test_resolves_by_url_with_normalization(self):
+        from events.scrapers.base import _resolve_organizer
+
+        org = self._org("Acme", "acme", website="https://Acme.Example.com/")
+        # Different casing + trailing slash should still match.
+        resolved = _resolve_organizer("http://acme.example.com", "")
+        # Scheme differs (http vs https) → normalization keeps scheme, so this
+        # should NOT match; the exact-host https URL should.
+        self.assertIsNone(resolved)
+        resolved2 = _resolve_organizer("https://acme.example.com/", "Unrelated")
+        self.assertEqual(resolved2, org)
+
+    def test_resolves_by_unambiguous_name(self):
+        from events.scrapers.base import _resolve_organizer
+
+        org = self._org("Unique Org", "unique-org")
+        resolved = _resolve_organizer("", "unique org")  # case-insensitive
+        self.assertEqual(resolved, org)
+
+    def test_ambiguous_name_returns_none(self):
+        from events.scrapers.base import _resolve_organizer
+
+        self._org("Dup Org", "dup-org-1", source="a")
+        self._org("Dup Org", "dup-org-2", source="b")
+        resolved = _resolve_organizer("", "Dup Org")
+        self.assertIsNone(resolved)
+
+    def test_no_match_returns_none(self):
+        from events.scrapers.base import _resolve_organizer
+
+        self.assertIsNone(_resolve_organizer("", ""))
+        self.assertIsNone(_resolve_organizer("https://nobody.example", "Nobody"))
+
+    def test_save_events_links_organizer_ref(self):
+        from events.models import Event
+        from events.scrapers.base import ScrapedEvent, save_events
+
+        org = self._org("Linkable", "linkable", website="https://linkable.example")
+        save_events("link_src", [ScrapedEvent(
+            name="Linked Event",
+            organizer_url="https://linkable.example/",
+            organizer="Linkable",
+        )])
+        ev = Event.objects.get(source="link_src")
+        self.assertEqual(ev.organizer_ref, org)
+
+    def test_save_events_never_creates_organizer(self):
+        from events.models import Event, Organizer
+        from events.scrapers.base import ScrapedEvent, save_events
+
+        before = Organizer.objects.count()
+        save_events("nolink_src", [ScrapedEvent(
+            name="Orphan Event",
+            organizer_url="https://unknown.example",
+            organizer="Unknown Org",
+        )])
+        self.assertEqual(Organizer.objects.count(), before)
+        ev = Event.objects.get(source="nolink_src")
+        self.assertIsNone(ev.organizer_ref)
+
+    def test_organizer_display_name_prefers_fk(self):
+        from events.models import Event
+
+        org = self._org("Real Org", "real-org")
+        ev = Event.objects.create(
+            name="Display Event", slug="display-event",
+            organizer="Raw Name", organizer_ref=org,
+        )
+        self.assertEqual(ev.organizer_display_name, "Real Org")
+
+    def test_organizer_display_name_falls_back_to_charfield(self):
+        from events.models import Event
+
+        ev = Event.objects.create(
+            name="Fallback Event", slug="fallback-event",
+            organizer="Raw Name Only",
+        )
+        self.assertEqual(ev.organizer_display_name, "Raw Name Only")

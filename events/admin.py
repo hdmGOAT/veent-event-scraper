@@ -34,13 +34,14 @@ class EventAdmin(admin.ModelAdmin):
     search_fields = ("name", "description", "organizer")
     prepopulated_fields = {"slug": ("name",)}
     autocomplete_fields = ("venue",)
+    raw_id_fields = ("organizer_ref",)
     date_hierarchy = "starts_at"
-    readonly_fields = ("source_url", "created_at", "updated_at")
+    readonly_fields = ("source_url", "organizer", "organizer_url", "created_at", "updated_at")
     fieldsets = (
         (None, {"fields": ("name", "slug", "description", "venue")}),
         ("Schedule", {"fields": ("starts_at", "ends_at")}),
         ("Details", {"fields": ("url", "image_url", "price", "category")}),
-        ("Host / Organizer", {"fields": ("organizer", "organizer_url")}),
+        ("Host / Organizer", {"fields": ("organizer_ref", "organizer", "organizer_url")}),
         ("Provenance", {"fields": ("source", "source_url", "external_id", "scraped_at")}),
         ("Timestamps", {"fields": ("created_at", "updated_at")}),
     )
