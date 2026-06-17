@@ -208,3 +208,71 @@ class Organizer(models.Model):
         Use this before rendering a link to the organizer's detail page so we
         never emit a link that would 404."""
         return self.status != self.STATUS_REJECTED
+
+
+class ScraperRun(models.Model):
+    """A single execution of a registered scraper.
+
+    Serves as both the live job table (while status is queued/running) and the
+    durable history of every run. One row per run; no separate log-line table.
+    The thread runner (``events/runner.py``) updates this row as the scraper
+    progresses, and the polling API reads from it — the DB row is the only
+    shared state, so the design is safe across WSGI workers.
+    """
+
+    class Status(models.TextChoices):
+        QUEUED = "queued", "Queued"
+        RUNNING = "running", "Running"
+        SUCCESS = "success", "Success"
+        FAILED = "failed", "Failed"
+        CANCELLED = "cancelled", "Cancelled"
+
+    scraper_key = models.CharField(max_length=120, db_index=True)
+    status = models.CharField(
+        max_length=20, choices=Status.choices, default=Status.QUEUED, db_index=True,
+    )
+    started_at = models.DateTimeField(null=True, blank=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+    created_count = models.IntegerField(default=0)
+    updated_count = models.IntegerField(default=0)
+    # Any extra count keys from the scraper's run() dict beyond
+    # source/created/updated (e.g. organizers_created for MyRuntime).
+    extra_counts = models.JSONField(default=dict, blank=True)
+    # Full traceback string on failure; empty on success.
+    error_message = models.TextField(blank=True)
+    pid = models.PositiveIntegerField(
+        null=True, blank=True,
+        help_text="OS PID of the worker subprocess; null for queued/pre-subprocess rows.",
+    )
+    triggered_by = models.ForeignKey(
+        "auth.User", on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="scraper_runs",
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["scraper_key"],
+                condition=models.Q(status__in=["queued", "running"]),
+                name="unique_active_scraper_run",
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.scraper_key} [{self.status}] @ {self.created_at:%Y-%m-%d %H:%M}"
+
+    @property
+    def duration_seconds(self):
+        """Wall-clock run time in seconds, or None until both timestamps set."""
+        if self.started_at and self.finished_at:
+            return (self.finished_at - self.started_at).total_seconds()
+        return None
+
+    @property
+    def is_active(self):
+        """Whether the run is queued or currently running."""
+        return self.status in (self.Status.QUEUED, self.Status.RUNNING)

@@ -9,7 +9,12 @@
 		pending: 'bg-warning-bg text-warning',
 		confirmed: 'bg-success-bg text-success',
 		verified: 'bg-success-bg text-success',
-		rejected: 'bg-danger-bg text-danger'
+		rejected: 'bg-danger-bg text-danger',
+		running: 'bg-accent-dim text-accent',
+		queued: 'bg-surface-2 text-muted',
+		success: 'bg-success-bg text-success',
+		failed: 'bg-danger-bg text-danger',
+		cancelled: 'bg-warning-bg text-warning'
 	};
 
 	// Six distinct accent hues for category badges. Uses semi-transparent

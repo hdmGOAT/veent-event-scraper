@@ -77,9 +77,37 @@ export interface VenueRow {
 	source: string;
 }
 
+export type ScraperRunStatus = 'queued' | 'running' | 'success' | 'failed' | 'cancelled';
+
+export interface ScraperRun {
+	id: number;
+	scraper_key: string;
+	status: ScraperRunStatus;
+	started_at: string | null;
+	finished_at: string | null;
+	created_count: number;
+	updated_count: number;
+	extra_counts: Record<string, number>;
+	error_message: string | null;
+	triggered_by: string | null;
+	created_at: string;
+	duration_seconds: number | null;
+}
+
+export interface ScraperLastRun {
+	status: ScraperRunStatus;
+	started_at: string | null;
+	finished_at: string | null;
+}
+
 export interface Scraper {
 	key: string;
 	last_scraped: string | null;
+	// Most recent ScraperRun for this key (null if it has never been run),
+	// annotated by api_scrapers. Drives the card's "last run" line.
+	last_run: ScraperLastRun | null;
+	// Derived client-side from the activeRuns poll; not returned by api_scrapers.
+	active_run?: ScraperRun | null;
 }
 
 export interface Paginated<T> {
@@ -87,4 +115,9 @@ export interface Paginated<T> {
 	total: number;
 	pages: number;
 	page: number;
+}
+
+export interface RunAllResult {
+	created: { key: string; id: number; status: ScraperRunStatus }[];
+	skipped: string[];
 }
