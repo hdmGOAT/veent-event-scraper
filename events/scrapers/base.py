@@ -139,6 +139,42 @@ def _upsert_venue(source: str, sv: ScrapedVenue, now) -> tuple[Venue, bool]:
     return venue, True
 
 
+def _normalize_url(url: str) -> str:
+    """Lowercase scheme+host and strip a trailing slash. Returns "" for blank."""
+    from urllib.parse import urlparse, urlunparse
+
+    if not url:
+        return ""
+    parsed = urlparse(url.strip())
+    normalized = parsed._replace(
+        scheme=parsed.scheme.lower(),
+        netloc=parsed.netloc.lower(),
+    )
+    return urlunparse(normalized).rstrip("/")
+
+
+def _resolve_organizer(organizer_url: str, organizer_name: str) -> Organizer | None:
+    """Resolve an existing Organizer by URL then unambiguous name. Never creates rows.
+
+    Pass 1: normalize ``organizer_url`` and match against ``Organizer.website``.
+    Pass 2: case-insensitive match on ``organizer_name``; skip if ambiguous (>1).
+    Returns the matched ``Organizer`` or ``None``.
+    """
+    key = _normalize_url(organizer_url)
+    if key:
+        for org in Organizer.objects.filter(website__gt=""):
+            if _normalize_url(org.website) == key:
+                return org
+
+    name = (organizer_name or "").strip()
+    if name:
+        matches = list(Organizer.objects.filter(name__iexact=name)[:2])
+        if len(matches) == 1:
+            return matches[0]
+
+    return None
+
+
 def save_events(source: str, events: Iterable[ScrapedEvent]) -> dict:
     """Persist scraped events, upserting on (source, external_id) when present."""
     now = timezone.now()
@@ -153,11 +189,14 @@ def save_events(source: str, events: Iterable[ScrapedEvent]) -> dict:
                 source=source, external_id=se.external_id
             ).first()
 
+        organizer_ref = _resolve_organizer(se.organizer_url, se.organizer)
+
         fields = dict(
             name=se.name, description=se.description, venue=venue,
             starts_at=se.starts_at, ends_at=se.ends_at, url=se.url,
             image_url=se.image_url, price=se.price, category=se.category,
             organizer=se.organizer, organizer_url=se.organizer_url,
+            organizer_ref=organizer_ref,
             source=source, source_url=se.source_url,
             external_id=se.external_id, scraped_at=now,
         )

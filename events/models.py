@@ -97,6 +97,13 @@ class Event(models.Model):
     # Host / organizer info
     organizer = models.CharField(max_length=255, blank=True)
     organizer_url = models.URLField(blank=True, max_length=2000)
+    # Normalized FK to a known Organizer record when one can be matched.
+    # The denormalized `organizer` / `organizer_url` fields above are kept as a
+    # fallback for events whose organizer has no matching Organizer row.
+    organizer_ref = models.ForeignKey(
+        "Organizer", on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="events",
+    )
 
     # Provenance / scraping metadata
     source = models.CharField(
@@ -126,6 +133,13 @@ class Event(models.Model):
 
     def get_absolute_url(self):
         return reverse("events:event_detail", args=[self.slug])
+
+    @property
+    def organizer_display_name(self):
+        """Prefer the linked Organizer's name, falling back to the raw CharField."""
+        if self.organizer_ref_id:
+            return self.organizer_ref.name
+        return self.organizer
 
 
 class Organizer(models.Model):
