@@ -1,8 +1,12 @@
+import json
+import os
+
 from django.contrib.admin.views.decorators import staff_member_required
 from django.db.models import Count, Q
-from django.http import HttpResponseBadRequest
+from django.http import HttpResponseBadRequest, JsonResponse
 from django.shortcuts import get_object_or_404, render
 from django.utils import timezone
+from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_POST
 
 from .models import Event, Organizer, Venue
@@ -201,3 +205,117 @@ def review_set_status(request, slug):
         "events/review/_status_control.html",
         {"venue": venue, "status_choices": Venue.VerificationStatus.choices},
     )
+
+
+# ---------------------------------------------------------------------------
+# n8n automation webhook — triggered by n8n to run a scraper on demand.
+# Secured by a shared secret in X-Scraper-Key header (set SCRAPER_WEBHOOK_SECRET).
+# ---------------------------------------------------------------------------
+
+_WEBHOOK_SECRET = os.environ.get("SCRAPER_WEBHOOK_SECRET", "")
+
+
+@csrf_exempt
+@require_POST
+def scraper_webhook(request):
+    """Run a single scraper source on demand, called by n8n."""
+    key = request.headers.get("X-Scraper-Key", "")
+    if not _WEBHOOK_SECRET or key != _WEBHOOK_SECRET:
+        return JsonResponse({"error": "unauthorized"}, status=401)
+
+    try:
+        data = json.loads(request.body)
+    except (json.JSONDecodeError, ValueError):
+        return JsonResponse({"error": "invalid JSON body"}, status=400)
+
+    source = (data.get("source") or "").strip()
+    if not source:
+        return JsonResponse({"error": "source field is required"}, status=400)
+
+    from events.scrapers import SCRAPERS  # noqa: PLC0415
+
+    if source not in SCRAPERS:
+        return JsonResponse(
+            {"error": f"unknown source: {source}", "available": sorted(SCRAPERS)},
+            status=400,
+        )
+
+    try:
+        result = SCRAPERS[source]().run()
+        return JsonResponse({"success": True, **result})
+    except Exception as exc:  # noqa: BLE001
+        return JsonResponse({"success": False, "source": source, "error": str(exc)}, status=500)
+
+
+# ---------------------------------------------------------------------------
+# n8n AI ingest webhook — accepts pre-scraped event data from AI agents.
+# Matches the same X-Scraper-Key auth as scraper_webhook.
+# ---------------------------------------------------------------------------
+
+
+@csrf_exempt
+@require_POST
+def ingest_events_webhook(request):
+    """Accept AI-extracted event arrays from n8n and persist via save_events."""
+    key = request.headers.get("X-Scraper-Key", "")
+    if not _WEBHOOK_SECRET or key != _WEBHOOK_SECRET:
+        return JsonResponse({"error": "unauthorized"}, status=401)
+
+    try:
+        data = json.loads(request.body)
+    except (json.JSONDecodeError, ValueError):
+        return JsonResponse({"error": "invalid JSON body"}, status=400)
+
+    source = (data.get("source") or "").strip()
+    if not source:
+        return JsonResponse({"error": "source is required"}, status=400)
+
+    events_data = data.get("events") or []
+    if not isinstance(events_data, list):
+        return JsonResponse({"error": "events must be an array"}, status=400)
+
+    from datetime import datetime
+
+    from events.scrapers.base import ScrapedEvent, ScrapedVenue, save_events  # noqa: PLC0415
+
+    scraped_events = []
+    for ev in events_data:
+        if not isinstance(ev, dict):
+            continue
+
+        starts_at = ends_at = None
+        for key_dt, attr in (("starts_at", "starts_at"), ("ends_at", "ends_at")):
+            raw = (ev.get(key_dt) or "").strip()
+            if raw:
+                try:
+                    dt = datetime.fromisoformat(raw)
+                    if attr == "starts_at":
+                        starts_at = timezone.make_aware(dt) if dt.tzinfo is None else dt
+                    else:
+                        ends_at = timezone.make_aware(dt) if dt.tzinfo is None else dt
+                except (ValueError, TypeError):
+                    pass
+
+        venue = None
+        location = (ev.get("location") or "").strip()
+        if location:
+            venue = ScrapedVenue(name=location)
+
+        event_url = (ev.get("url") or "").strip()
+        scraped_events.append(
+            ScrapedEvent(
+                name=(ev.get("name") or "").strip(),
+                description=(ev.get("description") or "").strip(),
+                url=event_url,
+                price=(ev.get("price") or "").strip(),
+                organizer=(ev.get("organizer") or "").strip(),
+                starts_at=starts_at,
+                ends_at=ends_at,
+                source_url=event_url,
+                external_id=(ev.get("external_id") or event_url).strip(),
+                venue=venue,
+            )
+        )
+
+    result = save_events(source, scraped_events)
+    return JsonResponse({"success": True, **result})

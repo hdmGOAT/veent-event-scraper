@@ -15,4 +15,7 @@ urlpatterns = [
     path("review/", views.review_dashboard, name="review_dashboard"),
     path("review/venues/<slug:slug>/", views.review_venue_detail, name="review_venue_detail"),
     path("review/venues/<slug:slug>/status/", views.review_set_status, name="review_set_status"),
+    # n8n automation webhooks
+    path("webhooks/scrape/", views.scraper_webhook, name="scraper_webhook"),
+    path("webhooks/ingest-events/", views.ingest_events_webhook, name="ingest_events_webhook"),
 ]
