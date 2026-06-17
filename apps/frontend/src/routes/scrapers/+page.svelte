@@ -6,6 +6,10 @@
 	let { data }: { data: PageData } = $props();
 </script>
 
+<svelte:head>
+	<title>Scrapers — Veent Admin</title>
+</svelte:head>
+
 <PageHeader title="Scraper Center" subtitle="Registered data sources and their last run" />
 
 <div class="space-y-5 p-8">
