@@ -1,6 +1,6 @@
 # Veent Event Scraper - All Tests
 
-Last updated: 2026-06-16
+Last updated: 2026-06-17
 
 Attach this file first when the task involves testing, verification, or test debugging.
 
@@ -33,8 +33,8 @@ Use this file when you need to:
 ## Quick Routing
 
 (No deeper test docs yet. Add routing entries here as they are created — e.g. a
-`scraper-testing.md` once scrapers have a mocking pattern, or `e2e-tests.md` if browser
-tests are added.)
+`scraper-testing.md` once scrapers have a dedicated mocking pattern doc, or `e2e-tests.md`
+if browser tests are added.)
 
 ## Quick Decision Guide
 
@@ -42,10 +42,19 @@ tests are added.)
 
 This project uses **Django's built-in test framework** (`unittest`-based, via
 `manage.py test`). There is no pytest, no separate e2e runner, and no CI yet. Tests live next
-to the app in `events/tests.py` (currently an empty placeholder — see Known Gaps).
+to the app in `apps/backend/events/tests.py` (64 tests as of 2026-06-17).
 
 CI is planned but not yet set up; when added, it should run `manage.py test` (and a migration
 check) on push/PR.
+
+### TestCase vs. TransactionTestCase
+
+- Use **`TestCase`** (default) for most tests — wraps each test in a transaction that rolls
+  back on teardown.
+- Use **`TransactionTestCase`** for tests that involve `threading.Thread` (e.g. runner tests).
+  `TestCase`'s transaction wrapping means spawned threads cannot see uncommitted rows. The
+  runner tests use `TransactionTestCase` and explicitly truncate data in `tearDown` because
+  the DB is Neon Postgres (not an auto-destroyed temp DB).
 
 ## Default Verification Order
 
@@ -58,35 +67,48 @@ Unless the task clearly needs a different path:
 
 ## Commands
 
-Activate the venv first: `source venv/bin/activate`
+Activate the venv first (from repo root or `apps/backend/`):
+`source apps/backend/venv/bin/activate`
+
+Or prefix each command with the full venv path:
 
 | Purpose | Command | Notes |
 |---|---|---|
-| Run all tests | `python manage.py test` | discovers `events/tests.py` (empty today) |
-| Run one app | `python manage.py test events` | |
-| Run one test | `python manage.py test events.tests.MyTest.test_x` | dotted path |
-| Verbose | `python manage.py test -v 2` | |
-| Keep test DB | `python manage.py test --keepdb` | faster reruns once tests exist |
-| Check migrations | `python manage.py makemigrations --check --dry-run` | good CI gate |
-| Apply migrations | `python manage.py migrate` | |
-| Manual scrape check | `python manage.py scrape --list` / `python manage.py scrape example` | exercises the scraper path end-to-end |
-| Run the app | `python manage.py runserver` | UI at http://127.0.0.1:8000/, admin at /admin/ |
+| Run all tests | `cd apps/backend && ./venv/bin/python manage.py test events` | runs the full 64-test suite |
+| Run one test class | `./venv/bin/python manage.py test events.tests.RunnerTests` | dotted path |
+| Run one test method | `./venv/bin/python manage.py test events.tests.RunnerTests.test_trigger_creates_run_row` | |
+| Verbose | `./venv/bin/python manage.py test events -v 2` | |
+| Keep test DB | `./venv/bin/python manage.py test --keepdb` | faster reruns (Postgres) |
+| Check migrations | `./venv/bin/python manage.py makemigrations --check --dry-run` | good CI gate |
+| Apply migrations | `./venv/bin/python manage.py migrate` | |
+| Manual scrape check | `./venv/bin/python manage.py scrape --list` / `scrape myruntime` | exercises scraper end-to-end |
+| Run the app | `./venv/bin/python manage.py runserver` | Django at http://127.0.0.1:8000/ |
+
+All commands assume CWD is `apps/backend/`.
 
 ## Debugging Quick Reference
 
-- **Test database:** Django creates a separate test DB automatically (a temp SQLite DB);
-  it does not touch `db.sqlite3`. No `.env.test` or external DB needed.
+- **Test database:** Neon PostgreSQL (configured via `DATABASE_URL` in `apps/backend/.env`).
+  Django does **not** create a separate SQLite temp DB — it creates/uses a test database on
+  the Neon cluster. Rows from `TransactionTestCase` tests persist until explicitly cleaned
+  in `tearDown`; `TestCase` tests roll back automatically.
 - **`testserver` host:** already in `ALLOWED_HOSTS`, so the test client works out of the box.
 - **Timezone:** `USE_TZ=True`. Use `django.utils.timezone.now()` in tests, not naive
   `datetime`, or comparisons against model datetimes will be wrong.
-- **Scraper tests:** since `save_events` writes to the DB, test scrapers with
-  `TestCase` (transactional rollback per test). Mock outbound HTTP (`requests.get`) rather
-  than hitting live sites; assert on the `{"created", "updated"}` dict and on resulting rows.
+- **Scraper tests:** mock outbound HTTP (`requests.get`) and scraper execution
+  (`SCRAPERS[key]().run()`) rather than hitting live sites. Assert on the `{"created", "updated"}`
+  dict and on resulting DB rows.
+- **Runner tests require `TransactionTestCase`:** see TestCase vs. TransactionTestCase above.
+  Mock `SCRAPERS[key]().run()` so no real scraper execution happens in tests.
+- **Common failure: rows from a prior TransactionTestCase test bleeding into the next** —
+  ensure `tearDown` truncates `ScraperRun.objects.all().delete()` (and any other model rows
+  created without transaction rollback).
 
 ## Known Gaps
 
-- **No tests exist yet.** `events/tests.py` is the default placeholder. The highest-value
-  first tests: `save_events` upsert/dedup behavior (the `unique_source_external_id`
-  constraint), slug uniqueness, and the `scrape` command's unknown-key / `--list` handling.
 - **No CI** is configured yet (planned). No coverage measurement.
-- **No tests** for the views/search or templates.
+- **No frontend (Svelte) tests.** The SvelteKit frontend has no unit or e2e test suite yet.
+- **Playwright scrapers are not tested end-to-end.** `allevents_cdo` and `happeningnext_cdo`
+  require a live Playwright session; they are excluded from automated tests.
+- **No view/template tests for the Django-rendered list/detail pages** (event_list, venue_list,
+  etc.), only the `/review/` staff UI has coverage.
