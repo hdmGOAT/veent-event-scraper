@@ -11,6 +11,11 @@
     <p>📍 <a href="{{ event.venue.get_absolute_url }}">{{ event.venue.name }}</a>
       {% if event.venue.city %}— {{ event.venue.city }}{% endif %}</p>
   {% endif %}
+  {% if event.organizer_ref and event.organizer_ref.is_public %}
+    <p>🎟 By <a href="{{ event.organizer_ref.get_absolute_url }}">{{ event.organizer_ref.name }}</a></p>
+  {% elif event.organizer %}
+    <p>🎟 By {% if event.organizer_url %}<a href="{{ event.organizer_url }}" target="_blank" rel="noopener">{{ event.organizer }}</a>{% else %}{{ event.organizer }}{% endif %}</p>
+  {% endif %}
   {% if event.category %}<p><span class="pill">{{ event.category }}</span></p>{% endif %}
   {% if event.price %}<p class="muted">Price: {{ event.price }}</p>{% endif %}
   {% if event.description %}<p>{{ event.description|linebreaks }}</p>{% endif %}

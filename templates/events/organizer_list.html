@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Organizers · Veent{% endblock %}
+
+{% block content %}
+  <h1>Organizers</h1>
+  <form class="search" method="get" action="{% url 'events:organizer_list' %}">
+    <input type="search" name="q" value="{{ query }}" placeholder="Search organizers, cities…">
+    <button type="submit">Search</button>
+  </form>
+
+  <div class="grid">
+    {% for organizer in organizers %}
+      <div class="card">
+        <h3><a href="{{ organizer.get_absolute_url }}">{{ organizer.name }}</a></h3>
+        {% if organizer.city %}<div class="muted">{{ organizer.city }}{% if organizer.country %}, {{ organizer.country }}{% endif %}</div>{% endif %}
+        <div class="meta">
+          {% if organizer.website %}<div><a href="{{ organizer.website }}" target="_blank" rel="noopener">Website →</a></div>{% endif %}
+          {% if organizer.email %}<div class="muted">{{ organizer.email }}</div>{% endif %}
+          {% if organizer.phone %}<div class="muted">{{ organizer.phone }}</div>{% endif %}
+        </div>
+      </div>
+    {% empty %}
+      <div class="empty">No organizers found.</div>
+    {% endfor %}
+  </div>
+{% endblock %}

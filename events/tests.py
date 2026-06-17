@@ -4,7 +4,7 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.urls import reverse
 
-from events.models import Venue
+from events.models import Event, Organizer, Venue
 from events.scrapers.base import ScrapedVenue, save_venues
 from events.scrapers.places import GooglePlacesVenueScraper
 
@@ -383,3 +383,108 @@ class ResolveOrganizerTests(TestCase):
             organizer="Raw Name Only",
         )
         self.assertEqual(ev.organizer_display_name, "Raw Name Only")
+
+
+class OrganizerPublicViewTests(TestCase):
+    def _organizer(self, name, slug, status, **kwargs):
+        return Organizer.objects.create(name=name, slug=slug, status=status, **kwargs)
+
+    def test_organizer_list_shows_all_but_rejected(self):
+        self._organizer("Confirmed Org", "confirmed-org", Organizer.STATUS_CONFIRMED)
+        self._organizer("Pending Org", "pending-org", Organizer.STATUS_PENDING)
+        self._organizer("Rejected Org", "rejected-org", Organizer.STATUS_REJECTED)
+
+        resp = self.client.get(reverse("events:organizer_list"))
+        self.assertEqual(resp.status_code, 200)
+        names = {o.name for o in resp.context["organizers"]}
+        self.assertEqual(names, {"Confirmed Org", "Pending Org"})
+        self.assertContains(resp, "Confirmed Org")
+        self.assertContains(resp, "Pending Org")
+        self.assertNotContains(resp, "Rejected Org")
+
+    def test_organizer_list_search_filters_by_name_and_city(self):
+        self._organizer(
+            "Alpha Events", "alpha-events", Organizer.STATUS_CONFIRMED, city="Manila"
+        )
+        self._organizer(
+            "Beta Group", "beta-group", Organizer.STATUS_CONFIRMED, city="Cebu"
+        )
+
+        by_name = self.client.get(reverse("events:organizer_list"), {"q": "Alpha"})
+        self.assertEqual(
+            [o.name for o in by_name.context["organizers"]], ["Alpha Events"]
+        )
+
+        by_city = self.client.get(reverse("events:organizer_list"), {"q": "cebu"})
+        self.assertEqual(
+            [o.name for o in by_city.context["organizers"]], ["Beta Group"]
+        )
+
+    def test_organizer_detail_returns_200_for_confirmed(self):
+        org = self._organizer(
+            "Contactable Org",
+            "contactable-org",
+            Organizer.STATUS_CONFIRMED,
+            email="hello@example.com",
+            phone="+63 900 000 0000",
+        )
+        resp = self.client.get(org.get_absolute_url())
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "Contactable Org")
+        self.assertContains(resp, "hello@example.com")
+        self.assertContains(resp, "+63 900 000 0000")
+
+    def test_organizer_detail_lists_linked_events(self):
+        # Events are tied to an organizer via the organizer_ref FK, not the
+        # free-text organizer string.
+        org = self._organizer("Race Co", "race-co", Organizer.STATUS_CONFIRMED)
+        Event.objects.create(name="Marathon 2026", slug="marathon-2026", organizer_ref=org)
+        Event.objects.create(name="Unrelated Gig", slug="unrelated-gig")
+
+        resp = self.client.get(org.get_absolute_url())
+        self.assertEqual(resp.status_code, 200)
+        event_names = {e.name for e in resp.context["events"]}
+        self.assertEqual(event_names, {"Marathon 2026"})
+        self.assertContains(resp, "Marathon 2026")
+        self.assertNotContains(resp, "Unrelated Gig")
+
+    def test_organizer_detail_visible_for_pending_but_404_for_rejected_and_missing(self):
+        pending = self._organizer("Pending Org", "pending-org", Organizer.STATUS_PENDING)
+        rejected = self._organizer("Rejected Org", "rejected-org", Organizer.STATUS_REJECTED)
+
+        self.assertEqual(self.client.get(pending.get_absolute_url()).status_code, 200)
+        self.assertEqual(self.client.get(rejected.get_absolute_url()).status_code, 404)
+        self.assertEqual(
+            self.client.get(
+                reverse("events:organizer_detail", args=["does-not-exist"])
+            ).status_code,
+            404,
+        )
+
+    def test_organizer_get_absolute_url(self):
+        self.assertEqual(
+            Organizer(slug="acme").get_absolute_url(), "/organizers/acme/"
+        )
+
+    def test_event_detail_links_to_public_organizer(self):
+        org = self._organizer("Race Co", "race-co", Organizer.STATUS_CONFIRMED)
+        ev = Event.objects.create(name="City Run", slug="city-run", organizer_ref=org)
+
+        resp = self.client.get(ev.get_absolute_url())
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, org.get_absolute_url())
+        self.assertContains(resp, "Race Co")
+
+    def test_event_detail_does_not_link_to_rejected_organizer(self):
+        org = self._organizer("Hidden Co", "hidden-co", Organizer.STATUS_REJECTED)
+        ev = Event.objects.create(
+            name="Secret Run", slug="secret-run",
+            organizer="Hidden Co", organizer_ref=org,
+        )
+
+        resp = self.client.get(ev.get_absolute_url())
+        self.assertEqual(resp.status_code, 200)
+        # No link to the rejected organizer's detail page (it would 404)...
+        self.assertNotContains(resp, org.get_absolute_url())
+        # ...but the free-text fallback name is still displayed.
+        self.assertContains(resp, "Hidden Co")
