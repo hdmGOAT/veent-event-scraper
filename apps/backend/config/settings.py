@@ -57,6 +57,13 @@ ALLOWED_HOSTS = ['localhost', '127.0.0.1', 'testserver']
 # never hardcode or commit a real key. Empty string when unset.
 PLACES_API_KEY = os.environ.get('PLACES_API_KEY', '')
 
+# Local Claude CLI command used by events.ai_categories for AI categorization.
+# Set to the real binary name (e.g. 'claude'). No API key required.
+CLAUDE_CLI_CMD = os.environ.get('CLAUDE_CLI_CMD', 'claude')
+# Optional: config dir for non-default Claude accounts (e.g. ~/.claude-account-ojt).
+# Equivalent to the CLAUDE_CONFIG_DIR env var that shell aliases like `claude-ojt` set.
+CLAUDE_CONFIG_DIR = os.environ.get('CLAUDE_CONFIG_DIR', '')
+
 
 # Application definition
 
