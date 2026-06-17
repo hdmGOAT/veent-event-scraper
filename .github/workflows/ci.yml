@@ -38,7 +38,7 @@ jobs:
         run: python manage.py makemigrations --check --dry-run
 
       - name: Run tests
-        run: python manage.py test events --verbosity=2
+        run: python manage.py test events --verbosity=2 --keepdb
         env:
           # Required: set DATABASE_URL in repo → Settings → Secrets → Actions.
           # Tests use a real Neon Postgres DB; SQLite fallback breaks TransactionTestCase.
