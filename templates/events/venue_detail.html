@@ -1,5 +1,7 @@
-{% extends "base.html" %}
+{% extends "app_base.html" %}
 {% block title %}{{ venue.name }} · Veent{% endblock %}
+{% block page_title %}{{ venue.name }}{% endblock %}
+{% block page_subtitle %}Venue detail{% endblock %}
 
 {% block extra_head %}
   {% if venue.latitude is not None %}
@@ -9,8 +11,7 @@
 {% endblock %}
 
 {% block content %}
-  <p><a href="{% url 'events:venue_list' %}">← All venues</a></p>
-  <h1>{{ venue.name }}</h1>
+  <a class="backlink" href="{% url 'events:venue_list' %}">← All venues</a>
   {% if venue.primary_type_display or venue.rating %}
     <p>
       {% if venue.primary_type_display %}<span class="pill">{{ venue.primary_type_display }}</span>{% endif %}

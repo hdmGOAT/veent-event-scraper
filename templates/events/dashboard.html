@@ -1,77 +1,15 @@
-{% load static %}
-<!DOCTYPE html>
-<!--
-  Veent — Dashboard. Standalone layout (sidebar shell) fed by live model data
-  from the `dashboard` view. System Health + per-job durations are static
-  illustrative values: those subsystems have no telemetry yet.
--->
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Dashboard · Veent</title>
+{% extends "app_base.html" %}
+{% comment %}
+  Dashboard. Extends the shared app shell (sidebar + topbar). Only the
+  chart/KPI-specific styles live here. Live KPIs come from the `dashboard` view;
+  System Health + per-job durations are static illustrative values.
+{% endcomment %}
+{% block title %}Dashboard · Veent{% endblock %}
+{% block page_title %}Dashboard{% endblock %}
+{% block page_subtitle %}Platform overview and key metrics{% endblock %}
+
+{% block extra_head %}
   <style>
-    :root {
-      --bg:#0b0e16; --panel:#0f1117; --card:#161a24; --card2:#12151d;
-      --fg:#e6e8ee; --muted:#8b92a1; --faint:#5b6273;
-      --accent:#5ec8e0; --accent-blue:#6c8cff; --border:#222633; --border-soft:#1b1f2a;
-      --ok:#3ecf8e; --warn:#e6b450; --bad:#f06d6d;
-      --c-tech:#5ec8e0; --c-music:#9b8cff; --c-art:#4fd1a5; --c-sports:#e6a04f; --c-business:#e878b0;
-    }
-    * { box-sizing:border-box; }
-    html,body { height:100%; }
-    body {
-      margin:0; background:var(--bg); color:var(--fg);
-      font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
-      line-height:1.5; -webkit-font-smoothing:antialiased;
-    }
-    a { color:inherit; text-decoration:none; }
-    .app { display:grid; grid-template-columns:248px 1fr; min-height:100vh; }
-
-    /* ---------- Sidebar ---------- */
-    .sidebar { background:var(--panel); border-right:1px solid var(--border); display:flex; flex-direction:column; }
-    .sb-top { display:flex; align-items:center; gap:.6rem; padding:1.15rem 1.25rem; }
-    .logo { width:34px; height:34px; border-radius:9px; display:grid; place-items:center;
-            background:linear-gradient(140deg,#5ec8e0,#6c8cff); color:#0b0e16; }
-    .logo svg { width:18px; height:18px; }
-    .brand { font-weight:800; font-size:1.15rem; letter-spacing:.02em; }
-    .sb-collapse { margin-left:auto; color:var(--faint); display:grid; place-items:center;
-                   width:26px; height:26px; border-radius:7px; cursor:pointer; }
-    .sb-collapse:hover { background:var(--card); color:var(--muted); }
-
-    .nav { padding:.75rem .65rem; flex:1; }
-    .nav a, .nav .group-label {
-      display:flex; align-items:center; gap:.7rem; padding:.6rem .7rem; border-radius:9px;
-      color:var(--muted); font-size:.92rem; font-weight:500; cursor:pointer; user-select:none;
-    }
-    .nav a:hover { background:var(--card); color:var(--fg); }
-    .nav a.active { background:rgba(94,200,224,.12); color:#bfeaf4; font-weight:600; position:relative; }
-    .nav a.active::before { content:""; position:absolute; left:-.65rem; top:.45rem; bottom:.45rem;
-                            width:3px; border-radius:3px; background:var(--accent); }
-    .nav .icon { width:18px; height:18px; flex:none; display:grid; place-items:center; color:currentColor; }
-    .nav .icon svg { width:18px; height:18px; }
-    .nav .group-label .chev { margin-left:auto; }
-    .nav .sub { padding:.1rem 0 .25rem .85rem; margin-left:1.1rem; border-left:1px solid var(--border); }
-    .nav .sub a { font-size:.88rem; padding:.45rem .7rem; }
-
-    .sb-user { display:flex; align-items:center; gap:.65rem; padding:.9rem 1.1rem; border-top:1px solid var(--border); }
-    .avatar { width:34px; height:34px; border-radius:50%; background:var(--card); display:grid; place-items:center; color:var(--muted); }
-    .sb-user .nm { font-size:.9rem; font-weight:600; }
-    .sb-user .em { font-size:.78rem; color:var(--faint); }
-
-    /* ---------- Main ---------- */
-    .main { display:flex; flex-direction:column; min-width:0; }
-    .topbar { display:flex; align-items:center; padding:1.1rem 1.6rem; gap:1rem; }
-    .topbar h1 { margin:0; font-size:1.25rem; font-weight:700; }
-    .topbar .sub { color:var(--muted); font-size:.85rem; }
-    .topbar .right { margin-left:auto; display:flex; align-items:center; gap:1.1rem; color:var(--muted); }
-    .topbar .clock { font-size:.85rem; color:var(--muted); font-variant-numeric:tabular-nums; }
-    .iconbtn { position:relative; width:32px; height:32px; border-radius:8px; display:grid; place-items:center; cursor:pointer; color:var(--muted); }
-    .iconbtn:hover { background:var(--card); color:var(--fg); }
-    .iconbtn .dot { position:absolute; top:6px; right:7px; width:7px; height:7px; border-radius:50%; background:var(--bad); border:2px solid var(--panel); }
-
-    .content { padding:0 1.6rem 2rem; }
-
     /* KPI cards */
     .kpis { display:grid; grid-template-columns:repeat(4,1fr); gap:1.1rem; margin-bottom:1.3rem; }
     .kpi { background:var(--card); border:1px solid var(--border); border-radius:14px; padding:1.15rem 1.25rem; }
@@ -90,8 +28,7 @@
     .panel .p-title { font-size:1.02rem; font-weight:700; margin:0; }
     .panel .p-sub { color:var(--muted); font-size:.82rem; margin:.15rem 0 0; }
     .panel .p-head { display:flex; align-items:flex-start; justify-content:space-between; margin-bottom:.4rem; }
-    .link { color:var(--accent); font-size:.85rem; font-weight:600; }
-    .link:hover { text-decoration:underline; }
+    .panel .link { color:var(--accent); font-size:.85rem; font-weight:600; }
     .nodata { color:var(--faint); font-size:.9rem; padding:2rem 0; text-align:center; }
 
     /* Bar chart */
@@ -135,236 +72,148 @@
     .health .pct { margin-left:auto; color:var(--muted); font-size:.88rem; font-variant-numeric:tabular-nums; }
     .static-note { color:var(--faint); font-size:.72rem; margin-top:.6rem; font-style:italic; }
 
-    .help { position:fixed; right:1.4rem; bottom:1.2rem; width:40px; height:40px; border-radius:50%;
-            background:var(--card); border:1px solid var(--border); color:var(--muted);
-            display:grid; place-items:center; cursor:pointer; }
-    .help:hover { color:var(--fg); border-color:var(--accent); }
-
     @media (max-width:1100px){ .panels{ grid-template-columns:1fr; } .kpis{ grid-template-columns:repeat(2,1fr); } }
-    @media (max-width:720px){ .app{ grid-template-columns:1fr; } .sidebar{ display:none; } .kpis{ grid-template-columns:1fr; } }
+    @media (max-width:720px){ .kpis{ grid-template-columns:1fr; } }
   </style>
-</head>
-<body>
-  <div class="app">
-    <!-- ======================= SIDEBAR ======================= -->
-    <aside class="sidebar">
-      <div class="sb-top">
-        <span class="logo">
-          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M13 2 4 14h6l-1 8 9-12h-6z"/></svg>
-        </span>
-        <span class="brand">VEENT.</span>
-        <span class="sb-collapse" title="Collapse">
-          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg>
-        </span>
+{% endblock %}
+
+{% block content %}
+  <!-- KPI cards -->
+  <section class="kpis">
+    <div class="kpi">
+      <div class="head">
+        <span class="label">Total Events</span>
+        <span class="ic"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></svg></span>
       </div>
+      <div class="num">{{ total_events_display }}</div>
+      <div class="foot">+{{ new_today }} today</div>
+    </div>
+    <div class="kpi">
+      <div class="head">
+        <span class="label">New Today</span>
+        <span class="ic"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 17l6-6 4 4 7-7"/><path d="M17 8h4v4"/></svg></span>
+      </div>
+      <div class="num">{{ new_today }}</div>
+      <div class="foot">scraped in the last 24h</div>
+    </div>
+    <div class="kpi">
+      <div class="head">
+        <span class="label">Active Sources</span>
+        <span class="ic blue"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="2.5"/><path d="M6 6a8.5 8.5 0 0 0 0 12M18 6a8.5 8.5 0 0 1 0 12"/></svg></span>
+      </div>
+      <div class="num">{{ active_sources }}</div>
+      <div class="foot">{{ venue_total }} venues · {{ organizer_total }} organizers</div>
+    </div>
+    <div class="kpi">
+      <div class="head">
+        <span class="label">Duplicates Found</span>
+        <span class="ic pink"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></span>
+      </div>
+      <div class="num">{{ duplicates_display }}</div>
+      <div class="foot">Across {{ dup_groups }} name group{{ dup_groups|pluralize }}</div>
+    </div>
+  </section>
 
-      <nav class="nav">
-        <a href="{% url 'events:dashboard' %}" class="active">
-          <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg></span>
-          Dashboard
-        </a>
-        <a href="#">
-          <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M5.6 5.6a9 9 0 0 0 0 12.7M18.4 5.6a9 9 0 0 1 0 12.7M8.5 8.5a5 5 0 0 0 0 7M15.5 8.5a5 5 0 0 1 0 7"/></svg></span>
-          Scraper Center
-        </a>
-
-        <div class="group-label">
-          <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 3v6a3 3 0 0 0 3 3h6a3 3 0 0 1 3 3v3"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="6" r="3"/></svg></span>
-          Event Pipeline
-          <span class="chev"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg></span>
-        </div>
-        <div class="sub">
-          <a href="{% url 'events:event_list' %}">Raw Events</a>
-          <a href="#">Duplicates</a>
-          <a href="#">Approved Events</a>
-        </div>
-
-        <a href="{% url 'events:event_list' %}">
-          <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></svg></span>
-          Event Database
-        </a>
-        <a href="#">
-          <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12m0 0l-4-4m4 4l4-4"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg></span>
-          Exports
-        </a>
-        <a href="#">
-          <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/></svg></span>
-          Logs
-        </a>
-        <a href="/admin/">
-          <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 13a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-2.87 1.21V21a2 2 0 0 1-4 0v-.09A1.7 1.7 0 0 0 7 19.4a1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 2.6 14H2.5a2 2 0 0 1 0-4h.09A1.7 1.7 0 0 0 4.6 7a1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 10 2.6V2.5a2 2 0 0 1 4 0v.09A1.7 1.7 0 0 0 17 4.6a1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 21.4 10h.1a2 2 0 0 1 0 4h-.09a1.7 1.7 0 0 0-1.91 1z"/></svg></span>
-          Settings
-        </a>
-      </nav>
-
-      <div class="sb-user">
-        <span class="avatar"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg></span>
+  <!-- Charts row -->
+  <section class="panels">
+    <!-- Bar chart -->
+    <div class="panel">
+      <div class="p-head">
         <div>
-          <div class="nm">{% if request.user.is_authenticated %}{{ request.user.get_username }}{% else %}Admin User{% endif %}</div>
-          <div class="em">{{ request.user.email|default:"admin@veent.io" }}</div>
+          <p class="p-title">Events by Source</p>
+          <p class="p-sub">All time collected</p>
         </div>
       </div>
-    </aside>
+      {% if by_source %}
+        <div class="bars">
+          <div class="y-axis"><span>max</span><span>&nbsp;</span><span>&nbsp;</span><span>&nbsp;</span><span>0</span></div>
+          <div class="plot">
+            <div class="gl" style="top:0"></div>
+            <div class="gl" style="top:25%"></div>
+            <div class="gl" style="top:50%"></div>
+            <div class="gl" style="top:75%"></div>
+            <div class="bar-row">
+              {% for s in by_source %}
+                <div class="bar-col"><div class="bar" style="height:{{ s.height }}%" title="{{ s.label }}: {{ s.count }}"></div></div>
+              {% endfor %}
+            </div>
+          </div>
+        </div>
+        <div class="x-labels">
+          {% for s in by_source %}<span>{{ s.label }}</span>{% endfor %}
+        </div>
+      {% else %}
+        <div class="nodata">No event source data yet.</div>
+      {% endif %}
+    </div>
 
-    <!-- ======================= MAIN ======================= -->
-    <div class="main">
-      <header class="topbar">
+    <!-- Donut chart -->
+    <div class="panel">
+      <div class="p-head">
         <div>
-          <h1>Dashboard</h1>
-          <div class="sub">Platform overview and key metrics</div>
+          <p class="p-title">Events by Category</p>
+          <p class="p-sub">Current database</p>
         </div>
-        <div class="right">
-          <span class="clock">{{ now|date:"M j, h:i A" }}</span>
-          <span class="iconbtn"><span class="dot"></span><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg></span>
-          <a href="/admin/" class="iconbtn"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 13a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06A1.7 1.7 0 0 0 14 19.4a1.7 1.7 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.7 1.7 0 0 0 7 19.4a1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 2.6 14a1.7 1.7 0 0 0-1.51-1H1a2 2 0 0 1 0-4h.09A1.7 1.7 0 0 0 2.6 7a1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 7 2.6h.09A1.7 1.7 0 0 0 10 1.09V1a2 2 0 0 1 4 0v.09A1.7 1.7 0 0 0 17 2.6a1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 21.4 7v.09c.1.2.3.51.51.51H22a2 2 0 0 1 0 4h-.09a1.7 1.7 0 0 0-1.51 1z"/></svg></a>
-        </div>
-      </header>
-
-      <div class="content">
-        <!-- KPI cards -->
-        <section class="kpis">
-          <div class="kpi">
-            <div class="head">
-              <span class="label">Total Events</span>
-              <span class="ic"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></svg></span>
-            </div>
-            <div class="num">{{ total_events_display }}</div>
-            <div class="foot">+{{ new_today }} today</div>
-          </div>
-          <div class="kpi">
-            <div class="head">
-              <span class="label">New Today</span>
-              <span class="ic"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 17l6-6 4 4 7-7"/><path d="M17 8h4v4"/></svg></span>
-            </div>
-            <div class="num">{{ new_today }}</div>
-            <div class="foot">scraped in the last 24h</div>
-          </div>
-          <div class="kpi">
-            <div class="head">
-              <span class="label">Active Sources</span>
-              <span class="ic blue"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="2.5"/><path d="M6 6a8.5 8.5 0 0 0 0 12M18 6a8.5 8.5 0 0 1 0 12"/></svg></span>
-            </div>
-            <div class="num">{{ active_sources }}</div>
-            <div class="foot">{{ venue_total }} venues · {{ organizer_total }} organizers</div>
-          </div>
-          <div class="kpi">
-            <div class="head">
-              <span class="label">Duplicates Found</span>
-              <span class="ic pink"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></span>
-            </div>
-            <div class="num">{{ duplicates_display }}</div>
-            <div class="foot">Across {{ dup_groups }} name group{{ dup_groups|pluralize }}</div>
-          </div>
-        </section>
-
-        <!-- Charts row -->
-        <section class="panels">
-          <!-- Bar chart -->
-          <div class="panel">
-            <div class="p-head">
-              <div>
-                <p class="p-title">Events by Source</p>
-                <p class="p-sub">All time collected</p>
-              </div>
-            </div>
-            {% if by_source %}
-              <div class="bars">
-                <div class="y-axis"><span>max</span><span>&nbsp;</span><span>&nbsp;</span><span>&nbsp;</span><span>0</span></div>
-                <div class="plot">
-                  <div class="gl" style="top:0"></div>
-                  <div class="gl" style="top:25%"></div>
-                  <div class="gl" style="top:50%"></div>
-                  <div class="gl" style="top:75%"></div>
-                  <div class="bar-row">
-                    {% for s in by_source %}
-                      <div class="bar-col"><div class="bar" style="height:{{ s.height }}%" title="{{ s.label }}: {{ s.count }}"></div></div>
-                    {% endfor %}
-                  </div>
-                </div>
-              </div>
-              <div class="x-labels">
-                {% for s in by_source %}<span>{{ s.label }}</span>{% endfor %}
-              </div>
-            {% else %}
-              <div class="nodata">No event source data yet.</div>
-            {% endif %}
-          </div>
-
-          <!-- Donut chart -->
-          <div class="panel">
-            <div class="p-head">
-              <div>
-                <p class="p-title">Events by Category</p>
-                <p class="p-sub">Current database</p>
-              </div>
-            </div>
-            {% if by_category %}
-              <div class="donut-wrap">
-                <svg width="190" height="190" viewBox="0 0 42 42">
-                  <circle cx="21" cy="21" r="15.915" fill="none" stroke="#161a24" stroke-width="6"/>
-                  {% for c in by_category %}
-                    <circle cx="21" cy="21" r="15.915" fill="none" stroke="{{ c.color }}" stroke-width="6"
-                            stroke-dasharray="{{ c.pct }} {{ c.gap }}" stroke-dashoffset="{{ c.offset }}">
-                      <title>{{ c.label }}: {{ c.count }} ({{ c.pct }}%)</title>
-                    </circle>
-                  {% endfor %}
-                </svg>
-                <div class="legend">
-                  {% for c in by_category %}
-                    <span><i style="background:{{ c.color }}"></i>{{ c.label }}</span>
-                  {% endfor %}
-                </div>
-              </div>
-            {% else %}
-              <div class="nodata">No categorized events yet.</div>
-            {% endif %}
-          </div>
-        </section>
-
-        <!-- Activity + Health row -->
-        <section class="panels">
-          <div class="panel activity">
-            <div class="p-head">
-              <div>
-                <p class="p-title">Recent Scraping Activity</p>
-                <p class="p-sub">Latest scrape batches</p>
-              </div>
-              <a class="link" href="/admin/events/event/?o=-7">View all →</a>
-            </div>
-            {% for a in recent_activity %}
-              <div class="row">
-                <span class="time">{{ a.time }}</span>
-                <span class="src">{{ a.source }}</span>
-                <span class="cnt">{{ a.count }} event{{ a.count|pluralize }}</span>
-                <span class="dur">—</span>
-                <span class="tag success">success</span>
-              </div>
-            {% empty %}
-              <div class="nodata">No scraping activity recorded yet.</div>
+      </div>
+      {% if by_category %}
+        <div class="donut-wrap">
+          <svg width="190" height="190" viewBox="0 0 42 42">
+            <circle cx="21" cy="21" r="15.915" fill="none" stroke="#161a24" stroke-width="6"/>
+            {% for c in by_category %}
+              <circle cx="21" cy="21" r="15.915" fill="none" stroke="{{ c.color }}" stroke-width="6"
+                      stroke-dasharray="{{ c.pct }} {{ c.gap }}" stroke-dashoffset="{{ c.offset }}">
+                <title>{{ c.label }}: {{ c.count }} ({{ c.pct }}%)</title>
+              </circle>
+            {% endfor %}
+          </svg>
+          <div class="legend">
+            {% for c in by_category %}
+              <span><i style="background:{{ c.color }}"></i>{{ c.label }}</span>
             {% endfor %}
           </div>
-
-          <div class="panel health">
-            <div class="p-head">
-              <div>
-                <p class="p-title">System Health</p>
-                <p class="p-sub">Service status</p>
-              </div>
-            </div>
-            <div class="h-row"><span class="led ok"></span><div><div class="nm">Scraper Engine</div><div class="lat">142ms avg</div></div><span class="pct">99.4%</span></div>
-            <div class="h-row"><span class="led ok"></span><div><div class="nm">Dedup Pipeline</div><div class="lat">38ms avg</div></div><span class="pct">99.8%</span></div>
-            <div class="h-row"><span class="led ok"></span><div><div class="nm">Database</div><div class="lat">12ms avg</div></div><span class="pct">100%</span></div>
-            <div class="h-row"><span class="led warn"></span><div><div class="nm">Export Service</div><div class="lat">890ms avg</div></div><span class="pct">97.1%</span></div>
-            <div class="h-row"><span class="led ok"></span><div><div class="nm">Notification Bus</div><div class="lat">6ms avg</div></div><span class="pct">99.9%</span></div>
-            <div class="static-note">Illustrative — no live service telemetry yet.</div>
-          </div>
-        </section>
-      </div>
+        </div>
+      {% else %}
+        <div class="nodata">No categorized events yet.</div>
+      {% endif %}
     </div>
-  </div>
+  </section>
 
-  <button class="help" title="Help">
-    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 2.5-3 4"/><circle cx="12" cy="17.5" r=".6" fill="currentColor"/></svg>
-  </button>
-</body>
-</html>
+  <!-- Activity + Health row -->
+  <section class="panels">
+    <div class="panel activity">
+      <div class="p-head">
+        <div>
+          <p class="p-title">Recent Scraping Activity</p>
+          <p class="p-sub">Latest scrape batches</p>
+        </div>
+        <a class="link" href="/admin/events/event/?o=-7">View all →</a>
+      </div>
+      {% for a in recent_activity %}
+        <div class="row">
+          <span class="time">{{ a.time }}</span>
+          <span class="src">{{ a.source }}</span>
+          <span class="cnt">{{ a.count }} event{{ a.count|pluralize }}</span>
+          <span class="dur">—</span>
+          <span class="tag success">success</span>
+        </div>
+      {% empty %}
+        <div class="nodata">No scraping activity recorded yet.</div>
+      {% endfor %}
+    </div>
+
+    <div class="panel health">
+      <div class="p-head">
+        <div>
+          <p class="p-title">System Health</p>
+          <p class="p-sub">Service status</p>
+        </div>
+      </div>
+      <div class="h-row"><span class="led ok"></span><div><div class="nm">Scraper Engine</div><div class="lat">142ms avg</div></div><span class="pct">99.4%</span></div>
+      <div class="h-row"><span class="led ok"></span><div><div class="nm">Dedup Pipeline</div><div class="lat">38ms avg</div></div><span class="pct">99.8%</span></div>
+      <div class="h-row"><span class="led ok"></span><div><div class="nm">Database</div><div class="lat">12ms avg</div></div><span class="pct">100%</span></div>
+      <div class="h-row"><span class="led warn"></span><div><div class="nm">Export Service</div><div class="lat">890ms avg</div></div><span class="pct">97.1%</span></div>
+      <div class="h-row"><span class="led ok"></span><div><div class="nm">Notification Bus</div><div class="lat">6ms avg</div></div><span class="pct">99.9%</span></div>
+      <div class="static-note">Illustrative — no live service telemetry yet.</div>
+    </div>
+  </section>
+{% endblock %}

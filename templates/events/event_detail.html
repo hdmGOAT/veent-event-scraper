@@ -1,12 +1,14 @@
-{% extends "base.html" %}
+{% extends "app_base.html" %}
 {% block title %}{{ event.name }} · Veent{% endblock %}
+{% block page_title %}{{ event.name }}{% endblock %}
+{% block page_subtitle %}Event detail{% endblock %}
+
 {% block content %}
-  <p><a href="{% url 'events:event_list' %}">← All events</a></p>
-  <h1>{{ event.name }}</h1>
+  <a class="backlink" href="{% url 'events:event_list' %}">← All events</a>
   {% if event.starts_at %}
     <p class="muted">{{ event.starts_at|date:"l, F j, Y · H:i" }}{% if event.ends_at %} – {{ event.ends_at|date:"H:i" }}{% endif %}</p>
   {% endif %}
-  {% if event.image_url %}<p><img src="{{ event.image_url }}" alt="" style="max-width:100%;border-radius:10px;"></p>{% endif %}
+  {% if event.image_url %}<p><img class="page-img" src="{{ event.image_url }}" alt=""></p>{% endif %}
   {% if event.venue %}
     <p>📍 <a href="{{ event.venue.get_absolute_url }}">{{ event.venue.name }}</a>
       {% if event.venue.city %}— {{ event.venue.city }}{% endif %}</p>
@@ -15,5 +17,5 @@
   {% if event.price %}<p class="muted">Price: {{ event.price }}</p>{% endif %}
   {% if event.description %}<p>{{ event.description|linebreaks }}</p>{% endif %}
   {% if event.url %}<p><a href="{{ event.url }}" target="_blank" rel="noopener">Visit event page →</a></p>{% endif %}
-  {% if event.source %}<p class="muted" style="font-size:.85rem;">Source: {{ event.source }}{% if event.scraped_at %} · scraped {{ event.scraped_at|date:"M j, Y" }}{% endif %}</p>{% endif %}
+  {% if event.source %}<p class="muted" style="font-size:.85rem;">Source: <span class="source-tag">{{ event.source }}</span>{% if event.scraped_at %} · scraped {{ event.scraped_at|date:"M j, Y" }}{% endif %}</p>{% endif %}
 {% endblock %}

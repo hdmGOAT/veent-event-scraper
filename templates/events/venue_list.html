@@ -1,5 +1,7 @@
-{% extends "base.html" %}
+{% extends "app_base.html" %}
 {% block title %}Venues · Veent{% endblock %}
+{% block page_title %}Venues{% endblock %}
+{% block page_subtitle %}Scraped venues, grouped by category{% endblock %}
 
 {% block extra_head %}
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
@@ -7,7 +9,6 @@
 {% endblock %}
 
 {% block content %}
-  <h1>Venues</h1>
   <form class="search" method="get" action="{% url 'events:venue_list' %}">
     <input type="search" name="q" value="{{ query }}" placeholder="Search venues, cities…">
     <select name="category" onchange="this.form.submit()">

@@ -1,7 +1,9 @@
-{% extends "base.html" %}
+{% extends "app_base.html" %}
 {% block title %}Events · Veent{% endblock %}
+{% block page_title %}Events{% endblock %}
+{% block page_subtitle %}Browse all scraped events{% endblock %}
+
 {% block content %}
-  <h1>Events</h1>
   <form class="search" method="get" action="{% url 'events:event_list' %}">
     <input type="search" name="q" value="{{ query }}" placeholder="Search events, venues…">
     <button type="submit">Search</button>
