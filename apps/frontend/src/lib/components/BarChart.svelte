@@ -14,8 +14,21 @@
 
 	let canvas: HTMLCanvasElement;
 
+	// Resolve a design-system CSS variable to its computed hex value. Runs only
+	// in the effect (client-side, post-mount) so the document is available.
+	function token(name: string): string {
+		return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+	}
+
 	$effect(() => {
 		// Re-runs when labels/data change. Build, then tear down on cleanup.
+		const accent = token('--color-accent');
+		const surface2 = token('--color-surface-2');
+		const heading = token('--color-heading');
+		const text = token('--color-text');
+		const border = token('--color-border');
+		const muted = token('--color-muted');
+
 		const chart = new Chart(canvas, {
 			type: 'bar',
 			data: {
@@ -23,8 +36,8 @@
 				datasets: [
 					{
 						data,
-						backgroundColor: '#22d3ee',
-						hoverBackgroundColor: '#67e8f9',
+						backgroundColor: accent,
+						hoverBackgroundColor: accent,
 						borderRadius: 4,
 						maxBarThickness: 56
 					}
@@ -36,10 +49,10 @@
 				plugins: {
 					legend: { display: false },
 					tooltip: {
-						backgroundColor: '#131c28',
-						titleColor: '#e8eef5',
-						bodyColor: '#c9d4e0',
-						borderColor: '#1e2a38',
+						backgroundColor: surface2,
+						titleColor: heading,
+						bodyColor: text,
+						borderColor: border,
 						borderWidth: 1,
 						padding: 10,
 						callbacks: { label: (c) => ` events : ${c.parsed.y}` }
@@ -48,14 +61,14 @@
 				scales: {
 					x: {
 						grid: { display: false },
-						border: { color: '#1e2a38' },
-						ticks: { color: '#6b7a8d' }
+						border: { color: border },
+						ticks: { color: muted }
 					},
 					y: {
 						beginAtZero: true,
-						grid: { color: '#1e2a3855' },
+						grid: { color: border },
 						border: { display: false },
-						ticks: { color: '#6b7a8d' }
+						ticks: { color: muted }
 					}
 				}
 			}

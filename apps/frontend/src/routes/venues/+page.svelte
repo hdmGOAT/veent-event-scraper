@@ -2,6 +2,7 @@
 	import { api } from '$lib/api';
 	import Badge from '$lib/components/Badge.svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
+	import TableSkeleton from '$lib/components/TableSkeleton.svelte';
 	import type { Paginated, VenueRow } from '$lib/types';
 
 	const tabs = [
@@ -41,6 +42,10 @@
 	});
 </script>
 
+<svelte:head>
+	<title>Venues — Veent Admin</title>
+</svelte:head>
+
 <PageHeader title="Venues" subtitle="Scraped venues and verification status" />
 
 <div class="space-y-5 p-8">
@@ -69,12 +74,6 @@
 		/>
 	</div>
 
-	{#if error}
-		<p class="rounded-lg border border-danger/40 bg-danger-bg/40 px-4 py-3 text-sm text-danger">
-			Failed to load venues: {error}
-		</p>
-	{/if}
-
 	<div class="overflow-hidden rounded-xl border border-border bg-surface">
 		<table class="w-full text-sm">
 			<thead>
@@ -87,13 +86,16 @@
 					<th class="px-5 py-3 font-semibold">Status</th>
 				</tr>
 			</thead>
-			<tbody class="divide-y divide-border">
-				{#if loading && !data}
-					<tr><td colspan="6" class="px-5 py-10 text-center text-muted">Loading…</td></tr>
-				{:else if data && data.results.length === 0}
-					<tr><td colspan="6" class="px-5 py-10 text-center text-muted">No venues found.</td></tr>
-				{:else if data}
-					{#each data.results as v (v.slug)}
+			{#if loading && !data}
+				<TableSkeleton columns={6} />
+			{:else}
+				<tbody class="divide-y divide-border">
+					{#if error}
+						<tr><td colspan="6" class="px-5 py-8 text-center text-sm text-danger">{error}</td></tr>
+					{:else if data && data.results.length === 0}
+						<tr><td colspan="6" class="px-5 py-8 text-center text-sm text-muted">No results found.</td></tr>
+					{:else if data}
+						{#each data.results as v (v.slug)}
 						<tr class="transition-colors hover:bg-surface-2">
 							<td class="px-5 py-3 font-medium text-heading">{v.name}</td>
 							<td class="px-5 py-3 text-muted">{v.primary_type_display || '—'}</td>
@@ -102,9 +104,10 @@
 							<td class="px-5 py-3 text-muted">{v.event_count}</td>
 							<td class="px-5 py-3"><Badge status={v.verification_status} /></td>
 						</tr>
-					{/each}
-				{/if}
-			</tbody>
+						{/each}
+					{/if}
+				</tbody>
+			{/if}
 		</table>
 	</div>
 

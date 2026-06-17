@@ -11,10 +11,8 @@
 </svelte:head>
 
 <div class="flex min-h-screen bg-bg text-text">
-	<div class="sticky top-0 h-screen shrink-0">
-		<Sidebar />
-	</div>
-	<main class="min-w-0 flex-1 overflow-x-hidden">
+	<Sidebar />
+	<main class="min-w-0 flex-1 overflow-x-hidden pt-14 md:pt-0">
 		{@render children()}
 	</main>
 </div>

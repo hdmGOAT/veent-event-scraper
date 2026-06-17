@@ -1,12 +1,31 @@
+import json
 from unittest import mock
 
 from django.contrib.auth import get_user_model
-from django.test import TestCase
+from django.test import TestCase, TransactionTestCase
 from django.urls import reverse
 
-from events.models import Event, Organizer, Venue
+from datetime import timedelta
+
+from django.utils import timezone
+
+from django.core.management import call_command
+
+from events import runner
+from events import ai_categories
+from events.categories import normalize_category
+from events.models import Event, Organizer, ScraperRun, Venue
+from events.runner import cancel_run, trigger_scraper_run
 from events.scrapers.base import ScrapedVenue, save_venues
 from events.scrapers.places import GooglePlacesVenueScraper
+
+
+def _fake_cli(stdout):
+    """Return a mock subprocess.run result with the given stdout."""
+    completed = mock.Mock()
+    completed.stdout = stdout
+    completed.returncode = 0
+    return completed
 
 
 def _fake_response(payload):
@@ -488,3 +507,652 @@ class OrganizerPublicViewTests(TestCase):
         self.assertNotContains(resp, org.get_absolute_url())
         # ...but the free-text fallback name is still displayed.
         self.assertContains(resp, "Hidden Co")
+
+
+class ScraperRunModelTests(TestCase):
+    def test_str_representation(self):
+        run = ScraperRun.objects.create(scraper_key="myruntime")
+        s = str(run)
+        self.assertIn("myruntime", s)
+        self.assertIn("queued", s)
+
+    def test_default_status_is_queued(self):
+        run = ScraperRun.objects.create(scraper_key="myruntime")
+        self.assertEqual(run.status, ScraperRun.Status.QUEUED)
+
+    def test_duration_seconds_none_when_no_started_at(self):
+        run = ScraperRun.objects.create(scraper_key="myruntime")
+        self.assertIsNone(run.duration_seconds)
+
+    def test_duration_seconds_computed_when_both_set(self):
+        start = timezone.now()
+        run = ScraperRun.objects.create(
+            scraper_key="myruntime",
+            started_at=start,
+            finished_at=start + timedelta(seconds=5),
+        )
+        self.assertAlmostEqual(run.duration_seconds, 5.0, places=2)
+
+    def test_is_active_true_for_queued_and_running(self):
+        run = ScraperRun.objects.create(scraper_key="myruntime")
+        self.assertTrue(run.is_active)
+        run.status = ScraperRun.Status.RUNNING
+        self.assertTrue(run.is_active)
+
+    def test_is_active_false_for_success_and_failed(self):
+        run = ScraperRun.objects.create(scraper_key="myruntime")
+        run.status = ScraperRun.Status.SUCCESS
+        self.assertFalse(run.is_active)
+        run.status = ScraperRun.Status.FAILED
+        self.assertFalse(run.is_active)
+
+
+class ScraperRunCancelledStatusTests(TestCase):
+    """Model-level coverage for the new CANCELLED status and pid field."""
+
+    def test_cancelled_is_valid_status(self):
+        run = ScraperRun.objects.create(scraper_key="myruntime")
+        run.status = ScraperRun.Status.CANCELLED
+        run.save(update_fields=["status", "updated_at"])
+        run.refresh_from_db()
+        self.assertEqual(run.status, "cancelled")
+
+    def test_is_active_false_for_cancelled(self):
+        run = ScraperRun(scraper_key="myruntime", status=ScraperRun.Status.CANCELLED)
+        self.assertFalse(run.is_active)
+
+    def test_pid_field_defaults_to_null(self):
+        run = ScraperRun.objects.create(scraper_key="myruntime")
+        self.assertIsNone(run.pid)
+
+
+class RunnerSubprocessTests(TransactionTestCase):
+    """Subprocess-based trigger + cancel behaviour.
+
+    TransactionTestCase (not TestCase): cancel_run uses select_for_update inside
+    a transaction.atomic() block, which is incompatible with TestCase's
+    test-wrapping transaction on Postgres. All trigger tests mock
+    subprocess.Popen so no real worker process is ever spawned.
+    """
+
+    def test_trigger_creates_run_row_subprocess(self):
+        with mock.patch("events.runner.subprocess.Popen") as mock_popen:
+            mock_popen.return_value.pid = 12345
+            trigger_scraper_run("myruntime")
+        self.assertEqual(ScraperRun.objects.count(), 1)
+
+    def test_trigger_stores_pid(self):
+        with mock.patch("events.runner.subprocess.Popen") as mock_popen:
+            mock_popen.return_value.pid = 12345
+            run, _ = trigger_scraper_run("myruntime")
+        run.refresh_from_db()
+        self.assertEqual(run.pid, 12345)
+
+    def test_trigger_returns_run_and_false_when_clear(self):
+        with mock.patch("events.runner.subprocess.Popen") as mock_popen:
+            mock_popen.return_value.pid = 12345
+            run, already_active = trigger_scraper_run("myruntime")
+        self.assertIsNotNone(run)
+        self.assertFalse(already_active)
+
+    def test_trigger_returns_none_true_when_already_active(self):
+        ScraperRun.objects.create(
+            scraper_key="myruntime", status=ScraperRun.Status.RUNNING
+        )
+        with mock.patch("events.runner.subprocess.Popen") as mock_popen:
+            run, already_active = trigger_scraper_run("myruntime")
+        self.assertIsNone(run)
+        self.assertTrue(already_active)
+        # No subprocess should be spawned when a run is already active.
+        mock_popen.assert_not_called()
+
+    @mock.patch("events.runner.os.getpgid", return_value=99999)
+    @mock.patch("events.runner.os.killpg")
+    def test_cancel_run_happy_path(self, mock_killpg, mock_getpgid):
+        run = ScraperRun.objects.create(
+            scraper_key="myruntime", status=ScraperRun.Status.RUNNING, pid=99999
+        )
+        result_run, signal = cancel_run(run.id)
+        self.assertEqual(signal, "ok")
+        self.assertEqual(result_run.status, ScraperRun.Status.CANCELLED)
+        self.assertIsNotNone(result_run.finished_at)
+        mock_killpg.assert_called_once()
+
+    def test_cancel_run_not_found(self):
+        run, signal = cancel_run(99999)
+        self.assertIsNone(run)
+        self.assertEqual(signal, "not_found")
+
+    def test_cancel_run_not_active(self):
+        run = ScraperRun.objects.create(
+            scraper_key="myruntime", status=ScraperRun.Status.SUCCESS
+        )
+        result_run, signal = cancel_run(run.id)
+        self.assertEqual(signal, "not_active")
+        self.assertEqual(result_run.id, run.id)
+
+    @mock.patch("events.runner.os.getpgid", return_value=99999)
+    @mock.patch("events.runner.os.killpg", side_effect=ProcessLookupError)
+    def test_cancel_run_process_already_gone(self, mock_killpg, mock_getpgid):
+        run = ScraperRun.objects.create(
+            scraper_key="myruntime", status=ScraperRun.Status.RUNNING, pid=99999
+        )
+        result_run, signal = cancel_run(run.id)
+        # Process is gone but the row is still active → still mark it cancelled.
+        self.assertEqual(signal, "ok")
+        self.assertEqual(result_run.status, ScraperRun.Status.CANCELLED)
+
+    @mock.patch("events.runner.os.getpgid", return_value=99999)
+    @mock.patch("events.runner.os.killpg")
+    def test_cancel_run_race_subprocess_wrote_success(self, mock_killpg, mock_getpgid):
+        run = ScraperRun.objects.create(
+            scraper_key="myruntime", status=ScraperRun.Status.RUNNING, pid=99999
+        )
+
+        # Simulate the worker winning the race: refresh_from_db flips the row to
+        # SUCCESS, so cancel_run must NOT overwrite it with CANCELLED.
+        original_refresh = ScraperRun.refresh_from_db
+
+        def fake_refresh(self, *args, **kwargs):
+            original_refresh(self, *args, **kwargs)
+            self.status = ScraperRun.Status.SUCCESS
+
+        with mock.patch.object(ScraperRun, "refresh_from_db", fake_refresh):
+            result_run, signal = cancel_run(run.id)
+
+        self.assertEqual(signal, "ok")
+        self.assertEqual(result_run.status, ScraperRun.Status.SUCCESS)
+
+
+class ScraperJobCommandTests(TestCase):
+    """Covers the run_scraper_job management command (the subprocess worker)."""
+
+    def test_run_scraper_job_happy_path(self):
+        run = ScraperRun.objects.create(scraper_key="myruntime")
+        fake_cls = mock.Mock()
+        fake_cls.return_value.run.return_value = {
+            "source": "myruntime", "created": 3, "updated": 1,
+        }
+        with mock.patch.dict(runner.SCRAPERS, {"myruntime": fake_cls}):
+            call_command("run_scraper_job", run_id=run.id)
+        run.refresh_from_db()
+        self.assertEqual(run.status, ScraperRun.Status.SUCCESS)
+        self.assertEqual(run.created_count, 3)
+        self.assertEqual(run.updated_count, 1)
+        self.assertIsNotNone(run.finished_at)
+
+    def test_run_scraper_job_failure_path(self):
+        run = ScraperRun.objects.create(scraper_key="myruntime")
+        fake_cls = mock.Mock()
+        fake_cls.return_value.run.side_effect = RuntimeError("boom")
+        with mock.patch.dict(runner.SCRAPERS, {"myruntime": fake_cls}):
+            call_command("run_scraper_job", run_id=run.id)
+        run.refresh_from_db()
+        self.assertEqual(run.status, ScraperRun.Status.FAILED)
+        self.assertIn("RuntimeError", run.error_message)
+        self.assertIsNotNone(run.finished_at)
+
+    def test_run_scraper_job_extra_counts(self):
+        run = ScraperRun.objects.create(scraper_key="myruntime")
+        fake_cls = mock.Mock()
+        fake_cls.return_value.run.return_value = {
+            "source": "myruntime", "created": 2, "updated": 0,
+            "organizers_created": 5, "organizers_updated": 1,
+        }
+        with mock.patch.dict(runner.SCRAPERS, {"myruntime": fake_cls}):
+            call_command("run_scraper_job", run_id=run.id)
+        run.refresh_from_db()
+        self.assertEqual(
+            run.extra_counts,
+            {"organizers_created": 5, "organizers_updated": 1},
+        )
+
+
+class RunnerMappingTests(TestCase):
+    """Covers the _map_result helper in runner.py."""
+
+    def test_map_result_basic(self):
+        created, updated, extra = runner._map_result(
+            {"source": "x", "created": 3, "updated": 1}
+        )
+        self.assertEqual((created, updated, extra), (3, 1, {}))
+
+    def test_map_result_extra_counts(self):
+        created, updated, extra = runner._map_result(
+            {
+                "source": "myruntime", "created": 2, "updated": 0,
+                "organizers_created": 5, "organizers_updated": 1,
+            }
+        )
+        self.assertEqual((created, updated), (2, 0))
+        self.assertEqual(extra, {"organizers_created": 5, "organizers_updated": 1})
+        self.assertNotIn("source", extra)
+
+
+class CancelEndpointTests(TestCase):
+    """HTTP-level coverage for POST /api/scrapers/runs/<id>/cancel/."""
+
+    def _finished_run(self):
+        return ScraperRun.objects.create(
+            scraper_key="myruntime", status=ScraperRun.Status.CANCELLED
+        )
+
+    @mock.patch("events.views.cancel_run")
+    def test_cancel_happy_path_returns_200(self, mock_cancel):
+        run = ScraperRun.objects.create(
+            scraper_key="myruntime", status=ScraperRun.Status.CANCELLED
+        )
+        mock_cancel.return_value = (run, "ok")
+        resp = self.client.post(f"/api/scrapers/runs/{run.id}/cancel/")
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn("status", resp.json())
+
+    @mock.patch("events.views.cancel_run")
+    def test_cancel_not_found_returns_404(self, mock_cancel):
+        mock_cancel.return_value = (None, "not_found")
+        resp = self.client.post("/api/scrapers/runs/123/cancel/")
+        self.assertEqual(resp.status_code, 404)
+
+    @mock.patch("events.views.cancel_run")
+    def test_cancel_not_active_returns_409(self, mock_cancel):
+        run = self._finished_run()
+        mock_cancel.return_value = (run, "not_active")
+        resp = self.client.post(f"/api/scrapers/runs/{run.id}/cancel/")
+        self.assertEqual(resp.status_code, 409)
+
+    def test_cancel_requires_post(self):
+        resp = self.client.get("/api/scrapers/runs/1/cancel/")
+        self.assertEqual(resp.status_code, 405)
+
+    @mock.patch("events.views.cancel_run")
+    def test_cancel_is_public(self, mock_cancel):
+        run = ScraperRun.objects.create(
+            scraper_key="myruntime", status=ScraperRun.Status.CANCELLED
+        )
+        mock_cancel.return_value = (run, "ok")
+        resp = self.client.post(f"/api/scrapers/runs/{run.id}/cancel/")
+        self.assertEqual(resp.status_code, 200)
+
+
+class RunEndpointTests(TestCase):
+    def setUp(self):
+        User = get_user_model()
+        self.staff = User.objects.create_user(
+            "staff", password="pw", is_staff=True
+        )
+        self.nonstaff = User.objects.create_user("plain", password="pw")
+        self.client.force_login(self.staff)
+
+    def test_trigger_returns_200_and_run_id(self):
+        mock_run = mock.Mock(id=42, status="queued")
+        with mock.patch(
+            "events.views.trigger_scraper_run", return_value=(mock_run, False)
+        ):
+            resp = self.client.post("/api/scrapers/myruntime/run/")
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertEqual(body["id"], 42)
+        self.assertEqual(body["status"], "queued")
+
+    def test_trigger_returns_404_unknown_key(self):
+        resp = self.client.post("/api/scrapers/badkey/run/")
+        self.assertEqual(resp.status_code, 404)
+
+    def test_trigger_returns_409_when_already_active(self):
+        with mock.patch(
+            "events.views.trigger_scraper_run", return_value=(None, True)
+        ):
+            resp = self.client.post("/api/scrapers/myruntime/run/")
+        self.assertEqual(resp.status_code, 409)
+
+    def test_trigger_is_public_for_any_user(self):
+        # The trigger endpoint is unauthenticated — the SvelteKit frontend has
+        # no Django session. Non-staff users (and anonymous) can trigger runs.
+        self.client.force_login(self.nonstaff)
+        mock_run = mock.Mock(id=99, status="queued")
+        with mock.patch(
+            "events.views.trigger_scraper_run", return_value=(mock_run, False)
+        ):
+            resp = self.client.post("/api/scrapers/myruntime/run/")
+        self.assertEqual(resp.status_code, 200)
+
+    def test_trigger_requires_post(self):
+        resp = self.client.get("/api/scrapers/myruntime/run/")
+        self.assertEqual(resp.status_code, 405)
+
+    def test_runs_list_returns_recent_runs(self):
+        # Use distinct statuses so only one row is "active" per key,
+        # respecting the unique_active_scraper_run DB constraint.
+        ScraperRun.objects.create(scraper_key="myruntime", status=ScraperRun.Status.QUEUED)
+        ScraperRun.objects.create(scraper_key="myruntime", status=ScraperRun.Status.SUCCESS)
+        ScraperRun.objects.create(scraper_key="racemeister_partners", status=ScraperRun.Status.FAILED)
+        resp = self.client.get("/api/scrapers/runs/")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(len(resp.json()), 3)
+
+    def test_active_runs_returns_only_active(self):
+        ScraperRun.objects.create(
+            scraper_key="myruntime", status=ScraperRun.Status.QUEUED
+        )
+        ScraperRun.objects.create(
+            scraper_key="racemeister_partners", status=ScraperRun.Status.SUCCESS
+        )
+        resp = self.client.get("/api/scrapers/runs/active/")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(len(resp.json()), 1)
+
+    def test_run_detail_returns_correct_run(self):
+        run = ScraperRun.objects.create(scraper_key="myruntime")
+        resp = self.client.get(f"/api/scrapers/runs/{run.id}/")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["id"], run.id)
+
+    def test_run_detail_404_for_missing(self):
+        resp = self.client.get("/api/scrapers/runs/99999/")
+        self.assertEqual(resp.status_code, 404)
+
+    def test_run_list_endpoints_are_public(self):
+        # GET read endpoints are unauthenticated — the SvelteKit client has no
+        # session cookie, mirroring the existing /api/scrapers/ convention.
+        self.client.logout()
+        for url in (
+            "/api/scrapers/runs/",
+            "/api/scrapers/runs/active/",
+        ):
+            resp = self.client.get(url)
+            self.assertEqual(resp.status_code, 200, url)
+
+    def test_run_detail_endpoint_is_public(self):
+        run = ScraperRun.objects.create(scraper_key="myruntime")
+        self.client.logout()
+        resp = self.client.get(f"/api/scrapers/runs/{run.id}/")
+        self.assertEqual(resp.status_code, 200)
+
+    def test_trigger_is_public_for_anonymous(self):
+        # Anonymous users can trigger runs — the endpoint is intentionally
+        # unauthenticated (internal-only admin tool; no real session bridge).
+        self.client.logout()
+        mock_run = mock.Mock(id=77, status="queued")
+        with mock.patch(
+            "events.views.trigger_scraper_run", return_value=(mock_run, False)
+        ):
+            resp = self.client.post("/api/scrapers/myruntime/run/")
+        self.assertEqual(resp.status_code, 200)
+
+    def test_run_all_triggers_all_scrapers(self):
+        from events.scrapers import SCRAPERS as REAL_SCRAPERS
+
+        mock_run = mock.Mock(id=1, status="queued")
+        with mock.patch(
+            "events.views.trigger_scraper_run", return_value=(mock_run, False)
+        ) as mock_trigger:
+            resp = self.client.post("/api/scrapers/run-all/")
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertEqual(len(body["created"]), len(REAL_SCRAPERS))
+        self.assertEqual(body["skipped"], [])
+        self.assertEqual(mock_trigger.call_count, len(REAL_SCRAPERS))
+
+    def test_run_all_skips_active_scrapers(self):
+        # Restrict SCRAPERS to 2 keys so side_effect list matches exactly.
+        from events import scrapers as scrapers_module
+        fake_scrapers = {"key_a": mock.Mock(), "key_b": mock.Mock()}
+        results = [(None, True), (mock.Mock(id=2, status="queued"), False)]
+        with mock.patch.dict(scrapers_module.SCRAPERS, fake_scrapers, clear=True), \
+             mock.patch("events.views.trigger_scraper_run", side_effect=results):
+            resp = self.client.post("/api/scrapers/run-all/")
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertEqual(len(body["created"]), 1)
+        self.assertEqual(len(body["skipped"]), 1)
+
+    def test_run_all_is_public(self):
+        self.client.logout()
+        mock_run = mock.Mock(id=3, status="queued")
+        with mock.patch(
+            "events.views.trigger_scraper_run", return_value=(mock_run, False)
+        ):
+            resp = self.client.post("/api/scrapers/run-all/")
+        self.assertEqual(resp.status_code, 200)
+
+
+class ApiScrapersLastRunTests(TestCase):
+    """GET /api/scrapers/ must annotate each scraper with its latest ScraperRun."""
+
+    def _payload_for(self, key):
+        resp = self.client.get("/api/scrapers/")
+        self.assertEqual(resp.status_code, 200)
+        for row in resp.json():
+            if row["key"] == key:
+                return row
+        self.fail(f"scraper key {key!r} not in /api/scrapers/ payload")
+
+    def test_last_run_null_when_no_runs(self):
+        # A registered scraper with no ScraperRun history reports last_run=None.
+        row = self._payload_for("myruntime")
+        self.assertIn("last_run", row)
+        self.assertIsNone(row["last_run"])
+
+    def test_last_run_reflects_latest_run(self):
+        started = timezone.now() - timedelta(minutes=5)
+        finished = timezone.now()
+        ScraperRun.objects.create(
+            scraper_key="myruntime",
+            status=ScraperRun.Status.SUCCESS,
+            started_at=started,
+            finished_at=finished,
+        )
+        row = self._payload_for("myruntime")
+        self.assertIsNotNone(row["last_run"])
+        self.assertEqual(row["last_run"]["status"], ScraperRun.Status.SUCCESS)
+        self.assertEqual(row["last_run"]["started_at"], started.isoformat())
+        self.assertEqual(row["last_run"]["finished_at"], finished.isoformat())
+
+    def test_last_run_picks_most_recent_per_key(self):
+        # Older run first, then a newer one — the newer (latest) must win.
+        ScraperRun.objects.create(
+            scraper_key="myruntime",
+            status=ScraperRun.Status.FAILED,
+            started_at=timezone.now() - timedelta(hours=2),
+            finished_at=timezone.now() - timedelta(hours=2),
+        )
+        latest = ScraperRun.objects.create(
+            scraper_key="myruntime", status=ScraperRun.Status.RUNNING
+        )
+        row = self._payload_for("myruntime")
+        self.assertEqual(row["last_run"]["status"], latest.status)
+
+    def test_last_run_is_per_scraper_key(self):
+        # A run for one key must not leak into another key's last_run.
+        ScraperRun.objects.create(
+            scraper_key="myruntime", status=ScraperRun.Status.SUCCESS
+        )
+        myruntime_row = self._payload_for("myruntime")
+        racemeister_row = self._payload_for("racemeister_partners")
+        self.assertIsNotNone(myruntime_row["last_run"])
+        self.assertIsNone(racemeister_row["last_run"])
+
+
+class CategoryNormalizationTests(TestCase):
+    def test_distance_list_maps_to_fun_run(self):
+        self.assertEqual(normalize_category("10K, 5K, 3K"), "Fun Run / Road Race")
+
+    def test_distance_list_km_suffix_maps_to_fun_run(self):
+        self.assertEqual(normalize_category("21KM, 10KM, 5KM"), "Fun Run / Road Race")
+
+    def test_single_distance_maps_to_fun_run(self):
+        self.assertEqual(normalize_category("42K"), "Fun Run / Road Race")
+
+    def test_wave_tier_names_map_to_fun_run(self):
+        self.assertEqual(
+            normalize_category("SUB1 Elite, SUB1 Competitor, Open Wave"),
+            "Fun Run / Road Race",
+        )
+
+    def test_trail_keyword(self):
+        self.assertEqual(normalize_category("trail run"), "Trail Run")
+
+    def test_music_keyword(self):
+        self.assertEqual(normalize_category("music"), "Music")
+
+    def test_festival_keyword(self):
+        self.assertEqual(normalize_category("festival"), "Festival")
+
+    def test_workshop_keyword(self):
+        self.assertEqual(normalize_category("Photography Workshop"), "Workshop / Training")
+
+    def test_conference_keyword(self):
+        self.assertEqual(normalize_category("Tech Conference"), "Conference / Seminar")
+
+    def test_keyword_matching_is_whole_word_not_substring(self):
+        # "art" must not match as a substring inside unrelated words such as
+        # "party" or "smartphone" — those should fall back to title case.
+        self.assertEqual(normalize_category("party"), "Party")
+        self.assertEqual(normalize_category("Smartphone Expo"), "Smartphone Expo")
+        # A genuine whole-word "art" still maps to Arts & Culture.
+        self.assertEqual(normalize_category("Art Exhibit"), "Arts & Culture")
+
+    def test_unknown_falls_back_to_title_case(self):
+        self.assertEqual(
+            normalize_category("Weird Unique Event 2026"),
+            "Weird Unique Event 2026",
+        )
+
+    def test_empty_string_returns_empty(self):
+        self.assertEqual(normalize_category(""), "")
+
+    def test_api_top_n_and_other_rollup(self):
+        # Distance lists / wave tiers all collapse into one "Fun Run / Road Race"
+        # bucket; mapped keywords and clean fallbacks fill out the rest. With
+        # more than 8 canonical buckets, the surplus rolls into "Other".
+        raw_categories = [
+            "10K, 5K, 3K",          # Fun Run / Road Race
+            "SUB1 Elite, Open Wave",  # Fun Run / Road Race
+            "trail run",             # Trail Run
+            "music",                 # Music
+            "festival",              # Festival
+            "Photography Workshop",  # Workshop / Training
+            "Tech Conference",       # Conference / Seminar
+            "cycling",               # Cycling
+            "swimming",              # Swimming
+            "Charity Gala",          # Charity / Fundraiser
+            "Alpha Unique",          # Alpha Unique (fallback)
+            "Beta Unique",           # Beta Unique (fallback)
+        ]
+        for idx, cat in enumerate(raw_categories):
+            Event.objects.create(
+                name=f"Event {idx}",
+                slug=f"event-{idx}",
+                category=cat,
+                source="test",
+            )
+
+        resp = self.client.get(reverse("events:api_events_by_category"))
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertIsInstance(data, list)
+        # Top 8 + optional "Other" => at most 9 buckets.
+        self.assertLessEqual(len(data), 9)
+        # More than 8 canonical buckets exist, so "Other" must be present.
+        categories = {entry["category"] for entry in data}
+        self.assertIn("Other", categories)
+        # Every entry has a positive count and the expected shape.
+        for entry in data:
+            self.assertIn("category", entry)
+            self.assertIn("count", entry)
+            self.assertGreater(entry["count"], 0)
+
+
+class AiCategoriesTests(TestCase):
+    """Unit tests for the AI categorization service.
+
+    All tests mock subprocess.run so no actual CLI is invoked.
+    """
+
+    def _make_event(self, name, category="", description=""):
+        return Event.objects.create(
+            name=name,
+            slug=name.lower().replace(" ", "-"),
+            category=category,
+            description=description,
+            source="test",
+        )
+
+    def test_batch_categorize_parses_valid_response(self):
+        e1 = self._make_event("CDO Fun Run 5K", category="5K, 10K")
+        e2 = self._make_event("Tech Summit 2026", category="")
+        payload = json.dumps({
+            str(e1.pk): ["Fun Run / Road Race"],
+            str(e2.pk): ["Conference / Seminar"],
+        })
+        with mock.patch.object(
+            ai_categories.subprocess, "run", return_value=_fake_cli(payload)
+        ) as run:
+            result = ai_categories.batch_categorize([e1, e2], cli_cmd="fake-claude")
+
+        self.assertEqual(result[e1.pk], ["Fun Run / Road Race"])
+        self.assertEqual(result[e2.pk], ["Conference / Seminar"])
+        # The injected fake command was used.
+        self.assertEqual(run.call_args.args[0][0], "fake-claude")
+
+    def test_invalid_labels_fall_back_to_other(self):
+        e1 = self._make_event("Mystery Event")
+        payload = json.dumps({str(e1.pk): ["Not A Real Category"]})
+        with mock.patch.object(
+            ai_categories.subprocess, "run", return_value=_fake_cli(payload)
+        ):
+            result = ai_categories.batch_categorize([e1], cli_cmd="fake-claude")
+        self.assertEqual(result[e1.pk], ["Other"])
+
+    def test_missing_event_in_response_falls_back_to_other(self):
+        e1 = self._make_event("Ghost Event")
+        with mock.patch.object(
+            ai_categories.subprocess, "run", return_value=_fake_cli("{}")
+        ):
+            result = ai_categories.batch_categorize([e1], cli_cmd="fake-claude")
+        self.assertEqual(result[e1.pk], ["Other"])
+
+    def test_malformed_json_falls_back_to_other(self):
+        e1 = self._make_event("Garbled Event")
+        with mock.patch.object(
+            ai_categories.subprocess, "run", return_value=_fake_cli("not json at all")
+        ):
+            result = ai_categories.batch_categorize([e1], cli_cmd="fake-claude")
+        self.assertEqual(result[e1.pk], ["Other"])
+
+    def test_missing_cli_raises_helpful_error(self):
+        e1 = self._make_event("Any Event")
+        with mock.patch.object(
+            ai_categories.subprocess, "run", side_effect=FileNotFoundError()
+        ):
+            with self.assertRaises(FileNotFoundError) as ctx:
+                ai_categories.batch_categorize([e1], cli_cmd="missing-claude")
+        self.assertIn("CLAUDE_CLI_CMD", str(ctx.exception))
+        self.assertIn("missing-claude", str(ctx.exception))
+
+    def test_categorize_events_by_ids_persists_labels(self):
+        e1 = self._make_event("CDO Marathon", category="42K")
+        e2 = self._make_event("Jazz Night")
+        payload = json.dumps({
+            str(e1.pk): ["Fun Run / Road Race"],
+            str(e2.pk): ["Music & Concert"],
+        })
+        with mock.patch.object(
+            ai_categories.subprocess, "run", return_value=_fake_cli(payload)
+        ):
+            count = ai_categories.categorize_events_by_ids([e1.pk, e2.pk])
+
+        self.assertEqual(count, 2)
+        e1.refresh_from_db()
+        e2.refresh_from_db()
+        self.assertEqual(e1.agent_categories, ["Fun Run / Road Race"])
+        self.assertEqual(e2.agent_categories, ["Music & Concert"])
+
+    def test_categorize_events_by_ids_empty_input(self):
+        self.assertEqual(ai_categories.categorize_events_by_ids([]), 0)
+
+    def test_batch_categorize_empty_input_no_subprocess(self):
+        with mock.patch.object(ai_categories.subprocess, "run") as run:
+            result = ai_categories.batch_categorize([], cli_cmd="fake-claude")
+        self.assertEqual(result, {})
+        run.assert_not_called()

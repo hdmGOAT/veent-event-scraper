@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import Event, Organizer, Venue
+from .models import Event, Organizer, ScraperRun, Venue
 
 
 @admin.register(Venue)
@@ -64,3 +64,23 @@ class OrganizerAdmin(admin.ModelAdmin):
     @admin.action(description="Mark selected organizers as Rejected")
     def reject_organizers(self, request, queryset):
         queryset.update(status=Organizer.STATUS_REJECTED)
+
+
+@admin.register(ScraperRun)
+class ScraperRunAdmin(admin.ModelAdmin):
+    list_display = (
+        "scraper_key", "status", "started_at", "finished_at",
+        "created_count", "updated_count", "triggered_by", "created_at",
+    )
+    list_filter = ("status", "scraper_key")
+    readonly_fields = (
+        "scraper_key", "status", "pid", "started_at", "finished_at",
+        "created_count", "updated_count", "extra_counts", "error_message",
+        "triggered_by", "created_at", "updated_at",
+    )
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False

@@ -14,6 +14,10 @@
 	const catData = $derived(data.byCategory.map((r) => r.count));
 </script>
 
+<svelte:head>
+	<title>Dashboard — Veent Admin</title>
+</svelte:head>
+
 <PageHeader title="Dashboard" subtitle="Platform overview and key metrics" />
 
 <div class="space-y-6 p-8">
