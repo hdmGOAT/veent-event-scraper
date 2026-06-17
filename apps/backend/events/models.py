@@ -33,6 +33,10 @@ class Venue(models.Model):
     rating = models.FloatField(null=True, blank=True)
     # Source price level enum string (e.g. "PRICE_LEVEL_MODERATE").
     price_level = models.CharField(max_length=40, blank=True)
+    # AI-assigned canonical venue type labels (e.g. ["Sports & Recreation"]).
+    # Empty list = not yet classified. Only written by the classify script; never
+    # overwritten by the scraper upsert path so classifications survive re-scrapes.
+    agents_primary_types = models.JSONField(default=list, blank=True)
 
     # Manual admin review of whether this is genuinely an events venue.
     # Set only by staff in the admin; never written by the scraper upsert path,
