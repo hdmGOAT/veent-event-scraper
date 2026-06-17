@@ -4,9 +4,11 @@ from django.db.models import Count, Max, Q
 from django.http import HttpResponseBadRequest, JsonResponse
 from django.shortcuts import get_object_or_404, render
 from django.utils import timezone
+from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_POST
 
-from .models import Event, Organizer, Venue
+from .models import Event, Organizer, ScraperRun, Venue
+from .runner import cancel_run, trigger_scraper_run
 
 
 def event_list(request):
@@ -416,6 +418,115 @@ def api_venues(request):
     )
 
 
+# ---------------------------------------------------------------------------
+# Scraper run jobs — trigger runs from the UI and poll/list their status.
+# All endpoints are staff-only, mirroring the /review/ convention.
+# ---------------------------------------------------------------------------
+
+
+def _serialize_run(run):
+    """Serialise a ScraperRun to the standard dict shape used by all run endpoints."""
+    return {
+        "id": run.id,
+        "scraper_key": run.scraper_key,
+        "status": run.status,
+        "started_at": run.started_at.isoformat() if run.started_at else None,
+        "finished_at": run.finished_at.isoformat() if run.finished_at else None,
+        "created_count": run.created_count,
+        "updated_count": run.updated_count,
+        "extra_counts": run.extra_counts,
+        "error_message": run.error_message or None,
+        "triggered_by": run.triggered_by.username if run.triggered_by_id else None,
+        "created_at": run.created_at.isoformat(),
+        "duration_seconds": run.duration_seconds,
+    }
+
+
+@csrf_exempt
+@require_POST
+def api_scraper_trigger(request, key):
+    # SECURITY NOTE: This endpoint is unauthenticated intentionally. The
+    # SvelteKit frontend has no Django session (the "Admin User" in the sidebar
+    # is static UI, not a real session), and the Vite proxy makes all /api/*
+    # calls same-origin in dev, so there is no CSRF surface from a browser
+    # cross-site attack on this internal-only tool. @csrf_exempt is consistent
+    # with all other JSON API endpoints in this file. Re-evaluate when real
+    # auth is added (Phase 2 roadmap).
+    from .scrapers import SCRAPERS
+
+    if key not in SCRAPERS:
+        return JsonResponse({"error": "Unknown scraper key"}, status=404)
+
+    triggered_by = request.user if request.user.is_authenticated else None
+    run, already_active = trigger_scraper_run(key, triggered_by=triggered_by)
+    if already_active:
+        return JsonResponse({"error": "Scraper already running"}, status=409)
+
+    return JsonResponse({"id": run.id, "status": run.status}, status=200)
+
+
+@csrf_exempt
+@require_POST
+def api_scraper_run_all(request):
+    # SECURITY NOTE: Same posture as api_scraper_trigger above — unauthenticated
+    # intentionally for the same reasons. Revisit when real auth is added.
+    from .scrapers import SCRAPERS
+
+    triggered_by = request.user if request.user.is_authenticated else None
+    created = []
+    skipped = []
+    for key in SCRAPERS:
+        run, already_active = trigger_scraper_run(key, triggered_by=triggered_by)
+        if already_active:
+            skipped.append(key)
+        else:
+            created.append({"key": key, "id": run.id, "status": run.status})
+
+    return JsonResponse({"created": created, "skipped": skipped}, status=200)
+
+
+def api_scraper_runs(request):
+    try:
+        limit = min(int(request.GET.get("limit", 50)), 200)
+    except ValueError:
+        limit = 50
+    runs = (
+        ScraperRun.objects.select_related("triggered_by")
+        .order_by("-created_at")[:limit]
+    )
+    return JsonResponse([_serialize_run(r) for r in runs], safe=False)
+
+
+def api_scraper_runs_active(request):
+    runs = ScraperRun.objects.filter(
+        status__in=[ScraperRun.Status.QUEUED, ScraperRun.Status.RUNNING]
+    ).select_related("triggered_by")
+    return JsonResponse([_serialize_run(r) for r in runs], safe=False)
+
+
+def api_scraper_run_detail(request, run_id):
+    run = get_object_or_404(
+        ScraperRun.objects.select_related("triggered_by"), id=run_id
+    )
+    return JsonResponse(_serialize_run(run))
+
+
+@csrf_exempt
+@require_POST
+def api_scraper_run_cancel(request, run_id):
+    # SECURITY NOTE: same posture as api_scraper_trigger — unauthenticated
+    # intentionally (no Django session from SvelteKit). Re-evaluate when real
+    # auth is added.
+    run, signal = cancel_run(run_id)
+    if signal == "not_found":
+        return JsonResponse({"error": "Run not found"}, status=404)
+    if signal == "not_active":
+        return JsonResponse(
+            {"error": "Run is not active", "run": _serialize_run(run)}, status=409
+        )
+    return JsonResponse(_serialize_run(run), status=200)
+
+
 def api_scrapers(request):
     from .scrapers import SCRAPERS
 
@@ -430,6 +541,16 @@ def api_scrapers(request):
         if row["source"]
     }
 
+    # Latest ScraperRun per key in a single query. Postgres DISTINCT ON
+    # (scraper_key) with a matching order_by returns the most recent run for
+    # each key, avoiding an N+1 across SCRAPERS.
+    latest_runs = {
+        run.scraper_key: run
+        for run in ScraperRun.objects.order_by(
+            "scraper_key", "-created_at"
+        ).distinct("scraper_key")
+    }
+
     results = []
     for key in SCRAPERS:
         e_ts = event_last.get(key)
@@ -438,10 +559,23 @@ def api_scrapers(request):
             last_scraped = max(e_ts, o_ts)
         else:
             last_scraped = e_ts or o_ts
+
+        run = latest_runs.get(key)
+        last_run = (
+            {
+                "status": run.status,
+                "started_at": run.started_at.isoformat() if run.started_at else None,
+                "finished_at": run.finished_at.isoformat() if run.finished_at else None,
+            }
+            if run
+            else None
+        )
+
         results.append(
             {
                 "key": key,
                 "last_scraped": last_scraped.isoformat() if last_scraped else None,
+                "last_run": last_run,
             }
         )
 
