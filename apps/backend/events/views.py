@@ -6,6 +6,7 @@ from django.shortcuts import get_object_or_404, render
 from django.utils import timezone
 from django.views.decorators.http import require_POST
 
+from .categories import normalize_category
 from .models import Event, Organizer, Venue
 
 
@@ -245,12 +246,30 @@ def api_events_by_source(request):
 
 
 def api_events_by_category(request):
-    data = list(
+    # Aggregate raw (category, count) rows, then collapse them into a small
+    # canonical set at display time. The stored Event.category is never changed.
+    TOP_N = 8
+
+    raw_rows = (
         Event.objects.exclude(category="")
         .values("category")
         .annotate(count=Count("id"))
-        .order_by("-count")
     )
+
+    buckets: dict[str, int] = {}
+    for row in raw_rows:
+        canonical = normalize_category(row["category"])
+        if not canonical:
+            continue
+        buckets[canonical] = buckets.get(canonical, 0) + row["count"]
+
+    ordered = sorted(buckets.items(), key=lambda item: item[1], reverse=True)
+
+    data = [{"category": name, "count": count} for name, count in ordered[:TOP_N]]
+    other = sum(count for _, count in ordered[TOP_N:])
+    if other > 0:
+        data.append({"category": "Other", "count": other})
+
     return JsonResponse(data, safe=False)
 
 
