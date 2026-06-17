@@ -11,6 +11,11 @@ jobs:
   backend:
     name: Backend (Django)
     runs-on: ubuntu-latest
+    # Serialize all backend runs — tests share a single Neon test DB so
+    # concurrent runs cause duplicate-key errors on django_content_type.
+    concurrency:
+      group: neon-test-db
+      cancel-in-progress: false
     defaults:
       run:
         working-directory: apps/backend
