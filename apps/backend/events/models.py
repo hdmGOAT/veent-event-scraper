@@ -93,6 +93,10 @@ class Event(models.Model):
     image_url = models.URLField(blank=True, max_length=2000)
     price = models.CharField(max_length=120, blank=True)
     category = models.CharField(max_length=120, blank=True)
+    # AI-assigned canonical categories (1–2 labels from CANONICAL_CATEGORIES).
+    # Empty list = not yet classified. Written only by categorize_events_by_ids;
+    # never overwritten by the scraper upsert path (save_events).
+    agent_categories = models.JSONField(default=list, blank=True)
 
     # Host / organizer info
     organizer = models.CharField(max_length=255, blank=True)
