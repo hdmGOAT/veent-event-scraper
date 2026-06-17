@@ -29,6 +29,7 @@ export interface EventRow {
 	starts_at: string | null;
 	ends_at: string | null;
 	category: string;
+	agent_categories: string[];
 	source: string;
 	price: string;
 	venue: string | null;
