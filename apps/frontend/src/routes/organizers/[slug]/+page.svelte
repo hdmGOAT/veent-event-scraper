@@ -8,6 +8,10 @@
 	const o = $derived(data.organizer);
 </script>
 
+<svelte:head>
+	<title>{o?.name ?? 'Organizer'} — Veent Admin</title>
+</svelte:head>
+
 <PageHeader title={o.name} subtitle="Organizer profile" />
 
 <div class="p-8">
@@ -104,7 +108,7 @@
 									<td class="px-6 py-3 font-medium text-heading">{e.name}</td>
 									<td class="px-6 py-3 text-muted">{formatDate(e.starts_at)}</td>
 									<td class="px-6 py-3">
-										{#if e.category}<Badge status={e.category} />{:else}<span class="text-muted">—</span>{/if}
+										{#if e.category}<Badge category={e.category} />{:else}<span class="text-muted">—</span>{/if}
 									</td>
 									<td class="px-6 py-3 text-muted">{e.venue ?? '—'}</td>
 								</tr>
