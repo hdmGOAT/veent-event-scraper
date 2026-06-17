@@ -59,20 +59,9 @@ cross-source dedup/merge, CSV + JSON/REST export, CI, production hardening) is *
 
 ---
 
-## How This File Works (the `all-*.md` Convention)
+## How This File Works
 
-Every `process/context/` directory has one `all-*.md` entrypoint that acts as an attachable
-quick router for that domain. This root file (`all-context.md`) is the top-level router.
-Context groups each have their own `all-{group}.md` entrypoint.
-
-**How agents use it:**
-
-1. Agent reads `all-context.md` first (this file)
-2. Finds the relevant context group from the routing tables below
-3. Reads that group's `all-{group}.md` entrypoint
-4. Only then loads the specific deep doc needed
-
-This layered routing keeps context windows small. Never load the whole `process/context/` tree.
+Agents: read this first → find context group in the routing tables below → read `all-{group}.md` → only then load the specific deep doc. Never load the whole `process/context/` tree.
 
 ---
 
@@ -130,29 +119,6 @@ as the SvelteKit app grows.
 | creating a new plan | `process/context/planning/all-planning.md` | the relevant example PRD |
 | context maintenance | this file | run `audit-context` after edits |
 
-## Context Group Lifecycle
-
-Context groups are durable knowledge domains, not feature folders.
-
-Create a group when:
-
-- a topic has 3+ durable docs
-- a single doc exceeds roughly 800 lines with separable subtopics
-- multiple agents repeatedly need only one slice of a large context file
-- the topic maps to a stable operational domain (tests, infra, database, auth, scrapers, etc.)
-
-Move or split one group at a time. Use `all-{group}.md` entrypoints. Run the `audit-context`
-skill after every context organization change.
-
-## Context Update Protocol
-
-When durable project knowledge changes:
-
-1. update the smallest relevant context file
-2. update this file if routing, ownership, naming, or groups changed
-3. update the owning `all-{group}.md` entrypoint when a group exists
-4. run `audit-context`
-
 ---
 
 ## Repository Structure
@@ -160,21 +126,11 @@ When durable project knowledge changes:
 Monorepo managed with **pnpm workspaces + Turborepo**.
 
 ```
-veent-event-scraper/                  -- monorepo root
-  package.json                        -- pnpm workspace + turbo config (dev scripts: pnpm dev / build / check)
-  pnpm-workspace.yaml                 -- workspace glob: apps/*
-  turbo.json                          -- Turborepo pipeline
-  pnpm-lock.yaml
+veent-event-scraper/
   apps/
     backend/                          -- Django 6 backend
-      manage.py                       -- Django entrypoint (run from apps/backend/)
-      requirements.txt                -- pip deps (Django 6, dj-database-url, requests, bs4, lxml, psycopg2)
-      .env                            -- env vars (DATABASE_URL, SECRET_KEY, etc.) — git-ignored
-      venv/                           -- virtualenv (activate: source apps/backend/venv/bin/activate)
-      config/                         -- Django project package
-        settings.py                   -- settings (Neon Postgres via dj_database_url, INSTALLED_APPS)
-        urls.py                       -- root URLConf (admin/ + events app at /)
-        wsgi.py / asgi.py
+      manage.py
+      config/                         -- Django project package (settings.py, urls.py)
       events/                         -- single Django app
         models.py                     -- Venue, Event, Organizer, ScraperRun models
         views.py                      -- function-based views: public list/detail + staff /review/ + JSON API
@@ -185,55 +141,25 @@ veent-event-scraper/                  -- monorepo root
         tests.py                      -- Django TestCase suite (97 tests as of 2026-06-17)
         migrations/                   -- 0001_initial … 0012_scraperrun_unique_active_constraint (applied)
         scrapers/
-          base.py                     -- BaseScraper + ScrapedEvent/ScrapedVenue/ScrapedOrganizer + save_events/save_organizers
-          allevents.py                -- AllEventsCDOScraper (key: allevents_cdo, Playwright)
-          happeningnext.py            -- HappeningNextCDOScraper (key: happeningnext_cdo, Playwright)
-          myruntime.py                -- MyRuntimeScraper (key: myruntime, JSON API + organizers)
-          places.py                   -- GooglePlacesVenueScraper (key: google_places, Places API)
-          racemeister.py              -- RacemeisterPartnersScraper (key: racemeister_partners, requests+BS4)
-          racemeister_events.py       -- RacemeisterEventsScraper (key: racemeister_events, requests+BS4)
-          ticket2me.py                -- Ticket2MeScraper (key: ticket2me, requests+BS4)
-          planout.py                  -- PlanoutScraper (key: planout, requests+BS4)
-          luma.py                     -- LumaScraper (key: luma, JSON API)
-          eventbrite.py               -- EventbriteScraper (key: eventbrite, requests + JSON API)
+          base.py                     -- BaseScraper + ScrapedEvent/Venue/Organizer + save_events/save_organizers
+          allevents.py / happeningnext.py  -- Playwright scrapers
+          myruntime.py / luma.py / eventbrite.py  -- JSON API scrapers
+          ticket2me.py / planout.py / racemeister_events.py  -- requests+BS4 event scrapers
+          racemeister.py              -- requests+BS4 organizer scraper
+          places.py                   -- Google Places venue scraper
           __init__.py                 -- SCRAPERS registry {key -> class}
         management/commands/
-          scrape.py                   -- `manage.py scrape [source] [--list]`
-      templates/                      -- server-rendered Django templates (secondary surface)
-        base.html
-        events/                       -- event_list, event_detail, venue_list, venue_detail, organizer_list/detail
-          review/                     -- staff /review/ UI: dashboard, venue_detail, _status_control partial
+          scrape.py / run_scraper_job.py
+      templates/                      -- secondary surface (legacy list/detail + /review/)
     frontend/                         -- SvelteKit 2 + Svelte 5 (primary admin UI, CSR-only)
-      package.json
-      vite.config.ts                  -- tailwindcss plugin + sveltekit plugin (runes forced); proxy /api → :8000 in dev
-      svelte.config.js
+      vite.config.ts                  -- Tailwind v4 plugin + runes enforced; proxy /api → :8000
       src/
-        app.css                       -- Tailwind v4 @theme {} design tokens + global styles
-        routes/
-          +layout.svelte              -- root layout with Sidebar
-          +layout.ts                  -- export const ssr = false (CSR-only)
-          +page.svelte / +page.ts     -- / — dashboard (StatCards, BarChart, DonutChart); load() fetches /api/stats/, /api/events/by-source/, /api/events/by-category/
-          +error.svelte               -- global error boundary
-          events/+page.svelte         -- /events — event list table
-          organizers/+page.svelte     -- /organizers — sortable organizer table
-          organizers/[slug]/+page.svelte / +page.ts  -- /organizers/[slug] — organizer detail
-          venues/+page.svelte         -- /venues — venue list
-          scrapers/+page.svelte / +page.ts  -- /scrapers — Scraper Center (Run, Run All, status polling, history)
+        app.css                       -- @theme {} design tokens
+        routes/                       -- /, /events, /organizers, /organizers/[slug], /venues, /scrapers
         lib/
-          components/
-            Sidebar.svelte            -- collapsible navigation sidebar
-            PageHeader.svelte         -- page title + breadcrumb
-            Badge.svelte              -- status badge (pending/confirmed/rejected/running/queued/success/failed)
-            StatCard.svelte           -- KPI card (icon + numeric value + label)
-            BarChart.svelte           -- Chart.js bar chart wrapper
-            DonutChart.svelte         -- Chart.js donut chart wrapper
-            TableSkeleton.svelte      -- loading-state skeleton rows
-            SortHeader.svelte         -- sortable column header (uses sort.ts)
-          utils/
-            sort.ts                   -- generic client-side column sort helpers
+          components/                 -- Sidebar, PageHeader, Badge, StatCard, BarChart, DonutChart, TableSkeleton, SortHeader
           api.ts                      -- typed fetch wrappers for all /api/* endpoints
-          types.ts                    -- Scraper, ScraperRun, Event, Venue, Organizer, etc.
-          format.ts                   -- shared format helpers (formatDuration, etc.)
+          types.ts / format.ts / sort.ts
           index.ts                    -- barrel re-exports
   process/                            -- agent harness workspace (context, plans, protocols)
 
@@ -449,121 +375,27 @@ is implemented. See Gotchas section.
 | GET | `/api/organizers/<slug>/` | Organizer detail |
 | GET | `/api/venues/` | Venues list |
 
-### ScraperRun serialised shape
-
-```json
-{
-  "id": 1,
-  "scraper_key": "myruntime",
-  "status": "queued | running | success | failed",
-  "started_at": "2026-06-17T10:00:00Z | null",
-  "finished_at": "2026-06-17T10:01:30Z | null",
-  "created_count": 12,
-  "updated_count": 3,
-  "extra_counts": {},
-  "error_message": "null | traceback string",
-  "triggered_by": "admin | null",
-  "created_at": "2026-06-17T10:00:00Z",
-  "duration_seconds": 90.0
-}
-```
-
 ## Admin
 
-`apps/backend/events/admin.py` registers all four models:
-
-- **`VenueAdmin`** — list display, filters, search, slug prepopulation. Exposes the manual
-  review workflow: `verification_status` in `list_display`/`list_filter`/`list_editable` plus
-  bulk **Mark verified** / **Mark rejected** actions. The admin is a raw-data console; the
-  `/review/` UI is the primary verification surface.
-- **`EventAdmin`** — list display includes `organizer`. Fieldsets group host/organizer fields
-  separately. `autocomplete_fields=("venue",)`, `date_hierarchy="starts_at"`.
-- **`OrganizerAdmin`** — `status` in `list_display`/`list_filter`/`list_editable`. Bulk
-  **Mark Confirmed** / **Mark Rejected** actions.
-- **`ScraperRunAdmin`** — readonly. `list_display`: scraper_key, status, started_at, finished_at,
-  created_count, updated_count, triggered_by, created_at. `list_filter`: status, scraper_key.
-  All fields in `readonly_fields`. `has_add_permission` and `has_delete_permission` return False.
+Raw-data console (`apps/backend/events/admin.py`) for all four models. `VenueAdmin` has bulk **Mark verified / rejected** actions; `/review/` is the primary verification surface. `OrganizerAdmin` has bulk **Mark Confirmed / Rejected**. `ScraperRunAdmin` is fully readonly (`has_add_permission` and `has_delete_permission` return False).
 
 ## Backend API
 
-`apps/backend/events/views.py` exposes plain Django `JsonResponse` endpoints (no DRF) — mostly
-GET, plus the POST scraper-run trigger/cancel endpoints documented in the **API Surface**
-section above. All are registered in `apps/backend/events/urls.py` under the `events` namespace.
-GET endpoints:
+Function-based `JsonResponse` views in `views.py`; all registered in `urls.py` under the `events` namespace. Full endpoint list is in **API Surface** above.
 
-| Endpoint | View name | Notes |
-|---|---|---|
-| `GET /api/stats/` | `api_stats` | counts of events, venues, organizers by status |
-| `GET /api/events/` | `api_events` | paginated event list |
-| `GET /api/events/by-source/` | `api_events_by_source` | event counts grouped by source key |
-| `GET /api/events/by-category/` | `api_events_by_category` | normalized category counts; calls `normalize_category` from `events/categories.py`; returns Top-N + "Other" |
-| `GET /api/organizers/` | `api_organizers` | organizer list with status |
-| `GET /api/organizers/<slug>/` | `api_organizer_detail` | single organizer detail |
-| `GET /api/venues/` | `api_venues` | venue list |
-| `GET /api/scrapers/` | `api_scrapers` | list of registered scraper keys and metadata + last-run info |
+**Category normalization seam:** `events/categories.py` exports `normalize_category(raw: str) -> str`. Maps raw `Event.category` values (e.g. `"10K, 5K, 3K"` from `myruntime`/`ticket2me`) to display buckets (e.g. `"Fun Run / Road Race"`) at query time — no stored field mutated. Storing canonical values is a roadmap item.
 
-**Category normalization seam:** `events/categories.py` exports `normalize_category(raw: str) -> str`.
-It maps raw `Event.category` values (which `myruntime` and `ticket2me` populate with
-comma-joined race distances or ticket-tier names like `"10K, 5K, 3K"`) to canonical human-readable
-buckets (e.g. `"Fun Run / Road Race"`). The view applies this at query time — no stored field
-is mutated. Option B (adding a `raw_category` field + persisting the canonical bucket) is a
-roadmap item.
-
-**Frontend API client (`apps/frontend/src/lib/api.ts`):** exports a typed `api` object with
-methods covering every endpoint — `scrapers`, `runScraper`, `runAll`, `cancelRun`, `scraperRuns`,
-`activeRuns`, `scraperRun`, `stats`, `events`, `eventsBySource`, `eventsByCategory`, `organizers`,
-`organizer`, `venues`. A `post<T>()` helper reads the `csrftoken` cookie and sends it as the
-`X-CSRFToken` header.
+**Frontend API client (`apps/frontend/src/lib/api.ts`):** typed `api` object covering every endpoint; `post<T>()` helper reads `csrftoken` cookie and sends it as `X-CSRFToken`.
 
 ## Web UI (Legacy Django Templates)
 
-`apps/backend/events/views.py` also provides four public server-rendered views — `event_list`,
-`event_detail`, `venue_list`, `venue_detail` — plus three **staff-only review views**
-(`review_dashboard`, `review_venue_detail`, `review_set_status`). Templates live in
-`apps/backend/templates/events/`, extending `apps/backend/templates/base.html`.
-
-**Venue review UI (`/review/`):** a UX-friendly alternative to Django admin for the manual
-venue-verification workflow. All three views are gated with `@staff_member_required`. The
-dashboard shows status-count cards + filter tabs + search + a queue of venue cards.
-`review_set_status` is `@require_POST`, validates against `Venue.VerificationStatus.values`,
-writes with `update_fields` (status only), and returns the
-`templates/events/review/_status_control.html` partial. Status changes are **HTMX**-driven —
-buttons `hx-post` and swap the badge partial in place, no full reload. HTMX loaded via CDN;
-CSRF rides on `<body hx-headers='{"X-CSRFToken": ...}'>`.
+Secondary surface. Public views: `event_list`, `event_detail`, `venue_list`, `venue_detail`. Staff-gated `/review/` (venue verification): dashboard + `review_venue_detail` + `review_set_status`. All `/review/*` views are `@staff_member_required`; status changes are HTMX-driven, swapping the `_status_control.html` partial in place. Templates in `apps/backend/templates/`.
 
 ## Frontend (SvelteKit Admin Dashboard)
 
-`apps/frontend/` is a **CSR-only** SvelteKit 2 + Svelte 5 admin dashboard. The SvelteKit
-dev server proxies `/api/*` to the Django backend at `localhost:8000` (configured in
-`vite.config.ts`).
+CSR-only SvelteKit 2 + Svelte 5 dashboard. Dev server proxies `/api/*` → Django at `:8000` (`vite.config.ts`). Routes and components are listed in the **Repository Structure** tree above.
 
-**Routes:**
-
-| Route | File | Notes |
-|---|---|---|
-| `/` | `+page.svelte` + `+page.ts` | Dashboard — StatCards, BarChart (by source), DonutChart (by category normalized) |
-| `/events` | `events/+page.svelte` | Event list table with search |
-| `/organizers` | `organizers/+page.svelte` | Sortable organizer table (SortHeader + sort.ts) |
-| `/organizers/[slug]` | `organizers/[slug]/+page.svelte` | Organizer detail |
-| `/venues` | `venues/+page.svelte` | Venue list |
-| `/scrapers` | `scrapers/+page.svelte` + `+page.ts` | **Scraper Center** — scraper cards with per-card **Run** + global **Run All**, status badges (queued/running/success/failed), live polling while runs are active, run-cancellation, and a Recent Runs history table |
-
-**Shared components (`apps/frontend/src/lib/components/`):**
-- `Sidebar.svelte` — collapsible navigation with route links
-- `PageHeader.svelte` — page title + optional breadcrumb
-- `Badge.svelte` — status badge (color-coded by value)
-- `StatCard.svelte` — KPI card (icon + numeric value + label)
-- `BarChart.svelte` — Chart.js bar chart (events by source)
-- `DonutChart.svelte` — Chart.js donut chart (events by category)
-- `TableSkeleton.svelte` — loading-state skeleton rows
-- `SortHeader.svelte` — clickable column header; manages sort field + direction state
-- `+error.svelte` — global SvelteKit error boundary
-
-**Utilities:**
-- `sort.ts` — generic client-side sort helpers for table columns (operates on current page of results only; cross-page sort requires backend `ordering=` param, not yet implemented)
-- `api.ts` — typed fetch wrappers for all `/api/*` endpoints
-- `types.ts` — shared TypeScript type definitions
-- `format.ts` — display formatting helpers
+**Key conventions:** `ssr = false` enforced; Svelte 5 runes only (`$state`/`$props`/`$derived`/`$effect`); Tailwind v4 design tokens in `src/app.css @theme {}`; all API calls via `src/lib/api.ts` (never ad-hoc `fetch`).
 
 ## Key Patterns and Conventions
 

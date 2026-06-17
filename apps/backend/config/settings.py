@@ -57,6 +57,11 @@ ALLOWED_HOSTS = ['localhost', '127.0.0.1', 'testserver']
 # never hardcode or commit a real key. Empty string when unset.
 PLACES_API_KEY = os.environ.get('PLACES_API_KEY', '')
 
+# AllEvents API key (Azure APIM subscription key).
+# Sign up at https://allevents.developer.azure-api.net — Starter plan is free.
+# Add ALLEVENTS_API_KEY=<your-key> to your .env file.
+ALLEVENTS_API_KEY = os.environ.get('ALLEVENTS_API_KEY', '')
+
 # Local Claude CLI command used by events.ai_categories for AI categorization.
 # Set to the real binary name (e.g. 'claude'). No API key required.
 CLAUDE_CLI_CMD = os.environ.get('CLAUDE_CLI_CMD', 'claude')

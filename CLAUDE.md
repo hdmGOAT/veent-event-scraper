@@ -54,9 +54,7 @@ Your responsibilities:
 
 ### Repository Context
 
-Authoritative context for this repository:
-
-@process/context/all-context.md
+Authoritative context for this repository: `process/context/all-context.md`
 
 **Contains**:
 
