@@ -81,8 +81,8 @@ Create a new file with a single public function `normalize_category(raw: str) ->
    | `charity`, `fundrais` | `"Charity / Fundraiser"` |
    | `sport`, `game`, `tournament` | `"Sports"` |
 
-5. **Fallback:** return `raw.strip().title()` — preserves unknown but clean categories with
-   consistent capitalisation.
+5. **Fallback:** return `raw.strip().title()` — applies consistent title-case normalization
+   to unknown categories (transforms the capitalization; does not preserve as-is).
 
 **Design note for Option B:** The function accepts and returns plain strings with no
 ORM coupling. When Option B adds a `raw_category` field, this same function can be called

@@ -109,7 +109,8 @@ it with `source apps/backend/venv/bin/activate`, or prefix each command with `./
 - **`testserver` host:** already in `ALLOWED_HOSTS`, so the test client works out of the box.
 - **Timezone:** `USE_TZ=True`. Use `django.utils.timezone.now()` in tests, not naive
   `datetime`, or comparisons against model datetimes will be wrong.
-- **Scraper tests:** mock outbound HTTP (`requests.get`) and scraper execution
+- **Scraper tests:** mock the scraper's outbound boundary (e.g. `requests.get` for HTTP-based
+  scrapers, or browser/page objects for Playwright-backed ones) and scraper execution
   (`SCRAPERS[key]().run()`) rather than hitting live sites. For scrapers that persist via
   `save_events` / `save_organizers`, a plain `TestCase` (transactional rollback per test) is
   fine. Assert on the `{"created", "updated"}` dict and on resulting DB rows.

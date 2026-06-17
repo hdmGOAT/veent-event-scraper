@@ -412,7 +412,7 @@ After full execution, the following must all be true:
 
 ## Resume and Execution Handoff
 
-**Selected plan file:** `process/general-plans/active/2026-06-17-frontend-ux-overhaul_PLAN_17-06-26.md`
+**Selected plan file:** `process/general-plans/completed/completed_2026-06-17-frontend-ux-overhaul_PLAN_17-06-26.md`
 
 **Execute sequence:**
 1. Steps 1–7 are **core** — execute in order, verify each before proceeding.

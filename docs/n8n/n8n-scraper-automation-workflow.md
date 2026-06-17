@@ -55,7 +55,7 @@ All 8 nodes point to the same endpoint — only the `source` field in the JSON b
 
 Each node sends the header:
 ```
-X-Scraper-Key: veent-n8n-scraper-2026
+X-Scraper-Key: <SCRAPER_WEBHOOK_SECRET>
 ```
 
 This must match `SCRAPER_WEBHOOK_SECRET` in your `.env`. Change it in both places
@@ -108,7 +108,7 @@ const scrapeGooglePlaces = node({
       url: "https://YOUR-DJANGO-DOMAIN.example.com/webhooks/scrape/",
       sendHeaders: true,
       headerParameters: {
-        parameters: [{ name: "X-Scraper-Key", value: "veent-n8n-scraper-2026" }]
+        parameters: [{ name: "X-Scraper-Key", value: "<SCRAPER_WEBHOOK_SECRET>" }]
       },
       sendBody: true,
       contentType: "json",

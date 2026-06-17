@@ -92,7 +92,7 @@
 									<span class="text-muted">—</span>
 								{/if}
 							</td>
-							<td class="px-5 py-3 text-muted">{e.venue ?? '—'}</td>
+							<td class="px-5 py-3 text-muted">{e.venue || '—'}</td>
 							<td class="px-5 py-3 text-muted">{e.organizer || '—'}</td>
 							<td class="px-5 py-3"><code class="text-xs text-muted">{e.source || '—'}</code></td>
 						</tr>

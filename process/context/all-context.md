@@ -132,14 +132,14 @@ veent-event-scraper/
       manage.py
       config/                         -- Django project package (settings.py, urls.py)
       events/                         -- single Django app
-        models.py                     -- Venue, Event, Organizer, ScraperRun
-        views.py                      -- function-based views: public list/detail + /review/ + JSON API
-        urls.py                       -- app URLConf (namespace "events")
-        admin.py
-        runner.py                     -- trigger_scraper_run, cancel_run (subprocess-based)
-        categories.py                 -- normalize_category(): display-layer normalization
-        tests.py                      -- 97 tests
-        migrations/                   -- 0001–0011 applied
+        models.py                     -- Venue, Event, Organizer, ScraperRun models
+        views.py                      -- function-based views: public list/detail + staff /review/ + JSON API
+        urls.py                       -- app URLConf (namespace "events") — all routes
+        admin.py                      -- VenueAdmin, EventAdmin, OrganizerAdmin, ScraperRunAdmin
+        runner.py                     -- subprocess-based scraper runner (trigger_scraper_run, cancel_run)
+        categories.py                 -- normalize_category(): display-layer category normalization
+        tests.py                      -- Django TestCase suite (97 tests as of 2026-06-17)
+        migrations/                   -- 0001_initial … 0012_scraperrun_unique_active_constraint (applied)
         scrapers/
           base.py                     -- BaseScraper + ScrapedEvent/Venue/Organizer + save_events/save_organizers
           allevents.py / happeningnext.py  -- Playwright scrapers
@@ -216,7 +216,8 @@ Four models in `apps/backend/events/models.py`, all carrying provenance fields (
 - **`Event`** — a scraped event, optional FK to `Venue` (`on_delete=SET_NULL`,
   `related_name="events"`), optional FK to `Organizer` (`organizer_ref`, `on_delete=SET_NULL`).
   Fields: name, unique `slug`, description, `starts_at`/`ends_at`, url, image_url, price,
-  category, `organizer` (CharField), `organizer_url` (URLField), `external_id` (indexed).
+  category, `agent_categories` (JSONField — AI-assigned canonical categories, empty list = not yet classified),
+  `organizer` (CharField), `organizer_url` (URLField), `external_id` (indexed).
   Ordered by `starts_at, name`.
 
 - **`Organizer`** — an event organizer scraped from partner directories. Fields: name, unique
@@ -500,4 +501,9 @@ CSR-only SvelteKit 2 + Svelte 5 dashboard. Dev server proxies `/api/*` → Djang
 
 ## Scan Metadata
 
-Rev 3 (2026-06-17) — 10 scrapers, migrations 0001–0011, 97 backend tests passing, 0 frontend tests.
+- Generated: 2026-06-16 (rev 2); revised 2026-06-17 (rev 3)
+- Package managers: pnpm (monorepo root + frontend), pip/venv (backend)
+- Active scrapers: 10 (google_places, allevents_cdo, happeningnext_cdo, racemeister_partners, racemeister_events, myruntime, ticket2me, planout, luma, eventbrite)
+- Migrations: 0001–0012 applied
+- Backend tests: 97 (all passing, Neon Postgres)
+- Frontend tests: 0 (svelte-check + build are the only automated verification)

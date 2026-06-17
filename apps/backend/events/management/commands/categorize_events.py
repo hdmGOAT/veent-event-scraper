@@ -73,16 +73,11 @@ class Command(BaseCommand):
             )
             return
 
-        num_batches = (total + batch_size - 1) // batch_size
-        classified = 0
-        for i, start in enumerate(range(0, total, batch_size), start=1):
-            batch_ids = ids[start : start + batch_size]
-            self.stdout.write(f"  batch {i}/{num_batches} ({len(batch_ids)} events) …")
-            classified += categorize_events_by_ids(
-                batch_ids,
-                batch_size=batch_size,
-                skip_classified=not options.get("reclassify_all"),
-            )
+        classified = categorize_events_by_ids(
+            ids,
+            batch_size=batch_size,
+            skip_classified=not options.get("reclassify_all"),
+        )
 
         self.stdout.write(
             self.style.SUCCESS(f"Classified {classified}/{total} event(s).")
