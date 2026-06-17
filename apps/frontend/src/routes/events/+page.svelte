@@ -82,7 +82,15 @@
 							</td>
 							<td class="px-5 py-3 text-muted">{formatDateTime(e.starts_at)}</td>
 							<td class="px-5 py-3">
-								{#if e.category}<Badge category={e.category} />{:else}<span class="text-muted">—</span>{/if}
+								{#if e.agent_categories && e.agent_categories.length > 0}
+									{#each e.agent_categories as cat}
+										<Badge category={cat} />
+									{/each}
+								{:else if e.category}
+									<Badge category={e.category} />
+								{:else}
+									<span class="text-muted">—</span>
+								{/if}
 							</td>
 							<td class="px-5 py-3 text-muted">{e.venue ?? '—'}</td>
 							<td class="px-5 py-3 text-muted">{e.organizer || '—'}</td>
