@@ -3,7 +3,8 @@
 **Plan ID:** frontend-ux-overhaul  
 **Created:** 2026-06-17  
 **Complexity:** COMPLEX  
-**Status:** ACTIVE — awaiting EXECUTE
+**Status:** COMPLETED
+**Completion:** Completed 2026-06-17 on branch feat/ux-improvement; 5 commits; svelte-check + build pass; all 10 steps (incl. stretch 8–10) implemented.
 
 ---
 
