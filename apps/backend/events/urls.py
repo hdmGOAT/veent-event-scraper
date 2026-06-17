@@ -24,4 +24,7 @@ urlpatterns = [
     path("api/organizers/", views.api_organizers, name="api_organizers"),
     path("api/venues/", views.api_venues, name="api_venues"),
     path("api/scrapers/", views.api_scrapers, name="api_scrapers"),
+    # n8n automation webhooks
+    path("webhooks/scrape/", views.scraper_webhook, name="scraper_webhook"),
+    path("webhooks/ingest-events/", views.ingest_events_webhook, name="ingest_events_webhook"),
 ]
