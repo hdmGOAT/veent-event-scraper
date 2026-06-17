@@ -11,6 +11,7 @@ from django.utils import timezone
 from django.core.management import call_command
 
 from events import runner
+from events.categories import normalize_category
 from events.models import Event, Organizer, ScraperRun, Venue
 from events.runner import cancel_run, trigger_scraper_run
 from events.scrapers.base import ScrapedVenue, save_venues
@@ -957,3 +958,93 @@ class ApiScrapersLastRunTests(TestCase):
         racemeister_row = self._payload_for("racemeister_partners")
         self.assertIsNotNone(myruntime_row["last_run"])
         self.assertIsNone(racemeister_row["last_run"])
+
+
+class CategoryNormalizationTests(TestCase):
+    def test_distance_list_maps_to_fun_run(self):
+        self.assertEqual(normalize_category("10K, 5K, 3K"), "Fun Run / Road Race")
+
+    def test_distance_list_km_suffix_maps_to_fun_run(self):
+        self.assertEqual(normalize_category("21KM, 10KM, 5KM"), "Fun Run / Road Race")
+
+    def test_single_distance_maps_to_fun_run(self):
+        self.assertEqual(normalize_category("42K"), "Fun Run / Road Race")
+
+    def test_wave_tier_names_map_to_fun_run(self):
+        self.assertEqual(
+            normalize_category("SUB1 Elite, SUB1 Competitor, Open Wave"),
+            "Fun Run / Road Race",
+        )
+
+    def test_trail_keyword(self):
+        self.assertEqual(normalize_category("trail run"), "Trail Run")
+
+    def test_music_keyword(self):
+        self.assertEqual(normalize_category("music"), "Music")
+
+    def test_festival_keyword(self):
+        self.assertEqual(normalize_category("festival"), "Festival")
+
+    def test_workshop_keyword(self):
+        self.assertEqual(normalize_category("Photography Workshop"), "Workshop / Training")
+
+    def test_conference_keyword(self):
+        self.assertEqual(normalize_category("Tech Conference"), "Conference / Seminar")
+
+    def test_keyword_matching_is_whole_word_not_substring(self):
+        # "art" must not match as a substring inside unrelated words such as
+        # "party" or "smartphone" — those should fall back to title case.
+        self.assertEqual(normalize_category("party"), "Party")
+        self.assertEqual(normalize_category("Smartphone Expo"), "Smartphone Expo")
+        # A genuine whole-word "art" still maps to Arts & Culture.
+        self.assertEqual(normalize_category("Art Exhibit"), "Arts & Culture")
+
+    def test_unknown_falls_back_to_title_case(self):
+        self.assertEqual(
+            normalize_category("Weird Unique Event 2026"),
+            "Weird Unique Event 2026",
+        )
+
+    def test_empty_string_returns_empty(self):
+        self.assertEqual(normalize_category(""), "")
+
+    def test_api_top_n_and_other_rollup(self):
+        # Distance lists / wave tiers all collapse into one "Fun Run / Road Race"
+        # bucket; mapped keywords and clean fallbacks fill out the rest. With
+        # more than 8 canonical buckets, the surplus rolls into "Other".
+        raw_categories = [
+            "10K, 5K, 3K",          # Fun Run / Road Race
+            "SUB1 Elite, Open Wave",  # Fun Run / Road Race
+            "trail run",             # Trail Run
+            "music",                 # Music
+            "festival",              # Festival
+            "Photography Workshop",  # Workshop / Training
+            "Tech Conference",       # Conference / Seminar
+            "cycling",               # Cycling
+            "swimming",              # Swimming
+            "Charity Gala",          # Charity / Fundraiser
+            "Alpha Unique",          # Alpha Unique (fallback)
+            "Beta Unique",           # Beta Unique (fallback)
+        ]
+        for idx, cat in enumerate(raw_categories):
+            Event.objects.create(
+                name=f"Event {idx}",
+                slug=f"event-{idx}",
+                category=cat,
+                source="test",
+            )
+
+        resp = self.client.get(reverse("events:api_events_by_category"))
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertIsInstance(data, list)
+        # Top 8 + optional "Other" => at most 9 buckets.
+        self.assertLessEqual(len(data), 9)
+        # More than 8 canonical buckets exist, so "Other" must be present.
+        categories = {entry["category"] for entry in data}
+        self.assertIn("Other", categories)
+        # Every entry has a positive count and the expected shape.
+        for entry in data:
+            self.assertIn("category", entry)
+            self.assertIn("count", entry)
+            self.assertGreater(entry["count"], 0)

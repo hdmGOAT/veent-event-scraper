@@ -38,14 +38,23 @@ if browser tests are added.)
 
 ## Quick Decision Guide
 
-### Use Django's test runner for everything
+### Backend: Django's test runner
 
-This project uses **Django's built-in test framework** (`unittest`-based, via
-`manage.py test`). There is no pytest, no separate e2e runner, and no CI yet. Tests live next
-to the app in `apps/backend/events/tests.py` (64 tests as of 2026-06-17).
+The backend uses **Django's built-in test framework** (`unittest`-based, via `manage.py test`).
+There is no pytest, no separate e2e runner, and no CI yet. Tests live next to the app at
+`apps/backend/events/tests.py` — **97 tests as of 2026-06-17**, covering: scraper upsert/dedup,
+venue dedup, `verification_status` re-scrape preservation, `Organizer.status` re-scrape
+preservation, category normalization (`normalize_category`), the `/review/` UI views, and the
+scraper run-jobs subsystem (`runner.py` — trigger/cancel/run-all).
 
-CI is planned but not yet set up; when added, it should run `manage.py test` (and a migration
-check) on push/PR.
+### Frontend: svelte-check + build (no unit tests yet)
+
+The frontend has no Vitest or Playwright tests. The two automated checks are:
+- `pnpm --filter frontend check` — runs svelte-check + tsc (type errors, Svelte compiler warnings)
+- `pnpm --filter frontend build` — full Vite production build (catches import errors, missing modules)
+
+CI is planned but not yet set up. When added it should run `manage.py test`, a migration
+check, and `pnpm --filter frontend check` on push/PR.
 
 ### TestCase vs. TransactionTestCase
 
@@ -58,33 +67,38 @@ check) on push/PR.
 
 ## Default Verification Order
 
-Unless the task clearly needs a different path:
+After any backend change:
 
 1. run the narrowest relevant `manage.py test` target (a single test method/class)
 2. widen to the app (`manage.py test events`) once the unit passes
-3. for scraper/UI behavior with no automated coverage yet, verify manually via the
-   `scrape` command and `runserver` (see commands below)
+3. for scraper behavior with no automated coverage, verify manually via the `scrape` command
+
+After any frontend change:
+
+1. `pnpm --filter frontend check` — catch type and compiler errors
+2. `pnpm --filter frontend build` — catch bundler/import errors
+3. manual browser check via `pnpm dev` (proxy to Django at localhost:8000)
 
 ## Commands
 
-Activate the venv first (from repo root or `apps/backend/`):
-`source apps/backend/venv/bin/activate`
-
-Or prefix each command with the full venv path:
+All backend commands assume cwd `apps/backend/`. The venv is at `apps/backend/venv/` — activate
+it with `source apps/backend/venv/bin/activate`, or prefix each command with `./venv/bin/python`.
 
 | Purpose | Command | Notes |
 |---|---|---|
-| Run all tests | `cd apps/backend && ./venv/bin/python manage.py test events` | runs the full 64-test suite |
-| Run one test class | `./venv/bin/python manage.py test events.tests.RunnerTests` | dotted path |
-| Run one test method | `./venv/bin/python manage.py test events.tests.RunnerTests.test_trigger_creates_run_row` | |
-| Verbose | `./venv/bin/python manage.py test events -v 2` | |
-| Keep test DB | `./venv/bin/python manage.py test --keepdb` | faster reruns (Postgres) |
-| Check migrations | `./venv/bin/python manage.py makemigrations --check --dry-run` | good CI gate |
-| Apply migrations | `./venv/bin/python manage.py migrate` | |
-| Manual scrape check | `./venv/bin/python manage.py scrape --list` / `scrape myruntime` | exercises scraper end-to-end |
-| Run the app | `./venv/bin/python manage.py runserver` | Django at http://127.0.0.1:8000/ |
-
-All commands assume CWD is `apps/backend/`.
+| Run all backend tests | `cd apps/backend && ./venv/bin/python manage.py test events` | runs the full 97-test suite |
+| Run all (discovery) | `cd apps/backend && ./venv/bin/python manage.py test` | discovers `events/tests.py` |
+| Run one test class | `cd apps/backend && ./venv/bin/python manage.py test events.tests.RunnerTests` | dotted path |
+| Run one test method | `cd apps/backend && ./venv/bin/python manage.py test events.tests.RunnerTests.test_trigger_creates_run_row` | |
+| Verbose | `cd apps/backend && ./venv/bin/python manage.py test events -v 2` | |
+| Keep test DB | `cd apps/backend && ./venv/bin/python manage.py test --keepdb` | faster reruns (Postgres) |
+| Check migrations | `cd apps/backend && ./venv/bin/python manage.py makemigrations --check --dry-run` | good CI gate |
+| Apply migrations | `cd apps/backend && ./venv/bin/python manage.py migrate` | |
+| Manual scrape check | `cd apps/backend && ./venv/bin/python manage.py scrape --list` / `scrape myruntime` | lists registered scrapers / exercises one end-to-end |
+| Run the app | `cd apps/backend && ./venv/bin/python manage.py runserver` | Django at http://127.0.0.1:8000/ |
+| Frontend type-check | `pnpm --filter frontend check` | svelte-check + tsc |
+| Frontend build | `pnpm --filter frontend build` | Vite production build |
+| Full dev stack | `pnpm dev` (root) | starts backend + frontend; frontend proxies /api/* to :8000 |
 
 ## Debugging Quick Reference
 
@@ -96,19 +110,30 @@ All commands assume CWD is `apps/backend/`.
 - **Timezone:** `USE_TZ=True`. Use `django.utils.timezone.now()` in tests, not naive
   `datetime`, or comparisons against model datetimes will be wrong.
 - **Scraper tests:** mock outbound HTTP (`requests.get`) and scraper execution
-  (`SCRAPERS[key]().run()`) rather than hitting live sites. Assert on the `{"created", "updated"}`
-  dict and on resulting DB rows.
+  (`SCRAPERS[key]().run()`) rather than hitting live sites. For scrapers that persist via
+  `save_events` / `save_organizers`, a plain `TestCase` (transactional rollback per test) is
+  fine. Assert on the `{"created", "updated"}` dict and on resulting DB rows.
+- **Category tests:** `normalize_category` is a pure function — test it directly, no DB needed.
 - **Runner tests require `TransactionTestCase`:** see TestCase vs. TransactionTestCase above.
   Mock `SCRAPERS[key]().run()` so no real scraper execution happens in tests.
 - **Common failure: rows from a prior TransactionTestCase test bleeding into the next** —
   ensure `tearDown` truncates `ScraperRun.objects.all().delete()` (and any other model rows
   created without transaction rollback).
+- **Frontend check failures:** if `pnpm --filter frontend check` fails with type errors on
+  Svelte 5 runes, ensure the file is not in `node_modules` (runes are forced for all project
+  files via `vite.config.ts`).
 
 ## Known Gaps
 
+- **No frontend (Svelte) tests.** Highest-value first tests: organizer table sort logic
+  (`sort.ts`), `normalize_category` end-to-end via the `/api/events/by-category/` response
+  shape, and the `StatCard` / `Badge` component rendering.
 - **No CI** is configured yet (planned). No coverage measurement.
-- **No frontend (Svelte) tests.** The SvelteKit frontend has no unit or e2e test suite yet.
+- **No e2e tests.** No Playwright suite exists. The `/review/` HTMX flow and the SvelteKit
+  routes (including the Scraper Center) have no browser-level automated coverage.
 - **Playwright scrapers are not tested end-to-end.** `allevents_cdo` and `happeningnext_cdo`
   require a live Playwright session; they are excluded from automated tests.
 - **No view/template tests for the Django-rendered list/detail pages** (event_list, venue_list,
-  etc.), only the `/review/` staff UI has coverage.
+  etc.); only the `/review/` staff UI has coverage.
+- **Scraper mocking pattern** not yet standardized into a shared fixture or base class.
+  Each scraper test currently sets up its own mock; extract when the pattern stabilizes.

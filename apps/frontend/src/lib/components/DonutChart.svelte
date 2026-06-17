@@ -5,12 +5,25 @@
 
 	let { labels, data }: { labels: string[]; data: number[] } = $props();
 
-	// Palette cycles for arbitrary category counts.
-	const palette = ['#22d3ee', '#818cf8', '#34d399', '#fbbf24', '#f472b6', '#fb923c', '#a78bfa'];
-
 	let canvas: HTMLCanvasElement;
 
+	function token(name: string): string {
+		return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+	}
+
 	$effect(() => {
+		// Palette mixes design-system tokens with a few fixed accent hues so
+		// arbitrary category counts still get distinct, on-brand colors.
+		const palette = [
+			token('--color-accent'),
+			'#818cf8',
+			token('--color-success'),
+			token('--color-warning'),
+			'#f472b6',
+			'#fb923c',
+			'#a78bfa'
+		];
+
 		const chart = new Chart(canvas, {
 			type: 'doughnut',
 			data: {
@@ -19,7 +32,7 @@
 					{
 						data,
 						backgroundColor: labels.map((_, i) => palette[i % palette.length]),
-						borderColor: '#0f1620',
+						borderColor: token('--color-surface'),
 						borderWidth: 2
 					}
 				]
@@ -31,13 +44,13 @@
 				plugins: {
 					legend: {
 						position: 'bottom',
-						labels: { color: '#c9d4e0', boxWidth: 10, padding: 14, usePointStyle: true }
+						labels: { color: token('--color-text'), boxWidth: 10, padding: 14, usePointStyle: true }
 					},
 					tooltip: {
-						backgroundColor: '#131c28',
-						titleColor: '#e8eef5',
-						bodyColor: '#c9d4e0',
-						borderColor: '#1e2a38',
+						backgroundColor: token('--color-surface-2'),
+						titleColor: token('--color-heading'),
+						bodyColor: token('--color-text'),
+						borderColor: token('--color-border'),
 						borderWidth: 1,
 						padding: 10
 					}

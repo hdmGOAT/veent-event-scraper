@@ -31,4 +31,7 @@ urlpatterns = [
     path("api/scrapers/runs/<int:run_id>/", views.api_scraper_run_detail, name="api_scraper_run_detail"),
     path("api/scrapers/runs/", views.api_scraper_runs, name="api_scraper_runs"),
     path("api/scrapers/", views.api_scrapers, name="api_scrapers"),
+    # n8n automation webhooks
+    path("webhooks/scrape/", views.scraper_webhook, name="scraper_webhook"),
+    path("webhooks/ingest-events/", views.ingest_events_webhook, name="ingest_events_webhook"),
 ]

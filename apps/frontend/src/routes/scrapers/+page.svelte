@@ -149,6 +149,10 @@
 	});
 </script>
 
+<svelte:head>
+	<title>Scrapers — Veent Admin</title>
+</svelte:head>
+
 <PageHeader title="Scraper Center" subtitle="Trigger runs and review run history">
 	{#snippet action()}
 		<div class="flex flex-col items-end gap-1">
