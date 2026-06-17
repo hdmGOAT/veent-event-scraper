@@ -2,7 +2,8 @@ import json
 import os
 
 from django.contrib.admin.views.decorators import staff_member_required
-from django.db.models import Count, Q
+from django.core.paginator import Paginator
+from django.db.models import Count, Max, Q
 from django.http import HttpResponseBadRequest, JsonResponse
 from django.shortcuts import get_object_or_404, render
 from django.utils import timezone
@@ -208,8 +209,252 @@ def review_set_status(request, slug):
 
 
 # ---------------------------------------------------------------------------
-# n8n automation webhook — triggered by n8n to run a scraper on demand.
-# Secured by a shared secret in X-Scraper-Key header (set SCRAPER_WEBHOOK_SECRET).
+# JSON API endpoints — consumed by the SvelteKit frontend dashboard.
+# ---------------------------------------------------------------------------
+
+
+def api_stats(request):
+    total_events = Event.objects.count()
+    total_venues = Venue.objects.count()
+    verified_venues = Venue.objects.filter(
+        verification_status=Venue.VerificationStatus.VERIFIED
+    ).count()
+    total_organizers = Organizer.objects.count()
+    confirmed_organizers = Organizer.objects.filter(status="confirmed").count()
+    pending_organizers = Organizer.objects.filter(status="pending").count()
+    active_sources = (
+        Event.objects.exclude(source="").values("source").distinct().count()
+    )
+    return JsonResponse(
+        {
+            "total_events": total_events,
+            "total_venues": total_venues,
+            "verified_venues": verified_venues,
+            "total_organizers": total_organizers,
+            "confirmed_organizers": confirmed_organizers,
+            "pending_organizers": pending_organizers,
+            "active_sources": active_sources,
+        }
+    )
+
+
+def api_events_by_source(request):
+    data = list(
+        Event.objects.exclude(source="")
+        .values("source")
+        .annotate(count=Count("id"))
+        .order_by("-count")
+    )
+    return JsonResponse(data, safe=False)
+
+
+def api_events_by_category(request):
+    data = list(
+        Event.objects.exclude(category="")
+        .values("category")
+        .annotate(count=Count("id"))
+        .order_by("-count")
+    )
+    return JsonResponse(data, safe=False)
+
+
+def api_events(request):
+    q = request.GET.get("q", "").strip()
+    source = request.GET.get("source", "").strip()
+    category = request.GET.get("category", "").strip()
+    try:
+        page = max(1, int(request.GET.get("page", 1)))
+    except ValueError:
+        page = 1
+
+    events = Event.objects.select_related("venue", "organizer_ref")
+    if q:
+        events = events.filter(
+            Q(name__icontains=q) | Q(description__icontains=q)
+        )
+    if source:
+        events = events.filter(source=source)
+    if category:
+        events = events.filter(category=category)
+    events = events.order_by("-scraped_at", "name")
+
+    paginator = Paginator(events, 50)
+    page_obj = paginator.get_page(page)
+
+    results = [
+        {
+            "slug": e.slug,
+            "name": e.name,
+            "starts_at": e.starts_at.isoformat() if e.starts_at else None,
+            "ends_at": e.ends_at.isoformat() if e.ends_at else None,
+            "category": e.category,
+            "source": e.source,
+            "price": e.price,
+            "venue": e.venue.name if e.venue else None,
+            "organizer": e.organizer_display_name,
+            "url": e.url,
+        }
+        for e in page_obj
+    ]
+
+    return JsonResponse(
+        {"results": results, "total": paginator.count, "pages": paginator.num_pages, "page": page}
+    )
+
+
+def api_organizers(request):
+    q = request.GET.get("q", "").strip()
+    status = request.GET.get("status", "").strip()
+    try:
+        page = max(1, int(request.GET.get("page", 1)))
+    except ValueError:
+        page = 1
+
+    organizers = Organizer.objects.all()
+    if q:
+        organizers = organizers.filter(
+            Q(name__icontains=q) | Q(city__icontains=q) | Q(email__icontains=q)
+        )
+    if status:
+        organizers = organizers.filter(status=status)
+    organizers = organizers.order_by("name")
+
+    paginator = Paginator(organizers, 50)
+    page_obj = paginator.get_page(page)
+
+    results = [
+        {
+            "slug": o.slug,
+            "name": o.name,
+            "status": o.status,
+            "email": o.email,
+            "phone": o.phone,
+            "website": o.website,
+            "city": o.city,
+            "country": o.country,
+            "facebook_url": o.facebook_url,
+            "instagram_url": o.instagram_url,
+            "description": o.description,
+            "source": o.source,
+            "scraped_at": o.scraped_at.isoformat() if o.scraped_at else None,
+        }
+        for o in page_obj
+    ]
+
+    return JsonResponse(
+        {"results": results, "total": paginator.count, "pages": paginator.num_pages, "page": page}
+    )
+
+
+def api_organizer_detail(request, slug):
+    organizer = get_object_or_404(Organizer, slug=slug)
+    events = list(
+        organizer.events.select_related("venue").order_by("-starts_at")[:50]
+    )
+    return JsonResponse(
+        {
+            "slug": organizer.slug,
+            "name": organizer.name,
+            "status": organizer.status,
+            "email": organizer.email,
+            "phone": organizer.phone,
+            "website": organizer.website,
+            "address": organizer.address,
+            "city": organizer.city,
+            "country": organizer.country,
+            "facebook_url": organizer.facebook_url,
+            "instagram_url": organizer.instagram_url,
+            "description": organizer.description,
+            "source": organizer.source,
+            "source_url": organizer.source_url,
+            "scraped_at": organizer.scraped_at.isoformat() if organizer.scraped_at else None,
+            "events": [
+                {
+                    "slug": e.slug,
+                    "name": e.name,
+                    "starts_at": e.starts_at.isoformat() if e.starts_at else None,
+                    "category": e.category,
+                    "venue": e.venue.name if e.venue else None,
+                }
+                for e in events
+            ],
+        }
+    )
+
+
+def api_venues(request):
+    q = request.GET.get("q", "").strip()
+    status = request.GET.get("status", "").strip()
+    try:
+        page = max(1, int(request.GET.get("page", 1)))
+    except ValueError:
+        page = 1
+
+    venues = Venue.objects.annotate(event_count=Count("events"))
+    if q:
+        venues = venues.filter(Q(name__icontains=q) | Q(city__icontains=q))
+    if status:
+        venues = venues.filter(verification_status=status)
+    venues = venues.order_by("name")
+
+    paginator = Paginator(venues, 50)
+    page_obj = paginator.get_page(page)
+
+    results = [
+        {
+            "slug": v.slug,
+            "name": v.name,
+            "city": v.city,
+            "country": v.country,
+            "primary_type_display": v.primary_type_display,
+            "rating": v.rating,
+            "verification_status": v.verification_status,
+            "event_count": v.event_count,
+            "source": v.source,
+        }
+        for v in page_obj
+    ]
+
+    return JsonResponse(
+        {"results": results, "total": paginator.count, "pages": paginator.num_pages, "page": page}
+    )
+
+
+def api_scrapers(request):
+    from .scrapers import SCRAPERS
+
+    event_last = {
+        row["source"]: row["last"]
+        for row in Event.objects.values("source").annotate(last=Max("scraped_at"))
+        if row["source"]
+    }
+    org_last = {
+        row["source"]: row["last"]
+        for row in Organizer.objects.values("source").annotate(last=Max("scraped_at"))
+        if row["source"]
+    }
+
+    results = []
+    for key in SCRAPERS:
+        e_ts = event_last.get(key)
+        o_ts = org_last.get(key)
+        if e_ts and o_ts:
+            last_scraped = max(e_ts, o_ts)
+        else:
+            last_scraped = e_ts or o_ts
+        results.append(
+            {
+                "key": key,
+                "last_scraped": last_scraped.isoformat() if last_scraped else None,
+            }
+        )
+
+    return JsonResponse(results, safe=False)
+
+
+# ---------------------------------------------------------------------------
+# n8n automation webhooks — secured by X-Scraper-Key header.
+# Set SCRAPER_WEBHOOK_SECRET in .env to enable.
 # ---------------------------------------------------------------------------
 
 _WEBHOOK_SECRET = os.environ.get("SCRAPER_WEBHOOK_SECRET", "")
@@ -218,7 +463,7 @@ _WEBHOOK_SECRET = os.environ.get("SCRAPER_WEBHOOK_SECRET", "")
 @csrf_exempt
 @require_POST
 def scraper_webhook(request):
-    """Run a single scraper source on demand, called by n8n."""
+    """Run a single registered scraper source on demand, called by n8n."""
     key = request.headers.get("X-Scraper-Key", "")
     if not _WEBHOOK_SECRET or key != _WEBHOOK_SECRET:
         return JsonResponse({"error": "unauthorized"}, status=401)
@@ -230,7 +475,7 @@ def scraper_webhook(request):
 
     source = (data.get("source") or "").strip()
     if not source:
-        return JsonResponse({"error": "source field is required"}, status=400)
+        return JsonResponse({"error": "source is required"}, status=400)
 
     from events.scrapers import SCRAPERS  # noqa: PLC0415
 
@@ -245,12 +490,6 @@ def scraper_webhook(request):
         return JsonResponse({"success": True, **result})
     except Exception as exc:  # noqa: BLE001
         return JsonResponse({"success": False, "source": source, "error": str(exc)}, status=500)
-
-
-# ---------------------------------------------------------------------------
-# n8n AI ingest webhook — accepts pre-scraped event data from AI agents.
-# Matches the same X-Scraper-Key auth as scraper_webhook.
-# ---------------------------------------------------------------------------
 
 
 @csrf_exempt

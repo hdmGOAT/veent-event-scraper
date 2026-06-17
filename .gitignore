@@ -8,7 +8,7 @@ __pycache__/
 venv/
 .venv/
 env/
-
+tmp_research/
 # Django
 *.log
 db.sqlite3
@@ -19,6 +19,12 @@ db.sqlite3-journal
 # Environment / secrets
 .env
 .env.*
+
+# Node / pnpm / Turborepo monorepo
+node_modules/
+.turbo/
+apps/frontend/.svelte-kit/
+apps/frontend/build/
 
 # Editors / OS
 .DS_Store

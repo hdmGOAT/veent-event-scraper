@@ -15,6 +15,15 @@ urlpatterns = [
     path("review/", views.review_dashboard, name="review_dashboard"),
     path("review/venues/<slug:slug>/", views.review_venue_detail, name="review_venue_detail"),
     path("review/venues/<slug:slug>/status/", views.review_set_status, name="review_set_status"),
+    # JSON API — consumed by the SvelteKit frontend
+    path("api/stats/", views.api_stats, name="api_stats"),
+    path("api/events/by-source/", views.api_events_by_source, name="api_events_by_source"),
+    path("api/events/by-category/", views.api_events_by_category, name="api_events_by_category"),
+    path("api/events/", views.api_events, name="api_events"),
+    path("api/organizers/<slug:slug>/", views.api_organizer_detail, name="api_organizer_detail"),
+    path("api/organizers/", views.api_organizers, name="api_organizers"),
+    path("api/venues/", views.api_venues, name="api_venues"),
+    path("api/scrapers/", views.api_scrapers, name="api_scrapers"),
     # n8n automation webhooks
     path("webhooks/scrape/", views.scraper_webhook, name="scraper_webhook"),
     path("webhooks/ingest-events/", views.ingest_events_webhook, name="ingest_events_webhook"),
