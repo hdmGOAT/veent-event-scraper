@@ -74,7 +74,7 @@ class ScraperRunAdmin(admin.ModelAdmin):
     )
     list_filter = ("status", "scraper_key")
     readonly_fields = (
-        "scraper_key", "status", "started_at", "finished_at",
+        "scraper_key", "status", "pid", "started_at", "finished_at",
         "created_count", "updated_count", "extra_counts", "error_message",
         "triggered_by", "created_at", "updated_at",
     )

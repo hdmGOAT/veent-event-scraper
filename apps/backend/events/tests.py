@@ -811,8 +811,11 @@ class RunEndpointTests(TestCase):
         self.assertEqual(resp.status_code, 405)
 
     def test_runs_list_returns_recent_runs(self):
-        for _ in range(3):
-            ScraperRun.objects.create(scraper_key="myruntime")
+        # Use distinct statuses so only one row is "active" per key,
+        # respecting the unique_active_scraper_run DB constraint.
+        ScraperRun.objects.create(scraper_key="myruntime", status=ScraperRun.Status.QUEUED)
+        ScraperRun.objects.create(scraper_key="myruntime", status=ScraperRun.Status.SUCCESS)
+        ScraperRun.objects.create(scraper_key="racemeister_partners", status=ScraperRun.Status.FAILED)
         resp = self.client.get("/api/scrapers/runs/")
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(len(resp.json()), 3)
@@ -822,7 +825,7 @@ class RunEndpointTests(TestCase):
             scraper_key="myruntime", status=ScraperRun.Status.QUEUED
         )
         ScraperRun.objects.create(
-            scraper_key="myruntime", status=ScraperRun.Status.SUCCESS
+            scraper_key="racemeister_partners", status=ScraperRun.Status.SUCCESS
         )
         resp = self.client.get("/api/scrapers/runs/active/")
         self.assertEqual(resp.status_code, 200)

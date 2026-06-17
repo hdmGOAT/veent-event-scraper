@@ -511,7 +511,7 @@ def api_scraper_run_all(request):
 
 def api_scraper_runs(request):
     try:
-        limit = min(int(request.GET.get("limit", 50)), 200)
+        limit = max(1, min(int(request.GET.get("limit", 50)), 200))
     except ValueError:
         limit = 50
     runs = (

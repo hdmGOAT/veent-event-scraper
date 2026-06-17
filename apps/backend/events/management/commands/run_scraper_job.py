@@ -44,9 +44,15 @@ class Command(BaseCommand):
             ])
             return
 
-        run.status = ScraperRun.Status.RUNNING
-        run.started_at = timezone.now()
-        run.save(update_fields=["status", "started_at", "updated_at"])
+        # Conditional update: only transition QUEUED → RUNNING. If the run was
+        # cancelled between queuing and now, update() returns 0 and we bail out
+        # rather than overwriting the terminal CANCELLED status.
+        updated = ScraperRun.objects.filter(
+            id=run.id, status=ScraperRun.Status.QUEUED
+        ).update(status=ScraperRun.Status.RUNNING, started_at=timezone.now())
+        if not updated:
+            return  # Already cancelled — exit without doing any work.
+        run.refresh_from_db()
 
         try:
             result = SCRAPERS[key]().run()

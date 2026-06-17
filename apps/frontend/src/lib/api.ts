@@ -13,6 +13,7 @@ import type {
 	RunAllResult,
 	Scraper,
 	ScraperRun,
+	ScraperRunStatus,
 	SourceCount,
 	Stats,
 	VenueRow
@@ -75,7 +76,7 @@ export const api = {
 	venues: (params: { q?: string; status?: string; page?: number } = {}, f?: Fetch) =>
 		get<Paginated<VenueRow>>(`/venues/${qs(params)}`, f),
 	scrapers: (f?: Fetch) => get<Scraper[]>('/scrapers/', f),
-	runScraper: (key: string) => post<{ id: number; status: string }>(`/scrapers/${key}/run/`),
+	runScraper: (key: string) => post<{ id: number; status: ScraperRunStatus }>(`/scrapers/${key}/run/`),
 	runAll: () => post<RunAllResult>('/scrapers/run-all/'),
 	scraperRuns: (limit?: number, f?: Fetch) =>
 		get<ScraperRun[]>(`/scrapers/runs/${limit ? `?limit=${limit}` : ''}`, f),

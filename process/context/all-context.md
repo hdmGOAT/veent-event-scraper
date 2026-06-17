@@ -180,7 +180,7 @@ veent-event-scraper/                  -- monorepo root
         views.py                      -- function-based views: public list/detail + staff /review/ + JSON API
         urls.py                       -- app URLConf (namespace "events") — all routes
         admin.py                      -- VenueAdmin, EventAdmin, OrganizerAdmin, ScraperRunAdmin
-        runner.py                     -- daemon-thread scraper runner (trigger_scraper_run, cancel_run)
+        runner.py                     -- subprocess-based scraper runner (trigger_scraper_run, cancel_run)
         categories.py                 -- normalize_category(): display-layer category normalization
         tests.py                      -- Django TestCase suite (97 tests as of 2026-06-17)
         migrations/                   -- 0001_initial … 0011_run_cancellation (applied)
@@ -303,16 +303,20 @@ Four models in `apps/backend/events/models.py`, all carrying provenance fields (
 - **`ScraperRun`** — a single scraper run job record; the source of truth for both live job
   state and history. Fields:
   - `scraper_key` (CharField, db_index) — the SCRAPERS dict key
-  - `status` (`Status` TextChoices: `queued` / `running` / `success` / `failed`, db_index)
+  - `status` (`Status` TextChoices: `queued` / `running` / `success` / `failed` / `cancelled`,
+    db_index)
   - `started_at` / `finished_at` (DateTimeField, nullable)
   - `created_count` / `updated_count` (IntegerField, default 0)
   - `extra_counts` (JSONField, default dict) — any extra keys from run() result dict beyond
     `source/created/updated` (e.g. `organizers_created`, `organizers_updated`)
   - `error_message` (TextField, blank) — traceback string on failure
+  - `pid` (PositiveIntegerField, nullable) — OS PID of the worker subprocess, stored
+    immediately after `Popen`; used by `cancel_run` to send `SIGTERM` to the process group
   - `triggered_by` (FK to `auth.User`, nullable) — set if a logged-in user triggered the run;
     null for anonymous / run-all / cron triggers
   - `created_at` (auto_now_add) / `updated_at` (auto_now)
-  - Meta: `ordering = ["-created_at"]`
+  - Meta: `ordering = ["-created_at"]`; partial unique constraint `unique_active_scraper_run`
+    (`scraper_key` unique where `status IN ('queued', 'running')`) prevents duplicate active runs
   - Properties: `duration_seconds` (computed from timestamps), `is_active`
 
 **Dedup invariants:**
@@ -375,17 +379,25 @@ it in `SCRAPERS`. Persistence is automatic — do not write to the ORM directly 
 
 ## Run-Jobs Subsystem
 
-Admins trigger scraper runs from the SvelteKit Scraper Center. The system is thread-based —
+Admins trigger scraper runs from the SvelteKit Scraper Center. The system is subprocess-based —
 no Celery or task queues.
 
 **`apps/backend/events/runner.py`** owns all execution logic:
 - `trigger_scraper_run(key, triggered_by=None) -> tuple[ScraperRun, bool]` — public function.
-  Checks for an active run (concurrency guard, returns `(None, True)` for 409). Creates a
-  `ScraperRun` row (status=queued), spawns a daemon `threading.Thread`, returns `(run, False)`.
-- `_run_scraper(run_id, key)` — thread target. Updates row to `running`, calls
-  `SCRAPERS[key]().run()`, updates row to `success`/`failed` with counts/traceback.
-  Always calls `django.db.connection.close()` in the finally block (required for thread-local
-  DB connections).
+  Checks for an active run (concurrency guard; also backed by DB partial unique constraint
+  `unique_active_scraper_run`; returns `(None, True)` for 409). Creates a `ScraperRun` row
+  (status=queued), spawns `manage.py run_scraper_job --run-id <id>` via `subprocess.Popen`
+  with `start_new_session=True` (POSIX `setsid` — gives the child its own process group),
+  stores the subprocess `pid` on the row, and returns `(run, False)`.
+- `cancel_run(run_id) -> tuple[ScraperRun, str]` — sends `SIGTERM` to the worker's process
+  group via `os.killpg(os.getpgid(pid), SIGTERM)`, then marks the row `CANCELLED`. Uses
+  `SELECT FOR UPDATE` + `refresh_from_db` to handle the race where the worker writes
+  `SUCCESS`/`FAILED` concurrently.
+
+**`apps/backend/events/management/commands/run_scraper_job.py`** — the worker process:
+- Fetches the `ScraperRun` row, transitions `QUEUED → RUNNING` via a conditional
+  `filter(status=QUEUED).update(...)` (exits cleanly if already cancelled), calls
+  `SCRAPERS[key]().run()`, writes `success`/`failed` + counts/traceback back to the row.
 
 **`run()` return dict → count mapping:**
 - Event scrapers return `{source, created, updated}` → `created_count`, `updated_count`, `extra_counts={}`
@@ -627,9 +639,9 @@ dev server proxies `/api/*` to the Django backend at `localhost:8000` (configure
 - **Database is Neon PostgreSQL** in every environment; SQLite is no longer used. `db.sqlite3`
   may linger in the working tree but is git-ignored and is **not** a source of truth.
 - **Test database is Neon PostgreSQL.** Tests run against the real Neon DB (not a local
-  SQLite temp DB). `TransactionTestCase` is required for tests that involve `threading.Thread`
-  (runner tests) because `TestCase` wraps everything in a transaction that threads cannot see.
-  Runner tests mock `SCRAPERS[key]().run()` to avoid real network calls.
+  Neon PostgreSQL DB. Runner tests use `TransactionTestCase` (not `TestCase`) because the worker
+  runs as a separate subprocess that opens its own DB connection and cannot see an open
+  transaction. Runner tests mock `SCRAPERS[key]().run()` to avoid real network calls.
 - **Category data gotcha:** `myruntime` and `ticket2me` populate `Event.category` with
   comma-joined race distances or ticket-tier names (e.g. `"10K, 5K, 3K"`,
   `"SUB1 Elite, SUB1 Competitor, Open Wave"`). Raw values are not human-readable category

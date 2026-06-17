@@ -25,7 +25,7 @@ import sys
 import traceback  # noqa: F401  (kept for parity with worker error handling; safe import)
 
 from django.conf import settings
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.utils import timezone
 
 from .models import ScraperRun
@@ -61,7 +61,12 @@ def trigger_scraper_run(key: str, triggered_by=None):
     if active_exists:
         return None, True
 
-    run = ScraperRun.objects.create(scraper_key=key, triggered_by=triggered_by)
+    try:
+        run = ScraperRun.objects.create(scraper_key=key, triggered_by=triggered_by)
+    except IntegrityError:
+        # Two concurrent requests both passed the exists() check — the DB partial
+        # unique constraint (unique_active_scraper_run) caught the duplicate.
+        return None, True
 
     # BASE_DIR resolves to apps/backend/ (the dir containing manage.py).
     manage_py = settings.BASE_DIR / "manage.py"

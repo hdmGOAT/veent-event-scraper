@@ -119,9 +119,10 @@
 	function formatDuration(seconds: number | null): string {
 		if (seconds === null) return '—';
 		if (seconds < 1) return '<1s';
-		if (seconds < 60) return `${Math.round(seconds)}s`;
-		const m = Math.floor(seconds / 60);
-		const s = Math.round(seconds % 60);
+		const total = Math.round(seconds);
+		if (total < 60) return `${total}s`;
+		const m = Math.floor(total / 60);
+		const s = total % 60;
 		return `${m}m ${s}s`;
 	}
 
@@ -173,8 +174,9 @@
 <div class="space-y-6 p-8">
 	<div class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
 		{#each scrapers as s (s.key)}
-			{@const run = runningMap.get(s.key) ?? null}
-			{@const isActive = run?.status === 'queued' || run?.status === 'running'}
+			{@const activeRun = runningMap.get(s.key) ?? null}
+			{@const isActive = activeRun?.status === 'queued' || activeRun?.status === 'running'}
+			{@const run = activeRun ?? recentRuns.find((r) => r.scraper_key === s.key) ?? null}
 			<div class="rounded-xl border border-border bg-surface p-5">
 				<div class="flex items-start justify-between">
 					<div class="flex items-center gap-2">

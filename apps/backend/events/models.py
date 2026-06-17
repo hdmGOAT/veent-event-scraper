@@ -250,6 +250,13 @@ class ScraperRun(models.Model):
 
     class Meta:
         ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["scraper_key"],
+                condition=models.Q(status__in=["queued", "running"]),
+                name="unique_active_scraper_run",
+            )
+        ]
 
     def __str__(self):
         return f"{self.scraper_key} [{self.status}] @ {self.created_at:%Y-%m-%d %H:%M}"

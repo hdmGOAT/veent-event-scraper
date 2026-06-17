@@ -117,6 +117,6 @@ export interface Paginated<T> {
 }
 
 export interface RunAllResult {
-	created: { key: string; id: number; status: string }[];
+	created: { key: string; id: number; status: ScraperRunStatus }[];
 	skipped: string[];
 }
