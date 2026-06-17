@@ -10,7 +10,9 @@ import type {
 	Organizer,
 	OrganizerDetail,
 	Paginated,
+	RunAllResult,
 	Scraper,
+	ScraperRun,
 	SourceCount,
 	Stats,
 	VenueRow
@@ -20,6 +22,30 @@ type Fetch = typeof fetch;
 
 async function get<T>(path: string, fetchFn: Fetch = fetch): Promise<T> {
 	const res = await fetchFn(`/api${path}`);
+	if (!res.ok) {
+		throw new Error(`API ${path} failed: ${res.status} ${res.statusText}`);
+	}
+	return res.json() as Promise<T>;
+}
+
+function getCsrfToken(): string {
+	return (
+		document.cookie
+			.split(';')
+			.find((c) => c.trim().startsWith('csrftoken='))
+			?.split('=')[1] ?? ''
+	);
+}
+
+async function post<T>(path: string): Promise<T> {
+	const res = await fetch(`/api${path}`, {
+		method: 'POST',
+		headers: {
+			'X-CSRFToken': getCsrfToken(),
+			'Content-Type': 'application/json'
+		},
+		credentials: 'include'
+	});
 	if (!res.ok) {
 		throw new Error(`API ${path} failed: ${res.status} ${res.statusText}`);
 	}
@@ -48,5 +74,12 @@ export const api = {
 	organizer: (slug: string, f?: Fetch) => get<OrganizerDetail>(`/organizers/${slug}/`, f),
 	venues: (params: { q?: string; status?: string; page?: number } = {}, f?: Fetch) =>
 		get<Paginated<VenueRow>>(`/venues/${qs(params)}`, f),
-	scrapers: (f?: Fetch) => get<Scraper[]>('/scrapers/', f)
+	scrapers: (f?: Fetch) => get<Scraper[]>('/scrapers/', f),
+	runScraper: (key: string) => post<{ id: number; status: string }>(`/scrapers/${key}/run/`),
+	runAll: () => post<RunAllResult>('/scrapers/run-all/'),
+	scraperRuns: (limit?: number, f?: Fetch) =>
+		get<ScraperRun[]>(`/scrapers/runs/${limit ? `?limit=${limit}` : ''}`, f),
+	activeRuns: (f?: Fetch) => get<ScraperRun[]>('/scrapers/runs/active/', f),
+	scraperRun: (id: number, f?: Fetch) => get<ScraperRun>(`/scrapers/runs/${id}/`, f),
+	cancelRun: (id: number) => post<ScraperRun>(`/scrapers/runs/${id}/cancel/`)
 };
