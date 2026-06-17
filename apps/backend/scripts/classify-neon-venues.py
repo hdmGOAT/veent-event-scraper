@@ -111,7 +111,7 @@ def fetch_unclassified(conn, limit=None, reclassify_all=False):
                 "FROM events_venue "
                 "WHERE agents_primary_types = '[]'::jsonb ORDER BY id"
             )
-        if limit:
+        if limit is not None:
             sql += f" LIMIT {int(limit)}"
         cur.execute(sql)
         return cur.fetchall()
@@ -174,7 +174,7 @@ def _validate_labels(raw) -> list[str]:
     return valid or ["Other"]
 
 
-def call_claude(batch: list[dict]) -> dict[int, list[str]]:
+def call_claude(batch: list[dict]) -> dict[int, list[str]] | None:
     """Call Claude CLI for a batch, return {venue_id: [labels]}."""
     prompt = _build_prompt(batch)
     venue_ids = [row["id"] for row in batch]
@@ -208,7 +208,8 @@ def call_claude(batch: list[dict]) -> dict[int, list[str]]:
     try:
         parsed = json.loads(text)
     except json.JSONDecodeError:
-        parsed = {}
+        print(f"WARNING: Claude returned non-JSON for batch; venues will be retried next run.", file=sys.stderr)
+        return None
 
     mapping = parsed if isinstance(parsed, dict) else {}
     return {vid: _validate_labels(mapping.get(str(vid))) for vid in venue_ids}
@@ -252,11 +253,15 @@ def main():
         print(f"  batch {i}/{num_batches} ({len(batch)} venues) …", end=" ", flush=True)
         try:
             updates = call_claude(batch)
+            if updates is None:
+                print("skipped (bad JSON from Claude)")
+                continue
             write_types(conn, updates)
             classified += len(updates)
             print("done")
         except Exception as e:
             print(f"FAILED: {e}")
+            conn.rollback()
 
     conn.close()
     print(f"\nDone. Classified {classified}/{total} venue(s).")
