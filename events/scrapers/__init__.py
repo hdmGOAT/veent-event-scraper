@@ -10,6 +10,7 @@ from .myruntime import MyRuntimeScraper
 from .places import GooglePlacesVenueScraper
 from .racemeister import RacemeisterPartnersScraper
 from .racemeister_events import RacemeisterEventsScraper
+from .ticket2me import Ticket2MeScraper
 
 # key -> scraper class. Add new scrapers here.
 SCRAPERS = {
@@ -19,6 +20,7 @@ SCRAPERS = {
     "racemeister_partners": RacemeisterPartnersScraper,
     "racemeister_events": RacemeisterEventsScraper,
     "myruntime": MyRuntimeScraper,
+    "ticket2me": Ticket2MeScraper,
 }
 
 __all__ = ["BaseScraper", "ScrapedEvent", "ScrapedOrganizer", "ScrapedVenue", "SCRAPERS"]
