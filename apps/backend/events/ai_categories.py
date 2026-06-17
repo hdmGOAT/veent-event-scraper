@@ -153,11 +153,14 @@ def batch_categorize(events, cli_cmd: str | None = None) -> dict[int, list[str]]
     return _parse_response(completed.stdout, event_ids)
 
 
-def categorize_events_by_ids(ids, batch_size: int = 20) -> int:
+def categorize_events_by_ids(ids, batch_size: int = 20, skip_classified: bool = True) -> int:
     """Classify the given events and persist results to ``agent_categories``.
 
-    Fetches ``Event`` rows by PK, calls :func:`batch_categorize` in batches, and
-    bulk-updates ``agent_categories``. Returns the number of events classified.
+    Queries Neon first to find which events are already classified, then only
+    calls Claude for the uncategorized ones — avoids spending tokens on events
+    that already have labels. Pass ``skip_classified=False`` to force
+    re-classification of everything (e.g. ``--all`` flag).
+
     Only this function writes to ``agent_categories``.
     """
     from events.models import Event
@@ -166,7 +169,11 @@ def categorize_events_by_ids(ids, batch_size: int = 20) -> int:
     if not ids:
         return 0
 
-    events = list(Event.objects.filter(pk__in=ids))
+    qs = Event.objects.filter(pk__in=ids)
+    if skip_classified:
+        qs = qs.filter(agent_categories=[])
+
+    events = list(qs)
     if not events:
         return 0
 
