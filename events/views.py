@@ -1,11 +1,130 @@
 from django.contrib.admin.views.decorators import staff_member_required
 from django.db.models import Count, Q
+from django.db.models.functions import TruncMinute
 from django.http import HttpResponseBadRequest
 from django.shortcuts import get_object_or_404, render
 from django.utils import timezone
 from django.views.decorators.http import require_POST
 
-from .models import Event, Venue
+from .models import Event, Organizer, Venue
+
+# Human-friendly labels for scraper source keys, used across the dashboard.
+SOURCE_LABELS = {
+    "google_places": "Google Places",
+    "allevents_cdo": "AllEvents CDO",
+    "happeningnext_cdo": "HappeningNext CDO",
+    "racemeister_partners": "Racemeister",
+    "racemeister_events": "Racemeister",
+    "myruntime": "MyRuntime",
+}
+
+# Donut slice colors, reused in order for the "Events by Category" chart.
+CATEGORY_COLORS = ["#5ec8e0", "#9b8cff", "#4fd1a5", "#e6a04f", "#e878b0", "#6c8cff", "#f06d6d"]
+
+
+def _source_label(key):
+    """Prettify a scraper source key for display."""
+    if not key:
+        return "Unknown"
+    return SOURCE_LABELS.get(key, key.replace("_", " ").title())
+
+
+def dashboard(request):
+    """Platform overview: live KPIs, source/category breakdowns, recent activity.
+
+    All metrics here are derived from the current database. A few panels in the
+    design (System Health services, per-job durations) have no backing telemetry
+    yet, so the template renders those as static illustrative values.
+    """
+    today = timezone.localdate()
+    total_events = Event.objects.count()
+    new_today = Event.objects.filter(scraped_at__date=today).count()
+
+    # Active sources = distinct non-empty source keys present in events.
+    active_sources = Event.objects.exclude(source="").values("source").distinct().count()
+
+    # Duplicate approximation: no cross-source dedup engine exists yet, so we
+    # surface exact-name overlap (records sharing a name beyond the first).
+    distinct_names = Event.objects.values("name").distinct().count()
+    duplicates = max(total_events - distinct_names, 0)
+    dup_groups = (
+        Event.objects.values("name").annotate(n=Count("id")).filter(n__gt=1).count()
+    )
+
+    # Events by source (top 5) → bar chart.
+    source_rows = list(
+        Event.objects.exclude(source="")
+        .values("source")
+        .annotate(n=Count("id"))
+        .order_by("-n")[:5]
+    )
+    max_source = max((r["n"] for r in source_rows), default=0)
+    by_source = [
+        {
+            "label": _source_label(r["source"]),
+            "count": r["n"],
+            "height": round(r["n"] / max_source * 100) if max_source else 0,
+        }
+        for r in source_rows
+    ]
+
+    # Events by category (top 5) → donut segments with cumulative offsets.
+    cat_rows = list(
+        Event.objects.exclude(category="")
+        .values("category")
+        .annotate(n=Count("id"))
+        .order_by("-n")[:5]
+    )
+    cat_total = sum(r["n"] for r in cat_rows) or 1
+    by_category = []
+    cumulative = 0.0
+    for i, r in enumerate(cat_rows):
+        pct = round(r["n"] / cat_total * 100, 1)
+        by_category.append(
+            {
+                "label": r["category"],
+                "count": r["n"],
+                "pct": pct,
+                "gap": round(100 - pct, 1),
+                "color": CATEGORY_COLORS[i % len(CATEGORY_COLORS)],
+                "offset": round(25 - cumulative, 1),
+            }
+        )
+        cumulative += pct
+
+    # Recent scraping activity — batches grouped by source + minute scraped.
+    recent = list(
+        Event.objects.exclude(scraped_at__isnull=True)
+        .annotate(minute=TruncMinute("scraped_at"))
+        .values("source", "minute")
+        .annotate(n=Count("id"))
+        .order_by("-minute")[:6]
+    )
+    recent_activity = [
+        {
+            "time": timezone.localtime(r["minute"]).strftime("%H:%M:%S"),
+            "source": _source_label(r["source"]),
+            "count": r["n"],
+        }
+        for r in recent
+    ]
+
+    context = {
+        "total_events": total_events,
+        "total_events_display": f"{total_events:,}",
+        "new_today": new_today,
+        "active_sources": active_sources,
+        "duplicates": duplicates,
+        "duplicates_display": f"{duplicates:,}",
+        "dup_groups": dup_groups,
+        "by_source": by_source,
+        "by_category": by_category,
+        "recent_activity": recent_activity,
+        "venue_total": Venue.objects.count(),
+        "organizer_total": Organizer.objects.count(),
+        "now": timezone.localtime(),
+    }
+    return render(request, "events/dashboard.html", context)
 
 
 def event_list(request):
