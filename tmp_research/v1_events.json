@@ -1,1 +1,0 @@
-{"errorCode": "REQUEST_VALIDATION_EXCEPTION", "errors": {"is_live": ["required field"], "page": ["required field"], "per_page": ["required field"]}}
