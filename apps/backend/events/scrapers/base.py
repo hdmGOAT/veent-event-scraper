@@ -6,12 +6,15 @@ in ``save_events`` so individual scrapers stay small.
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Iterable
 
 from django.utils import timezone
 from django.utils.text import slugify
+
+logger = logging.getLogger(__name__)
 
 from events.models import Event, Organizer, Venue
 
@@ -89,7 +92,34 @@ class BaseScraper:
         if not self.source:
             raise ValueError(f"{type(self).__name__}.source must be set")
         events = list(self.fetch())
-        return save_events(self.source, events)
+        result = save_events(self.source, events)
+        _categorize_after_save(result)
+        return result
+
+
+def _categorize_after_save(result: dict) -> None:
+    """Auto-classify newly saved events. Never crashes the scraper run.
+
+    Reads ``event_ids`` from a ``save_events`` result and asks the AI
+    categorizer to classify them. Any failure (CLI missing, timeout, bad
+    output) is logged as a warning and swallowed — categorization is a
+    best-effort enrichment, not a hard dependency of scraping.
+    """
+    event_ids = result.get("event_ids") if isinstance(result, dict) else None
+    if not event_ids:
+        return
+    try:
+        from events.ai_categories import categorize_events_by_ids
+
+        categorize_events_by_ids(event_ids)
+    except Exception:  # noqa: BLE001 — never let categorization crash a scrape
+        logger.warning(
+            "Auto-categorization failed for %d events; they were saved with "
+            "agent_categories=[]. Run `manage.py categorize_events --uncategorized` "
+            "to backfill.",
+            len(event_ids),
+            exc_info=True,
+        )
 
 
 def _unique_slug(model, base: str) -> str:
@@ -176,9 +206,14 @@ def _resolve_organizer(organizer_url: str, organizer_name: str) -> Organizer | N
 
 
 def save_events(source: str, events: Iterable[ScrapedEvent]) -> dict:
-    """Persist scraped events, upserting on (source, external_id) when present."""
+    """Persist scraped events, upserting on (source, external_id) when present.
+
+    Returns a dict including ``event_ids``: the PKs of every event created or
+    updated this run, so callers (e.g. ``BaseScraper.run``) can categorize them.
+    """
     now = timezone.now()
     created = updated = 0
+    event_ids: list[int] = []
 
     for se in events:
         venue = _upsert_venue(source, se.venue, now)[0] if se.venue else None
@@ -206,11 +241,18 @@ def save_events(source: str, events: Iterable[ScrapedEvent]) -> dict:
                 setattr(existing, k, v)
             existing.save()
             updated += 1
+            event_ids.append(existing.pk)
         else:
-            Event.objects.create(slug=_unique_slug(Event, se.name), **fields)
+            obj = Event.objects.create(slug=_unique_slug(Event, se.name), **fields)
             created += 1
+            event_ids.append(obj.pk)
 
-    return {"source": source, "created": created, "updated": updated}
+    return {
+        "source": source,
+        "created": created,
+        "updated": updated,
+        "event_ids": event_ids,
+    }
 
 
 def save_organizers(source: str, organizers: Iterable[ScrapedOrganizer]) -> dict:

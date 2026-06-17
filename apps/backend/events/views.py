@@ -250,22 +250,31 @@ def api_events_by_source(request):
 
 
 def api_events_by_category(request):
-    # Aggregate raw (category, count) rows, then collapse them into a small
-    # canonical set at display time. The stored Event.category is never changed.
-    TOP_N = 8
+    # Prefer the AI-assigned agent_categories. Events not yet classified
+    # (agent_categories == []) gracefully fall back to the rule-based
+    # normalize_category() so the donut chart stays meaningful during backfill.
+    # The stored Event.category is never changed.
+    from collections import Counter
 
-    raw_rows = (
-        Event.objects.exclude(category="")
+    TOP_N = 8
+    buckets: Counter = Counter()
+
+    # Events with agent_categories populated — unnest each event's list.
+    for e in Event.objects.exclude(agent_categories=[]).only("agent_categories"):
+        for label in e.agent_categories:
+            if label:
+                buckets[label] += 1
+
+    # Fallback: events without agent_categories — use the rule-based normalizer.
+    for row in (
+        Event.objects.filter(agent_categories=[])
+        .exclude(category="")
         .values("category")
         .annotate(count=Count("id"))
-    )
-
-    buckets: dict[str, int] = {}
-    for row in raw_rows:
+    ):
         canonical = normalize_category(row["category"])
-        if not canonical:
-            continue
-        buckets[canonical] = buckets.get(canonical, 0) + row["count"]
+        if canonical:
+            buckets[canonical] += row["count"]
 
     # Sort by count desc, then name asc so equal counts order deterministically
     # (otherwise which categories land in "Other" can vary between requests).
@@ -309,6 +318,7 @@ def api_events(request):
             "starts_at": e.starts_at.isoformat() if e.starts_at else None,
             "ends_at": e.ends_at.isoformat() if e.ends_at else None,
             "category": e.category,
+            "agent_categories": e.agent_categories,
             "source": e.source,
             "price": e.price,
             "venue": e.venue.name if e.venue else None,

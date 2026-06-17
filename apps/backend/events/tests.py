@@ -1,13 +1,23 @@
+import json
 from unittest import mock
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.urls import reverse
 
+from events import ai_categories
 from events.categories import normalize_category
 from events.models import Event, Organizer, Venue
 from events.scrapers.base import ScrapedVenue, save_venues
 from events.scrapers.places import GooglePlacesVenueScraper
+
+
+def _fake_cli(stdout):
+    """Return a mock subprocess.run result with the given stdout."""
+    completed = mock.Mock()
+    completed.stdout = stdout
+    completed.returncode = 0
+    return completed
 
 
 def _fake_response(payload):
@@ -579,3 +589,98 @@ class CategoryNormalizationTests(TestCase):
             self.assertIn("category", entry)
             self.assertIn("count", entry)
             self.assertGreater(entry["count"], 0)
+
+
+class AiCategoriesTests(TestCase):
+    """Unit tests for the AI categorization service.
+
+    All tests mock subprocess.run so no actual CLI is invoked.
+    """
+
+    def _make_event(self, name, category="", description=""):
+        return Event.objects.create(
+            name=name,
+            slug=name.lower().replace(" ", "-"),
+            category=category,
+            description=description,
+            source="test",
+        )
+
+    def test_batch_categorize_parses_valid_response(self):
+        e1 = self._make_event("CDO Fun Run 5K", category="5K, 10K")
+        e2 = self._make_event("Tech Summit 2026", category="")
+        payload = json.dumps({
+            str(e1.pk): ["Fun Run / Road Race"],
+            str(e2.pk): ["Conference / Seminar"],
+        })
+        with mock.patch.object(
+            ai_categories.subprocess, "run", return_value=_fake_cli(payload)
+        ) as run:
+            result = ai_categories.batch_categorize([e1, e2], cli_cmd="fake-claude")
+
+        self.assertEqual(result[e1.pk], ["Fun Run / Road Race"])
+        self.assertEqual(result[e2.pk], ["Conference / Seminar"])
+        # The injected fake command was used.
+        self.assertEqual(run.call_args.args[0][0], "fake-claude")
+
+    def test_invalid_labels_fall_back_to_other(self):
+        e1 = self._make_event("Mystery Event")
+        payload = json.dumps({str(e1.pk): ["Not A Real Category"]})
+        with mock.patch.object(
+            ai_categories.subprocess, "run", return_value=_fake_cli(payload)
+        ):
+            result = ai_categories.batch_categorize([e1], cli_cmd="fake-claude")
+        self.assertEqual(result[e1.pk], ["Other"])
+
+    def test_missing_event_in_response_falls_back_to_other(self):
+        e1 = self._make_event("Ghost Event")
+        with mock.patch.object(
+            ai_categories.subprocess, "run", return_value=_fake_cli("{}")
+        ):
+            result = ai_categories.batch_categorize([e1], cli_cmd="fake-claude")
+        self.assertEqual(result[e1.pk], ["Other"])
+
+    def test_malformed_json_falls_back_to_other(self):
+        e1 = self._make_event("Garbled Event")
+        with mock.patch.object(
+            ai_categories.subprocess, "run", return_value=_fake_cli("not json at all")
+        ):
+            result = ai_categories.batch_categorize([e1], cli_cmd="fake-claude")
+        self.assertEqual(result[e1.pk], ["Other"])
+
+    def test_missing_cli_raises_helpful_error(self):
+        e1 = self._make_event("Any Event")
+        with mock.patch.object(
+            ai_categories.subprocess, "run", side_effect=FileNotFoundError()
+        ):
+            with self.assertRaises(FileNotFoundError) as ctx:
+                ai_categories.batch_categorize([e1], cli_cmd="missing-claude")
+        self.assertIn("CLAUDE_CLI_CMD", str(ctx.exception))
+        self.assertIn("missing-claude", str(ctx.exception))
+
+    def test_categorize_events_by_ids_persists_labels(self):
+        e1 = self._make_event("CDO Marathon", category="42K")
+        e2 = self._make_event("Jazz Night")
+        payload = json.dumps({
+            str(e1.pk): ["Fun Run / Road Race"],
+            str(e2.pk): ["Music & Concert"],
+        })
+        with mock.patch.object(
+            ai_categories.subprocess, "run", return_value=_fake_cli(payload)
+        ):
+            count = ai_categories.categorize_events_by_ids([e1.pk, e2.pk])
+
+        self.assertEqual(count, 2)
+        e1.refresh_from_db()
+        e2.refresh_from_db()
+        self.assertEqual(e1.agent_categories, ["Fun Run / Road Race"])
+        self.assertEqual(e2.agent_categories, ["Music & Concert"])
+
+    def test_categorize_events_by_ids_empty_input(self):
+        self.assertEqual(ai_categories.categorize_events_by_ids([]), 0)
+
+    def test_batch_categorize_empty_input_no_subprocess(self):
+        with mock.patch.object(ai_categories.subprocess, "run") as run:
+            result = ai_categories.batch_categorize([], cli_cmd="fake-claude")
+        self.assertEqual(result, {})
+        run.assert_not_called()
