@@ -8,7 +8,7 @@ __pycache__/
 venv/
 .venv/
 env/
-
+tmp_research/
 # Django
 *.log
 db.sqlite3
