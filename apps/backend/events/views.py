@@ -439,6 +439,7 @@ def api_venues(request):
             "city": v.city,
             "country": v.country,
             "primary_type_display": v.primary_type_display,
+            "agents_primary_types": v.agents_primary_types,
             "rating": v.rating,
             "verification_status": v.verification_status,
             "event_count": v.event_count,

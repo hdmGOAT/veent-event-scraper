@@ -98,7 +98,7 @@
 						{#each data.results as v (v.slug)}
 						<tr class="transition-colors hover:bg-surface-2">
 							<td class="px-5 py-3 font-medium text-heading">{v.name}</td>
-							<td class="px-5 py-3 text-muted">{v.primary_type_display || '—'}</td>
+							<td class="px-5 py-3 text-muted">{v.agents_primary_types.length ? v.agents_primary_types.join(', ') : (v.primary_type_display || '—')}</td>
 							<td class="px-5 py-3 text-muted">{[v.city, v.country].filter(Boolean).join(', ') || '—'}</td>
 							<td class="px-5 py-3 text-muted">{v.rating != null ? `★ ${v.rating}` : '—'}</td>
 							<td class="px-5 py-3 text-muted">{v.event_count}</td>

@@ -71,6 +71,7 @@ export interface VenueRow {
 	city: string;
 	country: string;
 	primary_type_display: string;
+	agents_primary_types: string[];
 	rating: number | null;
 	verification_status: VenueStatus;
 	event_count: number;
