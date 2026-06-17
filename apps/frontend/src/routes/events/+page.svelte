@@ -2,6 +2,7 @@
 	import { api } from '$lib/api';
 	import Badge from '$lib/components/Badge.svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
+	import TableSkeleton from '$lib/components/TableSkeleton.svelte';
 	import { formatDateTime } from '$lib/format';
 	import type { EventRow, Paginated } from '$lib/types';
 
@@ -35,6 +36,10 @@
 	});
 </script>
 
+<svelte:head>
+	<title>Events — Veent Admin</title>
+</svelte:head>
+
 <PageHeader title="Events" subtitle="Raw scraped events across all sources" />
 
 <div class="space-y-5 p-8">
@@ -44,12 +49,6 @@
 		oninput={(e) => onSearch(e.currentTarget.value)}
 		class="w-full max-w-md rounded-lg border border-border bg-surface px-4 py-2 text-sm text-text placeholder:text-muted focus:border-accent focus:outline-none"
 	/>
-
-	{#if error}
-		<p class="rounded-lg border border-danger/40 bg-danger-bg/40 px-4 py-3 text-sm text-danger">
-			Failed to load events: {error}
-		</p>
-	{/if}
 
 	<div class="overflow-hidden rounded-xl border border-border bg-surface">
 		<table class="w-full text-sm">
@@ -63,13 +62,16 @@
 					<th class="px-5 py-3 font-semibold">Source</th>
 				</tr>
 			</thead>
-			<tbody class="divide-y divide-border">
-				{#if loading && !data}
-					<tr><td colspan="6" class="px-5 py-10 text-center text-muted">Loading…</td></tr>
-				{:else if data && data.results.length === 0}
-					<tr><td colspan="6" class="px-5 py-10 text-center text-muted">No events found.</td></tr>
-				{:else if data}
-					{#each data.results as e (e.slug)}
+			{#if loading && !data}
+				<TableSkeleton columns={6} />
+			{:else}
+				<tbody class="divide-y divide-border">
+					{#if error}
+						<tr><td colspan="6" class="px-5 py-8 text-center text-sm text-danger">{error}</td></tr>
+					{:else if data && data.results.length === 0}
+						<tr><td colspan="6" class="px-5 py-8 text-center text-sm text-muted">No results found.</td></tr>
+					{:else if data}
+						{#each data.results as e (e.slug)}
 						<tr class="transition-colors hover:bg-surface-2">
 							<td class="px-5 py-3 font-medium text-heading">
 								{#if e.url}
@@ -80,15 +82,16 @@
 							</td>
 							<td class="px-5 py-3 text-muted">{formatDateTime(e.starts_at)}</td>
 							<td class="px-5 py-3">
-								{#if e.category}<Badge status={e.category} />{:else}<span class="text-muted">—</span>{/if}
+								{#if e.category}<Badge category={e.category} />{:else}<span class="text-muted">—</span>{/if}
 							</td>
 							<td class="px-5 py-3 text-muted">{e.venue ?? '—'}</td>
 							<td class="px-5 py-3 text-muted">{e.organizer || '—'}</td>
 							<td class="px-5 py-3"><code class="text-xs text-muted">{e.source || '—'}</code></td>
 						</tr>
-					{/each}
-				{/if}
-			</tbody>
+						{/each}
+					{/if}
+				</tbody>
+			{/if}
 		</table>
 	</div>
 
