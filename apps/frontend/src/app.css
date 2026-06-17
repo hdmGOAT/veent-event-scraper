@@ -1,0 +1,38 @@
+@import 'tailwindcss';
+
+/* ------------------------------------------------------------------ */
+/* Veent admin dashboard — dark design system.                        */
+/* Custom color tokens become Tailwind utilities (bg-surface, etc.).  */
+/* ------------------------------------------------------------------ */
+@theme {
+	--color-bg: #0a0e14;
+	--color-surface: #0f1620;
+	--color-surface-2: #131c28;
+	--color-border: #1e2a38;
+	--color-muted: #6b7a8d;
+	--color-text: #c9d4e0;
+	--color-heading: #e8eef5;
+	--color-accent: #22d3ee;
+	--color-accent-dim: #0e7490;
+
+	--color-success: #34d399;
+	--color-success-bg: #064e3b;
+	--color-warning: #fbbf24;
+	--color-warning-bg: #4d3a09;
+	--color-danger: #f87171;
+	--color-danger-bg: #4c1d1d;
+
+	--font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+}
+
+html,
+body {
+	background-color: var(--color-bg);
+	color: var(--color-text);
+	font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+}
+
+* {
+	scrollbar-width: thin;
+	scrollbar-color: var(--color-border) transparent;
+}
