@@ -11,18 +11,28 @@ jobs:
   backend:
     name: Backend (Django)
     runs-on: ubuntu-latest
-    # Serialize all backend runs — tests share a single Neon test DB so
-    # concurrent runs cause duplicate-key errors on django_content_type.
-    concurrency:
-      group: neon-test-db
-      cancel-in-progress: false
     defaults:
       run:
         working-directory: apps/backend
 
     env:
-      # Hardcoded insecure key — safe for CI, never used in production
       SECRET_KEY: "ci-only-insecure-secret-key-do-not-use-in-production"
+      DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/test_db"
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: test_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
 
     steps:
       - uses: actions/checkout@v4
@@ -43,11 +53,7 @@ jobs:
         run: python manage.py makemigrations --check --dry-run
 
       - name: Run tests
-        run: python manage.py test events --verbosity=2 --keepdb
-        env:
-          # Required: set DATABASE_URL in repo → Settings → Secrets → Actions.
-          # Tests use a real Neon Postgres DB; SQLite fallback breaks TransactionTestCase.
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: python manage.py test events --verbosity=2
 
   # ── Frontend: type-check + production build ──────────────────────────────
   frontend:
