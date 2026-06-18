@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Globe } from 'lucide-svelte';
+	import { Globe, Download } from 'lucide-svelte';
 	import { api } from '$lib/api';
 	import Badge from '$lib/components/Badge.svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
@@ -44,6 +44,15 @@
 		status = value;
 	}
 
+	function exportCsv() {
+		let url = '/api/organizers/export/';
+		const params: string[] = [];
+		if (q) params.push(`q=${encodeURIComponent(q)}`);
+		if (status) params.push(`status=${encodeURIComponent(status)}`);
+		if (params.length) url += `?${params.join('&')}`;
+		window.location.href = url;
+	}
+
 	$effect(() => {
 		const _q = q;
 		const _status = status;
@@ -86,6 +95,14 @@
 			oninput={(e) => onSearch(e.currentTarget.value)}
 			class="w-full max-w-xs rounded-lg border border-border bg-surface px-4 py-2 text-sm text-text placeholder:text-muted focus:border-accent focus:outline-none"
 		/>
+
+		<button
+			onclick={exportCsv}
+			class="flex items-center gap-2 rounded-lg border border-border bg-surface px-3 py-2 text-sm font-medium text-muted transition-colors hover:text-text"
+		>
+			<Download size={16} />
+			Export CSV
+		</button>
 	</div>
 
 	<div class="overflow-hidden rounded-lg border border-border bg-surface">
