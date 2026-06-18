@@ -32,7 +32,7 @@
 	<!-- Stat cards -->
 	<div class="grid grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-4">
 		<StatCard label="Total Events" value={data.stats.total_events.toLocaleString()} sub="across all sources" href="/events" />
-		<StatCard label="Active Sources" value={data.scrapers.length} sub="{data.stats.active_sources} with events" href="/scrapers" />
+		<StatCard label="Active Sources" value={data.scrapers.length.toLocaleString()} sub="{data.stats.active_sources} with events" href="/scrapers" />
 		<StatCard
 			label="Organizers"
 			value={data.stats.total_organizers.toLocaleString()}
