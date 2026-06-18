@@ -151,7 +151,7 @@ export interface RunAllResult {
 
 export interface DedupResult {
 	output: string;
-	entity: string;
+	entity: 'events' | 'venues' | 'organizers' | 'all';
 }
 
 export interface ScriptStartResult {

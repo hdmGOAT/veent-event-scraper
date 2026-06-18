@@ -1,6 +1,8 @@
 import csv
 import json
+import logging
 import os
+import threading
 
 from django.contrib.admin.views.decorators import staff_member_required
 from django.core.paginator import Paginator
@@ -10,6 +12,8 @@ from django.shortcuts import get_object_or_404, render
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_POST
+
+logger = logging.getLogger(__name__)
 
 from .categories import normalize_category
 from .models import Event, Organizer, ScraperRun, Venue
@@ -619,12 +623,19 @@ def api_dedup_trigger(request):
     import sys
     from pathlib import Path
 
+    key = request.headers.get("X-Scraper-Key", "")
+    if not _WEBHOOK_SECRET or key != _WEBHOOK_SECRET:
+        return JsonResponse({"error": "unauthorized"}, status=401)
+
     scripts_dir = Path(__file__).resolve().parent.parent.parent / "scripts"
     python = sys.executable
 
     entity = request.POST.get("entity") or "all"  # default: all
     if entity not in ("events", "venues", "organizers", "all"):
         return JsonResponse({"error": "Invalid entity"}, status=400)
+
+    if not _DEDUP_LOCK.acquire(blocking=False):
+        return JsonResponse({"error": "Dedup already running"}, status=409)
 
     try:
         result = subprocess.run(
@@ -635,14 +646,17 @@ def api_dedup_trigger(request):
             cwd=str(scripts_dir.parent),  # apps/backend
         )
         stdout = result.stdout.strip()
-        stderr = result.stderr.strip()
         if result.returncode != 0:
-            return JsonResponse({"error": stderr or "Dedup script failed"}, status=500)
+            logger.error("dedup script failed (entity=%s): %s", entity, result.stderr.strip())
+            return JsonResponse({"error": "Dedup operation failed"}, status=500)
         return JsonResponse({"output": stdout, "entity": entity})
     except subprocess.TimeoutExpired:
         return JsonResponse({"error": "Dedup timed out after 120s"}, status=504)
     except Exception as exc:  # noqa: BLE001
-        return JsonResponse({"error": str(exc)}, status=500)
+        logger.exception("dedup trigger error (entity=%s): %s", entity, exc)
+        return JsonResponse({"error": "An error occurred"}, status=500)
+    finally:
+        _DEDUP_LOCK.release()
 
 
 _ALLOWED_SCRIPTS = {
@@ -784,6 +798,7 @@ def api_scrapers(request):
 # ---------------------------------------------------------------------------
 
 _WEBHOOK_SECRET = os.environ.get("SCRAPER_WEBHOOK_SECRET", "")
+_DEDUP_LOCK = threading.Lock()
 
 
 @csrf_exempt
