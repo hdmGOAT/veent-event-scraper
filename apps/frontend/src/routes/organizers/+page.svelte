@@ -240,8 +240,8 @@
 		<div class="flex items-center justify-between text-sm text-muted">
 			<span>{data.total.toLocaleString()} organizers · page {data.page} of {data.pages}</span>
 			<div class="flex gap-2">
-				<button class="rounded-lg border border-border px-3 py-1.5 enabled:hover:bg-surface-2 disabled:opacity-40" disabled={page <= 1} onclick={() => (page -= 1)}>Previous</button>
-				<button class="rounded-lg border border-border px-3 py-1.5 enabled:hover:bg-surface-2 disabled:opacity-40" disabled={page >= data.pages} onclick={() => (page += 1)}>Next</button>
+				<button class="rounded-lg border border-border px-3 py-1.5 enabled:hover:bg-surface-2 disabled:opacity-40" disabled={page <= 1 || loading} onclick={() => (page -= 1)}>Previous</button>
+				<button class="rounded-lg border border-border px-3 py-1.5 enabled:hover:bg-surface-2 disabled:opacity-40" disabled={page >= data.pages || loading} onclick={() => (page += 1)}>Next</button>
 			</div>
 		</div>
 	{/if}
