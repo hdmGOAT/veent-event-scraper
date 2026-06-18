@@ -84,7 +84,7 @@ def _fetch_all_listings() -> list[dict]:
         if not batch:
             break
         all_items.extend(batch)
-        logger.info("sistic: %d / %d listings fetched", len(all_items), total or "?")
+        logger.info("sistic: %d / %s listings fetched", len(all_items), total or "?")
         if total and len(all_items) >= total:
             break
         first += _PER_PAGE
