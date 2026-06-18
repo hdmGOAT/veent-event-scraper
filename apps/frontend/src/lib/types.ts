@@ -78,6 +78,9 @@ export interface VenueMapPin {
 	rating: number | null;
 	latitude: number;
 	longitude: number;
+	verification_status: VenueStatus;
+	website: string;
+	event_count: number;
 }
 
 export interface VenueRow {
