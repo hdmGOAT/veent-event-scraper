@@ -33,7 +33,9 @@ export interface EventRow {
 	source: string;
 	price: string;
 	venue: string | null;
+	venue_slug: string | null;
 	organizer: string;
+	organizer_slug: string | null;
 	url: string;
 }
 
@@ -71,10 +73,35 @@ export interface VenueRow {
 	city: string;
 	country: string;
 	primary_type_display: string;
+	agents_primary_types: string[];
 	rating: number | null;
 	verification_status: VenueStatus;
 	event_count: number;
 	source: string;
+}
+
+export interface VenueDetail {
+	slug: string;
+	name: string;
+	address: string;
+	city: string;
+	country: string;
+	website: string;
+	rating: number | null;
+	about: string;
+	primary_type_display: string;
+	agents_primary_types: string[];
+	verification_status: VenueStatus;
+	source: string;
+	source_url: string;
+	scraped_at: string | null;
+	events: {
+		slug: string;
+		name: string;
+		starts_at: string | null;
+		category: string;
+		organizer: string;
+	}[];
 }
 
 export type ScraperRunStatus = 'queued' | 'running' | 'success' | 'failed' | 'cancelled';
@@ -120,4 +147,15 @@ export interface Paginated<T> {
 export interface RunAllResult {
 	created: { key: string; id: number; status: ScraperRunStatus }[];
 	skipped: string[];
+}
+
+export interface DedupResult {
+	output: string;
+	entity: 'events' | 'venues' | 'organizers' | 'all';
+}
+
+export interface ScriptStartResult {
+	started: boolean;
+	script: string;
+	pid: number;
 }

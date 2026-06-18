@@ -122,6 +122,221 @@ def _categorize_after_save(result: dict) -> None:
         )
 
 
+def _dedup_after_save(entity: str, ids: list[int]) -> None:
+    """Post-save dedup guard. Best-effort; never raises to the caller.
+
+    A lightweight inline guard run at scrape time, kept deliberately cheaper
+    than the standalone ``scripts/deduplicate.py`` tool:
+
+    * events     — URL-exact match only (fast path; name+date matching is left
+                   to the standalone script).
+    * venues     — website URL match, then name+city match.
+    * organizers — website URL match, then name match.
+
+    Any failure is logged as a warning and swallowed so a dedup bug can never
+    abort a scrape run, mirroring ``_categorize_after_save``.
+    """
+    if not ids:
+        return
+    try:
+        if entity == "events":
+            _dedup_events_by_url(ids)
+        elif entity == "venues":
+            _dedup_venues_by_name_city(ids)
+        elif entity == "organizers":
+            _dedup_organizers_by_website(ids)
+    except Exception:  # noqa: BLE001 — never let dedup crash a scrape
+        logger.warning("_dedup_after_save(%s) failed", entity, exc_info=True)
+
+
+def _normalize_name(name: str | None) -> str:
+    """Lowercase, strip accents + punctuation, collapse whitespace. "" for blank."""
+    import re
+    import unicodedata
+
+    if not name:
+        return ""
+    text = unicodedata.normalize("NFKD", str(name))
+    text = text.encode("ascii", "ignore").decode("ascii").lower()
+    text = re.sub(r"[^\w\s]", "", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _dedup_normalize_url(url: str | None) -> str:
+    """Scheme-less, UTM-stripped, query-sorted, slash-trimmed URL key.
+
+    Unlike ``_normalize_url`` (which preserves the scheme for organizer
+    resolution), the dedup path drops the scheme so ``http://`` and ``https://``
+    collapse together — matching scripts/dedup.normalize_url.
+    """
+    from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
+
+    if not url:
+        return ""
+    parsed = urlparse(str(url).strip().lower())
+    netloc, path = parsed.netloc, parsed.path
+    if not netloc and path:
+        netloc, _, rest = path.partition("/")
+        path = "/" + rest if rest else ""
+    path = path.rstrip("/")
+    pairs = [
+        (k, v) for k, v in parse_qsl(parsed.query, keep_blank_values=True)
+        if not k.startswith("utm_")
+    ]
+    pairs.sort()
+    return urlunparse(("", netloc, path, "", urlencode(pairs), ""))
+
+
+def _group_by(rows, key_fn) -> list[list[int]]:
+    """Bucket ``(pk, *)`` rows by ``key_fn``; return groups with 2+ pks.
+
+    The first pk in each group (lowest pk = oldest row) is treated as the
+    winner for this lightweight inline path.
+    """
+    buckets: dict = {}
+    for row in rows:
+        key = key_fn(row)
+        if key in ("", None):
+            continue
+        buckets.setdefault(key, []).append(row[0])
+    return [sorted(pks) for pks in buckets.values() if len(pks) >= 2]
+
+
+def _fill_missing(winner, losers, protected: set[str]) -> None:
+    """Copy each empty winner field from the first loser that has a value."""
+    skip = {"id", "slug", "created_at", "updated_at"} | protected
+    for field in winner._meta.concrete_fields:
+        name = field.name
+        if name in skip or field.is_relation:
+            continue
+        w_value = getattr(winner, name)
+        if not _is_blank(w_value):
+            continue
+        for loser in losers:
+            l_value = getattr(loser, name)
+            if not _is_blank(l_value):
+                setattr(winner, name, l_value)
+                break
+
+
+def _is_blank(value) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, str) and value.strip() == "":
+        return True
+    if isinstance(value, (list, dict, tuple)) and len(value) == 0:
+        return True
+    return False
+
+
+def _dedup_events_by_url(ids: list[int]) -> None:
+    """Merge events in ``ids`` that share a normalized URL (URL-exact only)."""
+    rows = list(
+        Event.objects.filter(pk__in=ids).exclude(url="").values_list("pk", "url")
+    )
+    for group in _group_by(rows, lambda r: _dedup_normalize_url(r[1])):
+        winner_id, loser_ids = group[0], group[1:]
+        winner = Event.objects.get(pk=winner_id)
+        losers = list(Event.objects.filter(pk__in=loser_ids))
+        _fill_missing(winner, losers, {"agent_categories", "source", "external_id"})
+        winner.save()
+        Event.objects.filter(pk__in=loser_ids).delete()
+
+
+def _dedup_venues_by_name_city(ids: list[int]) -> None:
+    """Merge venues in ``ids`` by website URL, then by name+city.
+
+    Name+city groups are skipped when their members carry differing non-empty
+    ``place_id`` values: a distinct stable source id means a genuinely distinct
+    place, so the upsert path's place_id-keyed identity is preserved.
+    """
+    qs = Venue.objects.filter(pk__in=ids)
+    web_rows = list(qs.exclude(website="").values_list("pk", "website"))
+    nc_rows = list(qs.values_list("pk", "name", "city"))
+    place_ids = dict(qs.values_list("pk", "place_id"))
+
+    groups = _group_by(web_rows, lambda r: _dedup_normalize_url(r[1]))
+    groups += [
+        g
+        for g in _group_by(
+            nc_rows,
+            lambda r: (_normalize_name(r[1]), (r[2] or "").strip().lower()),
+        )
+        if not _has_conflicting_place_ids(g, place_ids)
+    ]
+    _apply_groups(
+        Venue, _dedup_merge_overlaps(groups),
+        protected={"agents_primary_types", "verification_status", "place_id", "source"},
+        venue_fk=True,
+    )
+
+
+def _has_conflicting_place_ids(pks: list[int], place_ids: dict) -> bool:
+    """True if the group contains two or more distinct non-empty place_ids."""
+    distinct = {p for p in (place_ids.get(pk, "") for pk in pks) if p}
+    return len(distinct) >= 2
+
+
+def _dedup_organizers_by_website(ids: list[int]) -> None:
+    """Merge organizers in ``ids`` by website URL, then by name."""
+    qs = Organizer.objects.filter(pk__in=ids)
+    web_rows = list(qs.exclude(website="").values_list("pk", "website"))
+    name_rows = list(qs.values_list("pk", "name"))
+    groups = _group_by(web_rows, lambda r: _dedup_normalize_url(r[1]))
+    groups += _group_by(name_rows, lambda r: _normalize_name(r[1]))
+    _apply_groups(
+        Organizer, _dedup_merge_overlaps(groups),
+        protected={"agents_primary_types", "status", "source", "external_id"},
+        organizer_fk=True,
+    )
+
+
+def _dedup_merge_overlaps(groups: list[list[int]]) -> list[list[int]]:
+    """Union-merge groups that share any pk; keep lowest pk first as winner."""
+    merged: list[set[int]] = []
+    for group in groups:
+        g = set(group)
+        placed = False
+        for existing in merged:
+            if existing & g:
+                existing |= g
+                placed = True
+                break
+        if not placed:
+            merged.append(g)
+    # Second pass to collapse any now-bridged sets.
+    result: list[set[int]] = []
+    for s in merged:
+        placed = False
+        for r in result:
+            if r & s:
+                r |= s
+                placed = True
+                break
+        if not placed:
+            result.append(set(s))
+    return [sorted(s) for s in result if len(s) >= 2]
+
+
+def _apply_groups(model, groups, protected, venue_fk=False, organizer_fk=False):
+    """Merge each group's losers into the winner and hard-delete the losers."""
+    for group in groups:
+        winner_id, loser_ids = group[0], group[1:]
+        if not loser_ids:
+            continue
+        winner = model.objects.get(pk=winner_id)
+        losers = list(model.objects.filter(pk__in=loser_ids))
+        _fill_missing(winner, losers, protected)
+        winner.save()
+        if venue_fk:
+            Event.objects.filter(venue_id__in=loser_ids).update(venue_id=winner_id)
+        if organizer_fk:
+            Event.objects.filter(organizer_ref_id__in=loser_ids).update(
+                organizer_ref_id=winner_id
+            )
+        model.objects.filter(pk__in=loser_ids).delete()
+
+
 def _unique_slug(model, base: str) -> str:
     base = slugify(base) or "item"
     slug = base
@@ -247,6 +462,8 @@ def save_events(source: str, events: Iterable[ScrapedEvent]) -> dict:
             created += 1
             event_ids.append(obj.pk)
 
+    _dedup_after_save("events", event_ids)
+
     return {
         "source": source,
         "created": created,
@@ -263,6 +480,7 @@ def save_organizers(source: str, organizers: Iterable[ScrapedOrganizer]) -> dict
     """
     now = timezone.now()
     created = updated = 0
+    organizer_ids: list[int] = []
 
     for so in organizers:
         existing = None
@@ -282,17 +500,31 @@ def save_organizers(source: str, organizers: Iterable[ScrapedOrganizer]) -> dict
         )
 
         if existing:
+            # Always update provenance and display name.
+            always_update = {"name", "source", "scraped_at"}
+            changed = False
             for k, v in contact_fields.items():
-                setattr(existing, k, v)
-            existing.save()
+                if k in always_update:
+                    setattr(existing, k, v)
+                    changed = True
+                elif v and not getattr(existing, k):
+                    # Only fill blank fields — never clobber existing contact data.
+                    setattr(existing, k, v)
+                    changed = True
+            if changed:
+                existing.save()
             updated += 1
+            organizer_ids.append(existing.pk)
         else:
-            Organizer.objects.create(
+            org = Organizer.objects.create(
                 slug=_unique_slug(Organizer, so.name),
                 status=Organizer.STATUS_PENDING,
                 **contact_fields,
             )
             created += 1
+            organizer_ids.append(org.pk)
+
+    _dedup_after_save("organizers", organizer_ids)
 
     return {"source": source, "created": created, "updated": updated}
 
@@ -306,10 +538,15 @@ def save_venues(source: str, venues: Iterable[ScrapedVenue]) -> dict:
     """
     now = timezone.now()
     created = updated = 0
+    venue_ids: list[int] = []
     for sv in venues:
-        _, was_created = _upsert_venue(source, sv, now)
+        venue, was_created = _upsert_venue(source, sv, now)
+        venue_ids.append(venue.pk)
         if was_created:
             created += 1
         else:
             updated += 1
+
+    _dedup_after_save("venues", venue_ids)
+
     return {"source": source, "created": created, "updated": updated}

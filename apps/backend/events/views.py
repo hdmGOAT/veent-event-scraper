@@ -1,14 +1,19 @@
+import csv
 import json
+import logging
 import os
+import threading
 
 from django.contrib.admin.views.decorators import staff_member_required
 from django.core.paginator import Paginator
 from django.db.models import Count, Max, Q
-from django.http import HttpResponseBadRequest, JsonResponse
+from django.http import HttpResponse, HttpResponseBadRequest, JsonResponse
 from django.shortcuts import get_object_or_404, render
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_POST
+
+logger = logging.getLogger(__name__)
 
 from .categories import normalize_category
 from .models import Event, Organizer, ScraperRun, Venue
@@ -297,6 +302,8 @@ def api_events(request):
         page = max(1, int(request.GET.get("page", 1)))
     except ValueError:
         page = 1
+    upcoming = request.GET.get("upcoming", "").strip()
+    ordering = request.GET.get("ordering", "").strip()
 
     events = Event.objects.select_related("venue", "organizer_ref")
     if q:
@@ -307,7 +314,16 @@ def api_events(request):
         events = events.filter(source=source)
     if category:
         events = events.filter(category=category)
-    events = events.order_by("-scraped_at", "name")
+    if upcoming == "1":
+        events = events.filter(starts_at__gte=timezone.now())
+
+    _order_map = {
+        "name": ["name"],
+        "-name": ["-name"],
+        "starts_at": ["starts_at", "name"],
+        "-starts_at": ["-starts_at", "name"],
+    }
+    events = events.order_by(*_order_map.get(ordering, ["-scraped_at", "name"]))
 
     paginator = Paginator(events, 50)
     page_obj = paginator.get_page(page)
@@ -323,7 +339,9 @@ def api_events(request):
             "source": e.source,
             "price": e.price,
             "venue": e.venue.name if e.venue else None,
+            "venue_slug": e.venue.slug if e.venue else None,
             "organizer": e.organizer_display_name,
+            "organizer_slug": e.organizer_ref.slug if e.organizer_ref_id else None,
             "url": e.url,
         }
         for e in page_obj
@@ -378,6 +396,62 @@ def api_organizers(request):
     )
 
 
+def api_organizers_export(request):
+    """Export all organizers matching the current filters as a CSV download.
+
+    Uses the same q + status filter logic as api_organizers but with no
+    pagination — every matching row is written. Status is rendered with the
+    human-readable display label, and datetimes use ISO 8601 strings.
+    """
+    q = request.GET.get("q", "").strip()
+    status = request.GET.get("status", "").strip()
+
+    organizers = Organizer.objects.all()
+    if q:
+        organizers = organizers.filter(
+            Q(name__icontains=q) | Q(city__icontains=q) | Q(email__icontains=q)
+        )
+    if status:
+        organizers = organizers.filter(status=status)
+    organizers = organizers.order_by("name")
+
+    response = HttpResponse(content_type="text/csv; charset=utf-8")
+    response["Content-Disposition"] = 'attachment; filename="organizers.csv"'
+
+    writer = csv.writer(response)
+    writer.writerow(
+        [
+            "Name",
+            "Email",
+            "Phone",
+            "Website",
+            "Address",
+            "City",
+            "Country",
+            "Facebook",
+            "Instagram",
+            "Source",
+        ]
+    )
+    for o in organizers:
+        writer.writerow(
+            [
+                o.name,
+                o.email,
+                o.phone,
+                o.website,
+                o.address,
+                o.city,
+                o.country,
+                o.facebook_url,
+                o.instagram_url,
+                o.source,
+            ]
+        )
+
+    return response
+
+
 def api_organizer_detail(request, slug):
     organizer = get_object_or_404(Organizer, slug=slug)
     events = list(
@@ -414,6 +488,49 @@ def api_organizer_detail(request, slug):
     )
 
 
+def api_venue_detail(request, slug):
+    venue = get_object_or_404(Venue, slug=slug)
+    events = list(venue.events.select_related("organizer_ref").order_by("-starts_at")[:50])
+    return JsonResponse(
+        {
+            "slug": venue.slug,
+            "name": venue.name,
+            "address": venue.address,
+            "city": venue.city,
+            "country": venue.country,
+            "website": venue.website,
+            "rating": venue.rating,
+            "about": venue.about,
+            "primary_type_display": venue.primary_type_display,
+            "agents_primary_types": venue.agents_primary_types,
+            "verification_status": venue.verification_status,
+            "source": venue.source,
+            "source_url": venue.source_url,
+            "scraped_at": venue.scraped_at.isoformat() if venue.scraped_at else None,
+            "events": [
+                {
+                    "slug": e.slug,
+                    "name": e.name,
+                    "starts_at": e.starts_at.isoformat() if e.starts_at else None,
+                    "category": e.category,
+                    "organizer": e.organizer_display_name,
+                }
+                for e in events
+            ],
+        }
+    )
+
+
+def api_venue_types(request):
+    types = list(
+        Venue.objects.exclude(primary_type_display="")
+        .values_list("primary_type_display", flat=True)
+        .distinct()
+        .order_by("primary_type_display")
+    )
+    return JsonResponse(types, safe=False)
+
+
 def api_venues(request):
     q = request.GET.get("q", "").strip()
     status = request.GET.get("status", "").strip()
@@ -421,13 +538,28 @@ def api_venues(request):
         page = max(1, int(request.GET.get("page", 1)))
     except ValueError:
         page = 1
+    venue_type = request.GET.get("type", "").strip()
+    ordering = request.GET.get("ordering", "").strip()
 
     venues = Venue.objects.annotate(event_count=Count("events"))
     if q:
         venues = venues.filter(Q(name__icontains=q) | Q(city__icontains=q))
     if status:
         venues = venues.filter(verification_status=status)
-    venues = venues.order_by("name")
+    if venue_type:
+        venues = venues.filter(primary_type_display=venue_type)
+
+    _order_map = {
+        "name": ["name"],
+        "-name": ["-name"],
+        "city": ["city", "name"],
+        "-city": ["-city", "name"],
+        "rating": ["rating", "name"],
+        "-rating": ["-rating", "name"],
+        "event_count": ["event_count", "name"],
+        "-event_count": ["-event_count", "name"],
+    }
+    venues = venues.order_by(*_order_map.get(ordering, ["name"]))
 
     paginator = Paginator(venues, 50)
     page_obj = paginator.get_page(page)
@@ -439,6 +571,7 @@ def api_venues(request):
             "city": v.city,
             "country": v.country,
             "primary_type_display": v.primary_type_display,
+            "agents_primary_types": v.agents_primary_types,
             "rating": v.rating,
             "verification_status": v.verification_status,
             "event_count": v.event_count,
@@ -517,6 +650,89 @@ def api_scraper_run_all(request):
             created.append({"key": key, "id": run.id, "status": run.status})
 
     return JsonResponse({"created": created, "skipped": skipped}, status=200)
+
+
+@csrf_exempt
+@require_POST
+def api_dedup_trigger(request):
+    # SECURITY NOTE: Intentionally unauthenticated — same posture as
+    # api_scraper_trigger. This is an internal admin tool; revisit when real
+    # auth is added to the frontend.
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    scripts_dir = Path(__file__).resolve().parent.parent.parent / "scripts"
+    python = sys.executable
+
+    entity = request.POST.get("entity") or "all"  # default: all
+    if entity not in ("events", "venues", "organizers", "all"):
+        return JsonResponse({"error": "Invalid entity"}, status=400)
+
+    if not _DEDUP_LOCK.acquire(blocking=False):
+        return JsonResponse({"error": "Dedup already running"}, status=409)
+
+    try:
+        result = subprocess.run(
+            [python, str(scripts_dir / "deduplicate.py"), "--entity", entity],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            cwd=str(scripts_dir.parent),  # apps/backend
+        )
+        stdout = result.stdout.strip()
+        if result.returncode != 0:
+            logger.error("dedup script failed (entity=%s): %s", entity, result.stderr.strip())
+            return JsonResponse({"error": "Dedup operation failed"}, status=500)
+        return JsonResponse({"output": stdout, "entity": entity})
+    except subprocess.TimeoutExpired:
+        return JsonResponse({"error": "Dedup timed out after 120s"}, status=504)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("dedup trigger error (entity=%s): %s", entity, exc)
+        return JsonResponse({"error": "An error occurred"}, status=500)
+    finally:
+        _DEDUP_LOCK.release()
+
+
+_ALLOWED_SCRIPTS = {
+    "categorize-events": "categorize-neon-events.py",
+    "classify-venues": "classify-neon-venues.py",
+}
+
+
+@csrf_exempt
+@require_POST
+def api_script_trigger(request, script_name: str):
+    """Fire-and-forget trigger for long-running AI scripts in scripts/.
+
+    Returns immediately with {"started": true, "pid": <pid>}. The script runs
+    in a detached OS process — check server logs for output.
+
+    SECURITY NOTE: Intentionally unauthenticated — same posture as
+    api_scraper_trigger. This is an internal admin tool; revisit when real
+    auth is added to the frontend.
+    """
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    if script_name not in _ALLOWED_SCRIPTS:
+        return JsonResponse({"error": f"Unknown script: {script_name}"}, status=400)
+
+    scripts_dir = Path(__file__).resolve().parent.parent.parent / "scripts"
+    python = sys.executable
+    script_file = scripts_dir / _ALLOWED_SCRIPTS[script_name]
+
+    try:
+        process = subprocess.Popen(
+            [python, str(script_file)],
+            cwd=str(scripts_dir.parent),
+            start_new_session=True,
+        )
+        return JsonResponse({"started": True, "script": script_name, "pid": process.pid})
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("script trigger error (script=%s): %s", script_name, exc)
+        return JsonResponse({"error": "Failed to start script"}, status=500)
 
 
 def api_scraper_runs(request):
@@ -622,6 +838,11 @@ def api_scrapers(request):
 # ---------------------------------------------------------------------------
 
 _WEBHOOK_SECRET = os.environ.get("SCRAPER_WEBHOOK_SECRET", "")
+# Process-local lock — prevents concurrent dedup runs within one worker but
+# does NOT protect across multiple gunicorn workers. Acceptable for this
+# internal single-worker dev/staging setup; upgrade to a DB advisory lock or
+# Redis lock if moving to multi-worker production.
+_DEDUP_LOCK = threading.Lock()
 
 
 @csrf_exempt

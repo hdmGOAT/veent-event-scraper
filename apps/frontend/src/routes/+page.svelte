@@ -1,5 +1,6 @@
 <script lang="ts">
 	import BarChart from '$lib/components/BarChart.svelte';
+	import ChartSkeleton from '$lib/components/ChartSkeleton.svelte';
 	import DonutChart from '$lib/components/DonutChart.svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import StatCard from '$lib/components/StatCard.svelte';
@@ -7,6 +8,13 @@
 	import type { PageData } from './$types';
 
 	let { data }: { data: PageData } = $props();
+
+	// Data arrives via +page.ts load(); show chart skeletons until the first
+	// client tick confirms render (also covers slow-network navigation).
+	let loading = $state(true);
+	$effect(() => {
+		loading = false;
+	});
 
 	const sourceLabels = $derived(data.bySource.map((r) => titleize(r.source)));
 	const sourceData = $derived(data.bySource.map((r) => r.count));
@@ -23,17 +31,19 @@
 <div class="space-y-6 p-8">
 	<!-- Stat cards -->
 	<div class="grid grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-4">
-		<StatCard label="Total Events" value={data.stats.total_events.toLocaleString()} sub="across all sources" />
-		<StatCard label="Active Sources" value={data.stats.active_sources} sub="{data.scrapers.length} scrapers registered" />
+		<StatCard label="Total Events" value={data.stats.total_events.toLocaleString()} sub="across all sources" href="/events" />
+		<StatCard label="Active Sources" value={data.scrapers.length.toLocaleString()} sub="{data.stats.active_sources} with events" href="/scrapers" />
 		<StatCard
 			label="Organizers"
 			value={data.stats.total_organizers.toLocaleString()}
 			sub="{data.stats.confirmed_organizers} confirmed · {data.stats.pending_organizers} pending"
+			href="/organizers"
 		/>
 		<StatCard
 			label="Venues"
 			value={data.stats.total_venues.toLocaleString()}
 			sub="{data.stats.verified_venues} verified"
+			href="/venues"
 		/>
 	</div>
 
@@ -42,7 +52,9 @@
 		<div class="rounded-xl border border-border bg-surface p-6">
 			<h2 class="text-base font-semibold text-heading">Events by Source</h2>
 			<p class="mb-4 text-sm text-muted">All time collected</p>
-			{#if sourceData.length}
+			{#if loading}
+				<ChartSkeleton />
+			{:else if sourceData.length}
 				<BarChart labels={sourceLabels} data={sourceData} />
 			{:else}
 				<p class="py-16 text-center text-sm text-muted">No events scraped yet.</p>
@@ -52,7 +64,9 @@
 		<div class="rounded-xl border border-border bg-surface p-6">
 			<h2 class="text-base font-semibold text-heading">Events by Category</h2>
 			<p class="mb-4 text-sm text-muted">Current database</p>
-			{#if catData.length}
+			{#if loading}
+				<ChartSkeleton />
+			{:else if catData.length}
 				<DonutChart labels={catLabels} data={catData} />
 			{:else}
 				<p class="py-16 text-center text-sm text-muted">No categorized events yet.</p>

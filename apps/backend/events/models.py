@@ -185,6 +185,14 @@ class Organizer(models.Model):
     source_url = models.URLField(blank=True)
     external_id = models.CharField(max_length=255, blank=True, db_index=True)
     scraped_at = models.DateTimeField(null=True, blank=True)
+    enriched_at = models.DateTimeField(
+        null=True, blank=True,
+        help_text="When the crawler last ran enrichment for this organizer.",
+    )
+    enrichment_source = models.CharField(
+        max_length=120, blank=True,
+        help_text="How enrichment data was gathered, e.g. 'crawler' or 'skipped_no_website'.",
+    )
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

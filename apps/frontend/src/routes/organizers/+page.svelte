@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Globe } from 'lucide-svelte';
+	import { Globe, Download } from 'lucide-svelte';
 	import { api } from '$lib/api';
 	import Badge from '$lib/components/Badge.svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
@@ -44,6 +44,15 @@
 		status = value;
 	}
 
+	function exportCsv() {
+		let url = '/api/organizers/export/';
+		const params: string[] = [];
+		if (q) params.push(`q=${encodeURIComponent(q)}`);
+		if (status) params.push(`status=${encodeURIComponent(status)}`);
+		if (params.length) url += `?${params.join('&')}`;
+		window.location.href = url;
+	}
+
 	$effect(() => {
 		const _q = q;
 		const _status = status;
@@ -86,6 +95,14 @@
 			oninput={(e) => onSearch(e.currentTarget.value)}
 			class="w-full max-w-xs rounded-lg border border-border bg-surface px-4 py-2 text-sm text-text placeholder:text-muted focus:border-accent focus:outline-none"
 		/>
+
+		<button
+			onclick={exportCsv}
+			class="flex items-center gap-2 rounded-lg border border-border bg-surface px-3 py-2 text-sm font-medium text-muted transition-colors hover:text-text"
+		>
+			<Download size={16} />
+			Export CSV
+		</button>
 	</div>
 
 	<div class="overflow-hidden rounded-lg border border-border bg-surface">
@@ -118,6 +135,14 @@
 					>
 						Contact
 					</th>
+					<th class="px-4 py-3">
+						<SortHeader
+							label="Source"
+							active={sortState.key === 'source'}
+							direction={sortState.direction}
+							onsort={() => sortBy('source')}
+						/>
+					</th>
 					<th
 						class="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wider text-muted"
 					>
@@ -127,18 +152,18 @@
 			</thead>
 
 			{#if loading && !data}
-				<TableSkeleton columns={5} />
+				<TableSkeleton columns={6} />
 			{:else}
 				<tbody>
 					{#if error}
 						<tr>
-							<td colspan="5" class="px-4 py-10 text-center text-sm text-danger">
+							<td colspan="6" class="px-4 py-10 text-center text-sm text-danger">
 								Failed to load organizers: {error}
 							</td>
 						</tr>
 					{:else if sorted.length === 0}
 						<tr>
-							<td colspan="5" class="px-4 py-10 text-center text-sm text-muted">
+							<td colspan="6" class="px-4 py-10 text-center text-sm text-muted">
 								No organizers found.
 							</td>
 						</tr>
@@ -157,13 +182,6 @@
 									>
 										{o.name}
 									</a>
-									{#if o.source}
-										<code
-											class="ml-0 mt-0.5 block w-fit rounded bg-bg px-1 font-mono text-xs text-muted"
-										>
-											{o.source}
-										</code>
-									{/if}
 								</td>
 								<td class="px-4 py-3">
 									<Badge status={o.status} />
@@ -185,6 +203,13 @@
 									{/if}
 									{#if !o.email && !o.phone}
 										<span class="text-muted">—</span>
+									{/if}
+								</td>
+								<td class="px-4 py-3">
+									{#if o.source}
+										<code class="rounded bg-bg px-1 font-mono text-xs text-muted">{o.source}</code>
+									{:else}
+										<span class="text-xs text-muted">—</span>
 									{/if}
 								</td>
 								<td class="px-4 py-3">
@@ -240,8 +265,8 @@
 		<div class="flex items-center justify-between text-sm text-muted">
 			<span>{data.total.toLocaleString()} organizers · page {data.page} of {data.pages}</span>
 			<div class="flex gap-2">
-				<button class="rounded-lg border border-border px-3 py-1.5 enabled:hover:bg-surface-2 disabled:opacity-40" disabled={page <= 1} onclick={() => (page -= 1)}>Previous</button>
-				<button class="rounded-lg border border-border px-3 py-1.5 enabled:hover:bg-surface-2 disabled:opacity-40" disabled={page >= data.pages} onclick={() => (page += 1)}>Next</button>
+				<button class="rounded-lg border border-border px-3 py-1.5 enabled:hover:bg-surface-2 disabled:opacity-40" disabled={page <= 1 || loading} onclick={() => (page -= 1)}>Previous</button>
+				<button class="rounded-lg border border-border px-3 py-1.5 enabled:hover:bg-surface-2 disabled:opacity-40" disabled={page >= data.pages || loading} onclick={() => (page += 1)}>Next</button>
 			</div>
 		</div>
 	{/if}
