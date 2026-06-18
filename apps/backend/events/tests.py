@@ -1484,3 +1484,43 @@ class DedupCommandTests(TestCase):
 
         # Unknown entity is silently ignored (no dispatch), never raises.
         _dedup_after_save("nonexistent", [1, 2, 3])
+class OrganizerExportTests(TestCase):
+    def test_export_all(self):
+        Organizer.objects.create(
+            name="Alpha Events",
+            slug="alpha-events",
+            status=Organizer.STATUS_CONFIRMED,
+        )
+        Organizer.objects.create(
+            name="Beta Productions",
+            slug="beta-productions",
+            status=Organizer.STATUS_PENDING,
+        )
+
+        response = self.client.get("/api/organizers/export/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("text/csv", response["Content-Type"])
+        self.assertIn("organizers.csv", response["Content-Disposition"])
+        content = response.content.decode()
+        self.assertIn("Alpha Events", content)
+        self.assertIn("Beta Productions", content)
+
+    def test_export_filtered_by_status(self):
+        Organizer.objects.create(
+            name="Confirmed Org",
+            slug="confirmed-org",
+            status=Organizer.STATUS_CONFIRMED,
+        )
+        Organizer.objects.create(
+            name="Pending Org",
+            slug="pending-org",
+            status=Organizer.STATUS_PENDING,
+        )
+
+        response = self.client.get("/api/organizers/export/?status=confirmed")
+
+        self.assertEqual(response.status_code, 200)
+        content = response.content.decode()
+        self.assertIn("Confirmed Org", content)
+        self.assertNotIn("Pending Org", content)

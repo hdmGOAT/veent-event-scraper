@@ -4,6 +4,7 @@ Each scraper subclasses ``BaseScraper`` and is registered here under a
 unique key. The ``scrape`` management command looks scrapers up by key.
 """
 from .allevents import AllEventsCDOScraper
+from .clickthecity import ClickTheCityScraper
 from .allevents_api import AllEventsAPIScraper
 from .allevents_ph import AllEventsPHScraper
 from .allevents_ph_organizers import AllEventsPHOrganizersScraper
@@ -44,6 +45,7 @@ SCRAPERS = {
     "eventsize": EventsizeScraper,
     "sistic": SisticScraper,
     "ticketspice": TicketSpiceScraper,
+    "clickthecity": ClickTheCityScraper,
 }
 
 __all__ = ["BaseScraper", "ScrapedEvent", "ScrapedOrganizer", "ScrapedVenue", "SCRAPERS"]
