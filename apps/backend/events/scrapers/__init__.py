@@ -11,6 +11,7 @@ from .base import BaseScraper, ScrapedEvent, ScrapedOrganizer, ScrapedVenue
 from .eventbee import EventbeeScraper
 from .eventbookings import EventBookingsScraper
 from .eventbrite import EventbriteScraper
+from .sistic import SisticScraper
 from .eventsize import EventsizeScraper
 from .happeningnext import HappeningNextCDOScraper
 from .myruntime import MyRuntimeScraper
@@ -41,6 +42,7 @@ SCRAPERS = {
     "eventbrite": EventbriteScraper,
     "eventbookings": EventBookingsScraper,
     "eventsize": EventsizeScraper,
+    "sistic": SisticScraper,
     "ticketspice": TicketSpiceScraper,
 }
 
