@@ -69,11 +69,6 @@ CLAUDE_CLI_CMD = os.environ.get('CLAUDE_CLI_CMD', 'claude')
 # Equivalent to the CLAUDE_CONFIG_DIR env var that shell aliases like `claude-ojt` set.
 CLAUDE_CONFIG_DIR = os.environ.get('CLAUDE_CONFIG_DIR', '')
 
-# Organizer enrichment API keys (optional — enrichment is skipped if not set)
-DIFFBOT_API_KEY = os.environ.get("DIFFBOT_API_KEY", "")
-HUNTER_API_KEY = os.environ.get("HUNTER_API_KEY", "")
-
-
 # Application definition
 
 INSTALLED_APPS = [

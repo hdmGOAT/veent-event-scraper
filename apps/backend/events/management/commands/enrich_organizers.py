@@ -1,136 +1,81 @@
-"""Management command: enrich Organizer records using Diffbot Enhance and Hunter.io.
+"""Management command: enrich Organizer records by crawling their websites.
 
-Waterfall strategy per organizer:
-  1. Diffbot Enhance — fills website, social URLs (FB/IG), location, description.
-     Works with a domain URL (precise) or company name (fuzzy).
-  2. Hunter.io domain-search — fills email (and optionally phone/social) if a
-     domain is known after step 1. Limited to 25 free searches/month; the command
-     tracks usage per run and stops when the budget is consumed.
+For each organizer with a website, fetch the homepage (plain HTTP first, then a
+stealth browser fallback for Cloudflare-protected sites) and parse out contact
+details: email, phone, social URLs, description, city, country. The /contact and
+/about subpages are also checked over plain HTTP to fill any remaining gaps.
 
-Only blank fields are written — existing non-blank contact data is never overwritten.
-enriched_at and enrichment_source are set on every processed organizer.
+Only blank fields are written — existing non-blank contact data is never
+overwritten. enriched_at and enrichment_source are set on every processed
+organizer.
 
 Examples:
     manage.py enrich_organizers                  # unenriched organizers only (default)
     manage.py enrich_organizers --force          # re-enrich already-enriched records
     manage.py enrich_organizers --limit 20       # cap at 20 organizers this run
-    manage.py enrich_organizers --dry-run        # print what would change, no DB writes
-    manage.py enrich_organizers --delay 13       # seconds between Diffbot calls (default 13)
-    manage.py enrich_organizers --skip-hunter    # skip Hunter.io even if key is set
+    manage.py enrich_organizers --dry-run        # print what would be crawled, no DB writes
+    manage.py enrich_organizers --delay 2        # seconds between organizers (default 2)
 """
 
 import time
-from urllib.parse import urlparse
+from urllib.parse import urljoin
 
 import requests
-from django.conf import settings
 from django.core.management.base import BaseCommand
 from django.utils import timezone
 
 from events.models import Organizer
+from events.scrapers.contact_extractor import extract_contact_info
+
+_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+)
+_HEADERS = {"User-Agent": _USER_AGENT}
+
+_CONTACT_FIELDS = (
+    "email",
+    "phone",
+    "facebook_url",
+    "instagram_url",
+    "description",
+    "city",
+    "country",
+)
 
 
-def _extract_domain(url: str) -> str:
-    """Return bare domain (e.g. 'example.com') from a URL string, or '' if invalid."""
-    if not url:
-        return ""
+def _http_get(url: str, timeout: int) -> str | None:
+    """Plain HTTP GET. Returns HTML on a 200, else None."""
     try:
-        parsed = urlparse(url if url.startswith("http") else f"https://{url}")
-        return parsed.netloc.lower().lstrip("www.") or ""
-    except Exception:
-        return ""
+        resp = requests.get(url, timeout=timeout, headers=_HEADERS)
+    except requests.RequestException:
+        return None
+    if resp.status_code != 200:
+        return None
+    return resp.text
 
 
-def _diffbot_enhance(name: str, domain: str, api_key: str) -> dict:
-    """Call Diffbot Enhance API. Returns extracted fields dict (may be empty)."""
-    params = {"type": "Organization", "token": api_key, "size": 1}
-    if domain:
-        params["url"] = f"https://{domain}"
-    else:
-        params["name"] = name
+def _stealth_get(url: str) -> str | None:
+    """Stealth browser fallback for Cloudflare-protected sites."""
+    from scrapling.fetchers import StealthyFetcher
 
     try:
-        resp = requests.get(
-            "https://kg.diffbot.com/kg/v3/enhance",
-            params=params,
-            timeout=15,
+        page = StealthyFetcher.fetch(
+            url,
+            headless=True,
+            solve_cloudflare=True,
+            network_idle=True,
         )
-        resp.raise_for_status()
-        data = resp.json().get("data") or []
-        if not data:
-            return {}
-        entity = data[0].get("entity", {})
     except Exception:
-        return {}
-
-    result = {}
-
-    homepage = entity.get("homepageUri", "")
-    if homepage:
-        result["website"] = homepage if homepage.startswith("http") else f"https://{homepage}"
-
-    description = entity.get("description", {})
-    if isinstance(description, dict) and description.get("value"):
-        result["description"] = description["value"]
-    elif isinstance(description, str) and description:
-        result["description"] = description
-
-    location = entity.get("location", {}) or {}
-    if location.get("city", {}).get("name"):
-        result["city"] = location["city"]["name"]
-    elif isinstance(location.get("city"), str):
-        result["city"] = location["city"]
-    if location.get("country", {}).get("name"):
-        result["country"] = location["country"]["name"]
-    elif isinstance(location.get("country"), str):
-        result["country"] = location["country"]
-
-    for uri_obj in entity.get("allUris", []) or []:
-        uri = uri_obj if isinstance(uri_obj, str) else uri_obj.get("uri", "")
-        if not uri:
-            continue
-        if "facebook.com/" in uri and "facebook_url" not in result:
-            result["facebook_url"] = uri
-        elif "instagram.com/" in uri and "instagram_url" not in result:
-            result["instagram_url"] = uri
-
-    return result
-
-
-def _hunter_domain_search(domain: str, api_key: str) -> dict:
-    """Call Hunter.io domain-search API. Returns extracted fields dict (may be empty)."""
-    if not domain or not api_key:
-        return {}
-    try:
-        resp = requests.get(
-            "https://api.hunter.io/v2/domain-search",
-            params={"domain": domain, "api_key": api_key},
-            timeout=15,
-        )
-        resp.raise_for_status()
-        payload = resp.json().get("data") or {}
-    except Exception:
-        return {}
-
-    result = {}
-
-    emails = payload.get("emails") or []
-    if emails:
-        result["email"] = emails[0].get("value", "")
-
-    org = payload.get("organization") or {}
-    if org.get("phone"):
-        result["phone"] = org["phone"]
-    if org.get("facebook"):
-        result["facebook_url"] = org["facebook"]
-    if org.get("instagram"):
-        result["instagram_url"] = org["instagram"]
-
-    return {k: v for k, v in result.items() if v}
+        return None
+    html = page.html_content or ""
+    if not html or "Just a moment" in html:
+        return None
+    return html
 
 
 class Command(BaseCommand):
-    help = "Enrich Organizer records using Diffbot Enhance and Hunter.io domain-search."
+    help = "Enrich Organizer records by crawling their websites for contact details."
 
     def add_arguments(self, parser):
         parser.add_argument(
@@ -146,31 +91,18 @@ class Command(BaseCommand):
         parser.add_argument(
             "--dry-run",
             action="store_true",
-            help="Print what would change without writing to the DB.",
+            help="Print what would be crawled without writing to the DB.",
         )
         parser.add_argument(
             "--delay",
             type=float,
-            default=13.0,
-            help="Seconds to sleep between Diffbot calls (default 13 — keeps under 5/min).",
-        )
-        parser.add_argument(
-            "--skip-hunter",
-            action="store_true",
-            help="Skip Hunter.io even if HUNTER_API_KEY is configured.",
+            default=2.0,
+            help="Seconds to sleep between organizers (default 2).",
         )
 
     def handle(self, *args, **options):
-        diffbot_key = settings.DIFFBOT_API_KEY
-        hunter_key = "" if options["skip_hunter"] else settings.HUNTER_API_KEY
         dry_run = options["dry_run"]
         delay = options["delay"]
-
-        if not diffbot_key:
-            self.stdout.write(self.style.ERROR(
-                "DIFFBOT_API_KEY is not set. Add it to .env and try again."
-            ))
-            return
 
         qs = Organizer.objects.exclude(status=Organizer.STATUS_REJECTED).order_by("created_at")
         if not options["force"]:
@@ -186,75 +118,71 @@ class Command(BaseCommand):
             return
 
         if dry_run:
-            self.stdout.write(
-                f"[dry-run] Would process {total} organizer(s). No writes."
-            )
+            self.stdout.write(f"[dry-run] Would crawl {total} organizer(s):")
+            for org in organizers:
+                website = org.website or "no website"
+                self.stdout.write(f"  - {org.name} (slug={org.slug}) → {website}")
             return
 
         self.stdout.write(f"Enriching {total} organizer(s)…")
-
-        # Hunter.io is capped at 25 free searches/month — track per-run.
-        hunter_used = 0
-        HUNTER_MONTHLY_BUDGET = 25
 
         enriched_count = 0
 
         for i, org in enumerate(organizers, start=1):
             self.stdout.write(f"  [{i}/{total}] {org.name} (slug={org.slug})")
 
-            domain = _extract_domain(org.website)
-            updates: dict = {}
-            sources_used: list = []
+            if not org.website:
+                org.enriched_at = timezone.now()
+                org.enrichment_source = "skipped_no_website"
+                org.save(update_fields=["enriched_at", "enrichment_source"])
+                self.stdout.write("    → skipped: no website")
+                if i < total:
+                    time.sleep(delay)
+                continue
 
-            # Step 1: Diffbot Enhance
-            diffbot_result = _diffbot_enhance(org.name, domain, diffbot_key)
-            if diffbot_result:
-                sources_used.append("diffbot")
-                for field, value in diffbot_result.items():
-                    if value and not getattr(org, field):
-                        updates[field] = value
-                # If Diffbot found a website and we had no domain, extract it now.
-                if not domain and updates.get("website"):
-                    domain = _extract_domain(updates["website"])
+            homepage_html = _http_get(org.website, timeout=10)
+            if homepage_html is None:
+                homepage_html = _stealth_get(org.website)
+            if homepage_html is None:
+                self.stdout.write(self.style.WARNING("    → failed to fetch homepage, skipping"))
+                if i < total:
+                    time.sleep(delay)
+                continue
 
-            # Step 2: Hunter.io (only if domain known, email blank, budget remaining)
-            if (
-                hunter_key
-                and domain
-                and not org.email
-                and "email" not in updates
-                and hunter_used < HUNTER_MONTHLY_BUDGET
-            ):
-                hunter_result = _hunter_domain_search(domain, hunter_key)
-                hunter_used += 1
-                if hunter_result:
-                    sources_used.append("hunter")
-                    for field, value in hunter_result.items():
-                        if value and not getattr(org, field) and field not in updates:
-                            updates[field] = value
+            data = extract_contact_info(homepage_html, base_url=org.website)
 
-            # Apply updates
+            for path in ("/contact", "/about"):
+                if all(key in data for key in _CONTACT_FIELDS):
+                    break
+                subpage_url = urljoin(org.website, path)
+                subpage_html = _http_get(subpage_url, timeout=8)
+                if subpage_html is None:
+                    continue
+                subpage_data = extract_contact_info(subpage_html, base_url=subpage_url)
+                for key, value in subpage_data.items():
+                    if key not in data:
+                        data[key] = value
+
             changed_fields = []
-            for field, value in updates.items():
-                setattr(org, field, value)
-                changed_fields.append(field)
+            for field in _CONTACT_FIELDS:
+                value = data.get(field)
+                if value and not getattr(org, field):
+                    setattr(org, field, value)
+                    changed_fields.append(field)
 
             org.enriched_at = timezone.now()
-            org.enrichment_source = ",".join(sources_used)
+            org.enrichment_source = "crawler"
             changed_fields += ["enriched_at", "enrichment_source"]
 
             org.save(update_fields=changed_fields)
             enriched_count += 1
 
-            if changed_fields:
-                filled = [f for f in updates]
-                self.stdout.write(f"    ✓ filled: {', '.join(filled) if filled else 'nothing new'}")
+            filled = [f for f in _CONTACT_FIELDS if f in changed_fields]
+            self.stdout.write(f"    ✓ filled: {', '.join(filled) if filled else 'nothing new'}")
 
-            # Rate-limit: sleep between Diffbot calls (skip after the last item).
             if i < total:
                 time.sleep(delay)
 
-        summary = f"Done. Enriched {enriched_count}/{total} organizer(s)."
-        if hunter_key:
-            summary += f" Hunter searches used this run: {hunter_used}/{HUNTER_MONTHLY_BUDGET}."
-        self.stdout.write(self.style.SUCCESS(summary))
+        self.stdout.write(
+            self.style.SUCCESS(f"Done. Enriched {enriched_count}/{total} organizer(s).")
+        )
