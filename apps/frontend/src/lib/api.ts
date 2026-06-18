@@ -16,6 +16,7 @@ import type {
 	ScraperRunStatus,
 	SourceCount,
 	Stats,
+	VenueDetail,
 	VenueRow
 } from './types';
 
@@ -75,6 +76,7 @@ export const api = {
 	organizer: (slug: string, f?: Fetch) => get<OrganizerDetail>(`/organizers/${slug}/`, f),
 	venues: (params: { q?: string; status?: string; page?: number } = {}, f?: Fetch) =>
 		get<Paginated<VenueRow>>(`/venues/${qs(params)}`, f),
+	venue: (slug: string, f?: Fetch) => get<VenueDetail>(`/venues/${slug}/`, f),
 	scrapers: (f?: Fetch) => get<Scraper[]>('/scrapers/', f),
 	runScraper: (key: string) => post<{ id: number; status: ScraperRunStatus }>(`/scrapers/${key}/run/`),
 	runAll: () => post<RunAllResult>('/scrapers/run-all/'),
