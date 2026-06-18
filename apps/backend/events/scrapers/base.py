@@ -282,9 +282,19 @@ def save_organizers(source: str, organizers: Iterable[ScrapedOrganizer]) -> dict
         )
 
         if existing:
+            # Always update provenance and display name.
+            always_update = {"name", "source", "source_url", "external_id", "scraped_at"}
+            changed = False
             for k, v in contact_fields.items():
-                setattr(existing, k, v)
-            existing.save()
+                if k in always_update:
+                    setattr(existing, k, v)
+                    changed = True
+                elif v and not getattr(existing, k):
+                    # Only fill blank fields — never clobber existing contact data.
+                    setattr(existing, k, v)
+                    changed = True
+            if changed:
+                existing.save()
             updated += 1
         else:
             Organizer.objects.create(
