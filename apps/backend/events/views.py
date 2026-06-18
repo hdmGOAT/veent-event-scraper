@@ -1,10 +1,11 @@
+import csv
 import json
 import os
 
 from django.contrib.admin.views.decorators import staff_member_required
 from django.core.paginator import Paginator
 from django.db.models import Count, Max, Q
-from django.http import HttpResponseBadRequest, JsonResponse
+from django.http import HttpResponse, HttpResponseBadRequest, JsonResponse
 from django.shortcuts import get_object_or_404, render
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
@@ -378,6 +379,62 @@ def api_organizers(request):
     return JsonResponse(
         {"results": results, "total": paginator.count, "pages": paginator.num_pages, "page": page}
     )
+
+
+def api_organizers_export(request):
+    """Export all organizers matching the current filters as a CSV download.
+
+    Uses the same q + status filter logic as api_organizers but with no
+    pagination — every matching row is written. Status is rendered with the
+    human-readable display label, and datetimes use ISO 8601 strings.
+    """
+    q = request.GET.get("q", "").strip()
+    status = request.GET.get("status", "").strip()
+
+    organizers = Organizer.objects.all()
+    if q:
+        organizers = organizers.filter(
+            Q(name__icontains=q) | Q(city__icontains=q) | Q(email__icontains=q)
+        )
+    if status:
+        organizers = organizers.filter(status=status)
+    organizers = organizers.order_by("name")
+
+    response = HttpResponse(content_type="text/csv; charset=utf-8")
+    response["Content-Disposition"] = 'attachment; filename="organizers.csv"'
+
+    writer = csv.writer(response)
+    writer.writerow(
+        [
+            "Name",
+            "Email",
+            "Phone",
+            "Website",
+            "Address",
+            "City",
+            "Country",
+            "Facebook",
+            "Instagram",
+            "Source",
+        ]
+    )
+    for o in organizers:
+        writer.writerow(
+            [
+                o.name,
+                o.email,
+                o.phone,
+                o.website,
+                o.address,
+                o.city,
+                o.country,
+                o.facebook_url,
+                o.instagram_url,
+                o.source,
+            ]
+        )
+
+    return response
 
 
 def api_organizer_detail(request, slug):
