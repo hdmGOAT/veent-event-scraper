@@ -15,7 +15,7 @@
 	<title>{v?.name ?? 'Venue'} — Veent Admin</title>
 </svelte:head>
 
-<PageHeader title={v.name} subtitle="Venue profile" />
+<PageHeader title={v?.name ?? 'Venue'} subtitle="Venue profile" />
 
 <div class="p-8">
 	<a href="/venues" class="mb-5 inline-flex items-center gap-1 text-sm text-muted hover:text-accent">
