@@ -52,6 +52,7 @@ def _http_get(url: str, timeout: int) -> str | None:
         return None
     if resp.status_code != 200:
         return None
+    resp.encoding = resp.apparent_encoding
     return resp.text
 
 
@@ -104,7 +105,7 @@ class Command(BaseCommand):
         dry_run = options["dry_run"]
         delay = options["delay"]
 
-        qs = Organizer.objects.exclude(status=Organizer.STATUS_REJECTED).order_by("created_at")
+        qs = Organizer.objects.exclude(status=Organizer.STATUS_REJECTED).exclude(website="").order_by("created_at")
         if not options["force"]:
             qs = qs.filter(enriched_at__isnull=True)
         if options["limit"]:
