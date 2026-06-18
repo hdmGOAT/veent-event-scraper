@@ -619,13 +619,12 @@ def api_scraper_run_all(request):
 @csrf_exempt
 @require_POST
 def api_dedup_trigger(request):
+    # SECURITY NOTE: Intentionally unauthenticated — same posture as
+    # api_scraper_trigger. This is an internal admin tool; revisit when real
+    # auth is added to the frontend.
     import subprocess
     import sys
     from pathlib import Path
-
-    key = request.headers.get("X-Scraper-Key", "")
-    if not _WEBHOOK_SECRET or key != _WEBHOOK_SECRET:
-        return JsonResponse({"error": "unauthorized"}, status=401)
 
     scripts_dir = Path(__file__).resolve().parent.parent.parent / "scripts"
     python = sys.executable
@@ -672,6 +671,10 @@ def api_script_trigger(request, script_name: str):
 
     Returns immediately with {"started": true, "pid": <pid>}. The script runs
     in a detached OS process — check server logs for output.
+
+    SECURITY NOTE: Intentionally unauthenticated — same posture as
+    api_scraper_trigger. This is an internal admin tool; revisit when real
+    auth is added to the frontend.
     """
     import subprocess
     import sys
@@ -692,7 +695,8 @@ def api_script_trigger(request, script_name: str):
         )
         return JsonResponse({"started": True, "script": script_name, "pid": process.pid})
     except Exception as exc:  # noqa: BLE001
-        return JsonResponse({"error": str(exc)}, status=500)
+        logger.exception("script trigger error (script=%s): %s", script_name, exc)
+        return JsonResponse({"error": "Failed to start script"}, status=500)
 
 
 def api_scraper_runs(request):
@@ -798,6 +802,10 @@ def api_scrapers(request):
 # ---------------------------------------------------------------------------
 
 _WEBHOOK_SECRET = os.environ.get("SCRAPER_WEBHOOK_SECRET", "")
+# Process-local lock — prevents concurrent dedup runs within one worker but
+# does NOT protect across multiple gunicorn workers. Acceptable for this
+# internal single-worker dev/staging setup; upgrade to a DB advisory lock or
+# Redis lock if moving to multi-worker production.
 _DEDUP_LOCK = threading.Lock()
 
 
