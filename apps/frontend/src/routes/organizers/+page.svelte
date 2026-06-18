@@ -165,13 +165,6 @@
 									>
 										{o.name}
 									</a>
-									{#if o.source}
-										<code
-											class="ml-0 mt-0.5 block w-fit rounded bg-bg px-1 font-mono text-xs text-muted"
-										>
-											{o.source}
-										</code>
-									{/if}
 								</td>
 								<td class="px-4 py-3">
 									<Badge status={o.status} />

@@ -310,7 +310,6 @@ def api_events(request):
     if category:
         events = events.filter(category=category)
     if upcoming == "1":
-        from django.utils import timezone
         events = events.filter(starts_at__gte=timezone.now())
 
     _order_map = {
