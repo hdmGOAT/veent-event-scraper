@@ -32,6 +32,11 @@
 	// "Run All" error message, if any.
 	let runAllError = $state<string | null>(null);
 
+	// "Deduplicate" in-flight flag and result/error messages.
+	let deduplicating = $state(false);
+	let dedupError = $state<string | null>(null);
+	let dedupOutput = $state<string | null>(null);
+
 	let pollingInterval: ReturnType<typeof setInterval> | null = null;
 
 	function startPolling() {
@@ -141,6 +146,21 @@
 		}
 	}
 
+	async function handleDedup() {
+		if (deduplicating) return;
+		deduplicating = true;
+		dedupError = null;
+		dedupOutput = null;
+		try {
+			const result = await api.deduplicate();
+			dedupOutput = result.output;
+		} catch (e) {
+			dedupError = e instanceof Error ? e.message : 'Dedup failed';
+		} finally {
+			deduplicating = false;
+		}
+	}
+
 	$effect(() => {
 		// Kick off an initial poll on mount; only keep polling if something is active.
 		pollActive().then(() => {
@@ -157,13 +177,28 @@
 <PageHeader title="Scraper Center" subtitle="Trigger runs and review run history">
 	{#snippet action()}
 		<div class="flex flex-col items-end gap-1">
-			<button
-				disabled={runningAll}
-				onclick={handleRunAll}
-				class="rounded-md bg-accent px-4 py-2 text-sm font-medium text-white transition hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-50"
-			>
-				{runningAll ? 'Running All…' : 'Run All'}
-			</button>
+			<div class="flex items-center gap-2">
+				<button
+					disabled={deduplicating}
+					onclick={handleDedup}
+					class="rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-50"
+				>
+					{deduplicating ? 'Deduplicating…' : 'Deduplicate'}
+				</button>
+				<button
+					disabled={runningAll}
+					onclick={handleRunAll}
+					class="rounded-md bg-accent px-4 py-2 text-sm font-medium text-white transition hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-50"
+				>
+					{runningAll ? 'Running All…' : 'Run All'}
+				</button>
+			</div>
+			{#if dedupError}
+				<span class="text-xs text-danger">{dedupError}</span>
+			{/if}
+			{#if dedupOutput}
+				<span class="text-xs whitespace-pre text-green-600">{dedupOutput}</span>
+			{/if}
 			{#if runAllError}
 				<span class="text-xs text-danger">{runAllError}</span>
 			{/if}

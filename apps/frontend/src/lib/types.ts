@@ -148,3 +148,8 @@ export interface RunAllResult {
 	created: { key: string; id: number; status: ScraperRunStatus }[];
 	skipped: string[];
 }
+
+export interface DedupResult {
+	output: string;
+	entity: string;
+}

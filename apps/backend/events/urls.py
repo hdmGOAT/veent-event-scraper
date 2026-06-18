@@ -27,6 +27,7 @@ urlpatterns = [
     path("api/venues/", views.api_venues, name="api_venues"),
     # Scraper run jobs — more-specific paths before the api/scrapers/ catch-all.
     path("api/scrapers/<str:key>/run/", views.api_scraper_trigger, name="api_scraper_trigger"),
+    path("api/scrapers/dedup/", views.api_dedup_trigger, name="api_dedup_trigger"),
     path("api/scrapers/run-all/", views.api_scraper_run_all, name="api_scraper_run_all"),
     path("api/scrapers/runs/active/", views.api_scraper_runs_active, name="api_scraper_runs_active"),
     path("api/scrapers/runs/<int:run_id>/cancel/", views.api_scraper_run_cancel, name="api_scraper_run_cancel"),

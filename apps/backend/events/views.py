@@ -612,6 +612,39 @@ def api_scraper_run_all(request):
     return JsonResponse({"created": created, "skipped": skipped}, status=200)
 
 
+@csrf_exempt
+@require_POST
+def api_dedup_trigger(request):
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    scripts_dir = Path(__file__).resolve().parent.parent.parent / "scripts"
+    python = sys.executable
+
+    entity = request.POST.get("entity") or "all"  # default: all
+    if entity not in ("events", "venues", "organizers", "all"):
+        return JsonResponse({"error": "Invalid entity"}, status=400)
+
+    try:
+        result = subprocess.run(
+            [python, str(scripts_dir / "deduplicate.py"), "--entity", entity],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            cwd=str(scripts_dir.parent),  # apps/backend
+        )
+        stdout = result.stdout.strip()
+        stderr = result.stderr.strip()
+        if result.returncode != 0:
+            return JsonResponse({"error": stderr or "Dedup script failed"}, status=500)
+        return JsonResponse({"output": stdout, "entity": entity})
+    except subprocess.TimeoutExpired:
+        return JsonResponse({"error": "Dedup timed out after 120s"}, status=504)
+    except Exception as exc:  # noqa: BLE001
+        return JsonResponse({"error": str(exc)}, status=500)
+
+
 def api_scraper_runs(request):
     try:
         limit = max(1, min(int(request.GET.get("limit", 50)), 200))

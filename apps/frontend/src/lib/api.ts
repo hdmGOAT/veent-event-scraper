@@ -6,6 +6,7 @@
 
 import type {
 	CategoryCount,
+	DedupResult,
 	EventRow,
 	Organizer,
 	OrganizerDetail,
@@ -80,6 +81,7 @@ export const api = {
 	scrapers: (f?: Fetch) => get<Scraper[]>('/scrapers/', f),
 	runScraper: (key: string) => post<{ id: number; status: ScraperRunStatus }>(`/scrapers/${key}/run/`),
 	runAll: () => post<RunAllResult>('/scrapers/run-all/'),
+	deduplicate: () => post<DedupResult>('/scrapers/dedup/'),
 	scraperRuns: (limit?: number, f?: Fetch) =>
 		get<ScraperRun[]>(`/scrapers/runs/${limit ? `?limit=${limit}` : ''}`, f),
 	activeRuns: (f?: Fetch) => get<ScraperRun[]>('/scrapers/runs/active/', f),
