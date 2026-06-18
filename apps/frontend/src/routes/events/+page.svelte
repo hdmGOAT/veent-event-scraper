@@ -2,6 +2,7 @@
 	import { api } from '$lib/api';
 	import Badge from '$lib/components/Badge.svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
+	import SortHeader from '$lib/components/SortHeader.svelte';
 	import TableSkeleton from '$lib/components/TableSkeleton.svelte';
 	import { formatDateTime } from '$lib/format';
 	import type { CategoryCount, EventRow, Paginated, SourceCount } from '$lib/types';
@@ -9,6 +10,8 @@
 	let q = $state('');
 	let source = $state('');
 	let category = $state('');
+	let ordering = $state('');
+	let upcoming = $state(false);
 	let page = $state(1);
 	let data = $state<Paginated<EventRow> | null>(null);
 	let loading = $state(true);
@@ -39,19 +42,37 @@
 	}
 
 	$effect(() => {
-		// Re-runs whenever q, source, category, or page change.
 		const _q = q;
 		const _source = source;
 		const _category = category;
+		const _ordering = ordering;
+		const _upcoming = upcoming;
 		const _page = page;
 		loading = true;
 		error = '';
 		api
-			.events({ q: _q, source: _source, category: _category, page: _page })
+			.events({ q: _q, source: _source, category: _category, ordering: _ordering, upcoming: _upcoming ? 1 : undefined, page: _page })
 			.then((r) => (data = r))
 			.catch((e) => (error = String(e)))
 			.finally(() => (loading = false));
 	});
+
+	function colActive(col: string): boolean {
+		return ordering === col || ordering === `-${col}`;
+	}
+	function colDirection(col: string): 'asc' | 'desc' {
+		return ordering === `-${col}` ? 'desc' : 'asc';
+	}
+	function toggleOrdering(col: string) {
+		if (ordering === col) {
+			ordering = `-${col}`;
+		} else if (ordering === `-${col}`) {
+			ordering = col;
+		} else {
+			ordering = col;
+		}
+		page = 1;
+	}
 </script>
 
 <svelte:head>
@@ -94,14 +115,28 @@
 				{/each}
 			</select>
 		{/if}
+
+		<label class="flex cursor-pointer items-center gap-2 text-sm text-muted">
+			<input
+				type="checkbox"
+				bind:checked={upcoming}
+				onchange={() => (page = 1)}
+				class="h-4 w-4 rounded accent-accent"
+			/>
+			Upcoming only
+		</label>
 	</div>
 
 	<div class="overflow-hidden rounded-xl border border-border bg-surface">
 		<table class="w-full text-sm">
 			<thead>
 				<tr class="border-b border-border text-left text-xs uppercase tracking-wider text-muted">
-					<th class="px-5 py-3 font-semibold">Event</th>
-					<th class="px-5 py-3 font-semibold">Starts</th>
+					<th class="px-5 py-3">
+						<SortHeader label="Event" active={colActive('name')} direction={colDirection('name')} onsort={() => toggleOrdering('name')} />
+					</th>
+					<th class="px-5 py-3">
+						<SortHeader label="Starts" active={colActive('starts_at')} direction={colDirection('starts_at')} onsort={() => toggleOrdering('starts_at')} />
+					</th>
 					<th class="px-5 py-3 font-semibold">Category</th>
 					<th class="px-5 py-3 font-semibold">Venue</th>
 					<th class="px-5 py-3 font-semibold">Organizer</th>

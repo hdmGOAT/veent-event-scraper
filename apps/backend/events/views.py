@@ -297,6 +297,8 @@ def api_events(request):
         page = max(1, int(request.GET.get("page", 1)))
     except ValueError:
         page = 1
+    upcoming = request.GET.get("upcoming", "").strip()
+    ordering = request.GET.get("ordering", "").strip()
 
     events = Event.objects.select_related("venue", "organizer_ref")
     if q:
@@ -307,7 +309,17 @@ def api_events(request):
         events = events.filter(source=source)
     if category:
         events = events.filter(category=category)
-    events = events.order_by("-scraped_at", "name")
+    if upcoming == "1":
+        from django.utils import timezone
+        events = events.filter(starts_at__gte=timezone.now())
+
+    _order_map = {
+        "name": ["name"],
+        "-name": ["-name"],
+        "starts_at": ["starts_at", "name"],
+        "-starts_at": ["-starts_at", "name"],
+    }
+    events = events.order_by(*_order_map.get(ordering, ["-scraped_at", "name"]))
 
     paginator = Paginator(events, 50)
     page_obj = paginator.get_page(page)
@@ -449,6 +461,16 @@ def api_venue_detail(request, slug):
     )
 
 
+def api_venue_types(request):
+    types = list(
+        Venue.objects.exclude(primary_type_display="")
+        .values_list("primary_type_display", flat=True)
+        .distinct()
+        .order_by("primary_type_display")
+    )
+    return JsonResponse(types, safe=False)
+
+
 def api_venues(request):
     q = request.GET.get("q", "").strip()
     status = request.GET.get("status", "").strip()
@@ -456,13 +478,28 @@ def api_venues(request):
         page = max(1, int(request.GET.get("page", 1)))
     except ValueError:
         page = 1
+    venue_type = request.GET.get("type", "").strip()
+    ordering = request.GET.get("ordering", "").strip()
 
     venues = Venue.objects.annotate(event_count=Count("events"))
     if q:
         venues = venues.filter(Q(name__icontains=q) | Q(city__icontains=q))
     if status:
         venues = venues.filter(verification_status=status)
-    venues = venues.order_by("name")
+    if venue_type:
+        venues = venues.filter(primary_type_display=venue_type)
+
+    _order_map = {
+        "name": ["name"],
+        "-name": ["-name"],
+        "city": ["city", "name"],
+        "-city": ["-city", "name"],
+        "rating": ["rating", "name"],
+        "-rating": ["-rating", "name"],
+        "event_count": ["event_count", "name"],
+        "-event_count": ["-event_count", "name"],
+    }
+    venues = venues.order_by(*_order_map.get(ordering, ["name"]))
 
     paginator = Paginator(venues, 50)
     page_obj = paginator.get_page(page)

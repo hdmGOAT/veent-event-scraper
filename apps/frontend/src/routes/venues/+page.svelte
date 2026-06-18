@@ -2,6 +2,7 @@
 	import { api } from '$lib/api';
 	import Badge from '$lib/components/Badge.svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
+	import SortHeader from '$lib/components/SortHeader.svelte';
 	import TableSkeleton from '$lib/components/TableSkeleton.svelte';
 	import type { Paginated, VenueRow } from '$lib/types';
 
@@ -14,10 +15,20 @@
 
 	let q = $state('');
 	let status = $state('');
+	let ordering = $state('');
+	let venueType = $state('');
+	let venueTypes = $state<string[]>([]);
 	let page = $state(1);
 	let data = $state<Paginated<VenueRow> | null>(null);
 	let loading = $state(true);
 	let error = $state('');
+
+	$effect.pre(() => {
+		api
+			.venueTypes()
+			.then((r) => (venueTypes = r))
+			.catch(() => {});
+	});
 
 	let timer: ReturnType<typeof setTimeout>;
 	function onSearch(value: string) {
@@ -31,15 +42,34 @@
 	$effect(() => {
 		const _q = q;
 		const _status = status;
+		const _ordering = ordering;
+		const _type = venueType;
 		const _page = page;
 		loading = true;
 		error = '';
 		api
-			.venues({ q: _q, status: _status, page: _page })
+			.venues({ q: _q, status: _status, ordering: _ordering, type: _type, page: _page })
 			.then((r) => (data = r))
 			.catch((e) => (error = String(e)))
 			.finally(() => (loading = false));
 	});
+
+	function colActive(col: string): boolean {
+		return ordering === col || ordering === `-${col}`;
+	}
+	function colDirection(col: string): 'asc' | 'desc' {
+		return ordering === `-${col}` ? 'desc' : 'asc';
+	}
+	function toggleOrdering(col: string) {
+		if (ordering === col) {
+			ordering = `-${col}`;
+		} else if (ordering === `-${col}`) {
+			ordering = col;
+		} else {
+			ordering = col;
+		}
+		page = 1;
+	}
 </script>
 
 <svelte:head>
@@ -55,6 +85,7 @@
 				<button
 					onclick={() => {
 						page = 1;
+						ordering = '';
 						status = tab.value;
 					}}
 					class="rounded-md px-3 py-1.5 text-sm font-medium transition-colors {status === tab.value
@@ -72,17 +103,38 @@
 			oninput={(e) => onSearch(e.currentTarget.value)}
 			class="w-full max-w-xs rounded-lg border border-border bg-surface px-4 py-2 text-sm text-text placeholder:text-muted focus:border-accent focus:outline-none"
 		/>
+
+		{#if venueTypes.length > 0}
+			<select
+				bind:value={venueType}
+				onchange={() => (page = 1)}
+				class="rounded-lg border border-border bg-surface px-3 py-2 text-sm text-text focus:border-accent focus:outline-none"
+			>
+				<option value="">All types</option>
+				{#each venueTypes as t (t)}
+					<option value={t}>{t}</option>
+				{/each}
+			</select>
+		{/if}
 	</div>
 
 	<div class="overflow-hidden rounded-xl border border-border bg-surface">
 		<table class="w-full text-sm">
 			<thead>
 				<tr class="border-b border-border text-left text-xs uppercase tracking-wider text-muted">
-					<th class="px-5 py-3 font-semibold">Venue</th>
+					<th class="px-5 py-3">
+						<SortHeader label="Venue" active={colActive('name')} direction={colDirection('name')} onsort={() => toggleOrdering('name')} />
+					</th>
 					<th class="px-5 py-3 font-semibold">Type</th>
-					<th class="px-5 py-3 font-semibold">City</th>
-					<th class="px-5 py-3 font-semibold">Rating</th>
-					<th class="px-5 py-3 font-semibold">Events</th>
+					<th class="px-5 py-3">
+						<SortHeader label="City" active={colActive('city')} direction={colDirection('city')} onsort={() => toggleOrdering('city')} />
+					</th>
+					<th class="px-5 py-3">
+						<SortHeader label="Rating" active={colActive('rating')} direction={colDirection('rating')} onsort={() => toggleOrdering('rating')} />
+					</th>
+					<th class="px-5 py-3">
+						<SortHeader label="Events" active={colActive('event_count')} direction={colDirection('event_count')} onsort={() => toggleOrdering('event_count')} />
+					</th>
 					<th class="px-5 py-3 font-semibold">Status</th>
 				</tr>
 			</thead>

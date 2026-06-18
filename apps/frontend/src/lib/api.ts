@@ -68,14 +68,15 @@ export const api = {
 	eventsBySource: (f?: Fetch) => get<SourceCount[]>('/events/by-source/', f),
 	eventsByCategory: (f?: Fetch) => get<CategoryCount[]>('/events/by-category/', f),
 	events: (
-		params: { q?: string; source?: string; category?: string; page?: number } = {},
+		params: { q?: string; source?: string; category?: string; ordering?: string; upcoming?: 1; page?: number } = {},
 		f?: Fetch
 	) => get<Paginated<EventRow>>(`/events/${qs(params)}`, f),
 	organizers: (params: { q?: string; status?: string; page?: number } = {}, f?: Fetch) =>
 		get<Paginated<Organizer>>(`/organizers/${qs(params)}`, f),
 	organizer: (slug: string, f?: Fetch) => get<OrganizerDetail>(`/organizers/${slug}/`, f),
-	venues: (params: { q?: string; status?: string; page?: number } = {}, f?: Fetch) =>
+	venues: (params: { q?: string; status?: string; ordering?: string; type?: string; page?: number } = {}, f?: Fetch) =>
 		get<Paginated<VenueRow>>(`/venues/${qs(params)}`, f),
+	venueTypes: (f?: Fetch) => get<string[]>('/venues/types/', f),
 	venue: (slug: string, f?: Fetch) => get<VenueDetail>(`/venues/${slug}/`, f),
 	scrapers: (f?: Fetch) => get<Scraper[]>('/scrapers/', f),
 	runScraper: (key: string) => post<{ id: number; status: ScraperRunStatus }>(`/scrapers/${key}/run/`),

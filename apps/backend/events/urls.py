@@ -22,6 +22,7 @@ urlpatterns = [
     path("api/events/", views.api_events, name="api_events"),
     path("api/organizers/<slug:slug>/", views.api_organizer_detail, name="api_organizer_detail"),
     path("api/organizers/", views.api_organizers, name="api_organizers"),
+    path("api/venues/types/", views.api_venue_types, name="api_venue_types"),
     path("api/venues/<slug:slug>/", views.api_venue_detail, name="api_venue_detail"),
     path("api/venues/", views.api_venues, name="api_venues"),
     # Scraper run jobs — more-specific paths before the api/scrapers/ catch-all.
