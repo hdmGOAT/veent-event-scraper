@@ -323,7 +323,9 @@ def api_events(request):
             "source": e.source,
             "price": e.price,
             "venue": e.venue.name if e.venue else None,
+            "venue_slug": e.venue.slug if e.venue else None,
             "organizer": e.organizer_display_name,
+            "organizer_slug": e.organizer_ref.slug if e.organizer_ref_id else None,
             "url": e.url,
         }
         for e in page_obj
@@ -407,6 +409,39 @@ def api_organizer_detail(request, slug):
                     "starts_at": e.starts_at.isoformat() if e.starts_at else None,
                     "category": e.category,
                     "venue": e.venue.name if e.venue else None,
+                }
+                for e in events
+            ],
+        }
+    )
+
+
+def api_venue_detail(request, slug):
+    venue = get_object_or_404(Venue, slug=slug)
+    events = list(venue.events.select_related("organizer_ref").order_by("-starts_at")[:50])
+    return JsonResponse(
+        {
+            "slug": venue.slug,
+            "name": venue.name,
+            "address": venue.address,
+            "city": venue.city,
+            "country": venue.country,
+            "website": venue.website,
+            "rating": venue.rating,
+            "about": venue.about,
+            "primary_type_display": venue.primary_type_display,
+            "agents_primary_types": venue.agents_primary_types,
+            "verification_status": venue.verification_status,
+            "source": venue.source,
+            "source_url": venue.source_url,
+            "scraped_at": venue.scraped_at.isoformat() if venue.scraped_at else None,
+            "events": [
+                {
+                    "slug": e.slug,
+                    "name": e.name,
+                    "starts_at": e.starts_at.isoformat() if e.starts_at else None,
+                    "category": e.category,
+                    "organizer": e.organizer_display_name,
                 }
                 for e in events
             ],

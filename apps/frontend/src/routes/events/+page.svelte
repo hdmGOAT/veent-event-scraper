@@ -92,8 +92,20 @@
 									<span class="text-muted">—</span>
 								{/if}
 							</td>
-							<td class="px-5 py-3 text-muted">{e.venue || '—'}</td>
-							<td class="px-5 py-3 text-muted">{e.organizer || '—'}</td>
+							<td class="px-5 py-3 text-muted">
+								{#if e.venue && e.venue_slug}
+									<a href="/venues/{e.venue_slug}" class="hover:text-accent hover:underline">{e.venue}</a>
+								{:else}
+									{e.venue || '—'}
+								{/if}
+							</td>
+							<td class="px-5 py-3 text-muted">
+								{#if e.organizer && e.organizer_slug}
+									<a href="/organizers/{e.organizer_slug}" class="hover:text-accent hover:underline">{e.organizer}</a>
+								{:else}
+									{e.organizer || '—'}
+								{/if}
+							</td>
 							<td class="px-5 py-3"><code class="text-xs text-muted">{e.source || '—'}</code></td>
 						</tr>
 						{/each}
