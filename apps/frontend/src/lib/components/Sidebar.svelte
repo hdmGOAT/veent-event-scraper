@@ -42,7 +42,7 @@
 	>
 		<Menu size={22} />
 	</button>
-	<span class="text-base font-bold tracking-wide text-heading">VEENT<span class="text-accent">.</span></span>
+	<span class="text-base font-bold tracking-wide text-heading">VEENT <span class="text-accent">SCRAPER</span></span>
 </div>
 
 <!-- Backdrop (mobile only, when drawer open) -->
@@ -66,7 +66,7 @@
 			<span class="flex h-8 w-8 items-center justify-center rounded-lg bg-accent/15 text-accent">
 				<Zap size={18} strokeWidth={2} />
 			</span>
-			<span class="text-lg font-bold tracking-wide text-heading">VEENT<span class="text-accent">.</span></span>
+			<span class="text-lg font-bold tracking-wide text-heading">VEENT <span class="text-accent">SCRAPER</span></span>
 		</div>
 		<button
 			type="button"
@@ -104,7 +104,6 @@
 		</span>
 		<div class="leading-tight">
 			<div class="text-sm font-medium text-heading">Admin User</div>
-			<div class="text-xs text-muted">admin@veent.io</div>
 		</div>
 	</div>
 </aside>
