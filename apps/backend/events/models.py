@@ -187,11 +187,11 @@ class Organizer(models.Model):
     scraped_at = models.DateTimeField(null=True, blank=True)
     enriched_at = models.DateTimeField(
         null=True, blank=True,
-        help_text="When enrichment was last run against an external API for this organizer.",
+        help_text="When the crawler last ran enrichment for this organizer.",
     )
     enrichment_source = models.CharField(
         max_length=120, blank=True,
-        help_text="Comma-separated list of APIs that contributed enrichment data, e.g. 'diffbot,hunter'.",
+        help_text="How enrichment data was gathered, e.g. 'crawler' or 'skipped_no_website'.",
     )
 
     created_at = models.DateTimeField(auto_now_add=True)

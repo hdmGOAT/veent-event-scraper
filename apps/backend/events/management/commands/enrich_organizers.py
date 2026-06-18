@@ -17,11 +17,13 @@ Examples:
     manage.py enrich_organizers --delay 2        # seconds between organizers (default 2)
 """
 
+import ipaddress
+import socket
 import time
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 import requests
-from django.core.management.base import BaseCommand
+from django.core.management.base import BaseCommand, CommandError
 from django.utils import timezone
 
 from events.models import Organizer
@@ -43,6 +45,21 @@ _CONTACT_FIELDS = (
     "instagram_url",
     "description",
 )
+
+
+def _is_safe_public_url(url: str) -> bool:
+    """Return True only for http/https URLs that resolve to a public IP."""
+    try:
+        parsed = urlparse(url)
+        if parsed.scheme not in ("http", "https"):
+            return False
+        host = parsed.hostname or ""
+        if not host:
+            return False
+        ip = ipaddress.ip_address(socket.gethostbyname(host))
+        return ip.is_global and not ip.is_loopback and not ip.is_link_local
+    except Exception:
+        return False
 
 
 def _http_get(url: str, timeout: int) -> str | None:
@@ -106,6 +123,11 @@ class Command(BaseCommand):
         dry_run = options["dry_run"]
         delay = options["delay"]
 
+        if options["limit"] is not None and options["limit"] <= 0:
+            raise CommandError("--limit must be a positive integer.")
+        if delay < 0:
+            raise CommandError("--delay must be a non-negative number.")
+
         qs = Organizer.objects.exclude(status=Organizer.STATUS_REJECTED).exclude(website="").order_by("created_at")
         if not options["force"]:
             qs = qs.filter(enriched_at__isnull=True)
@@ -142,6 +164,12 @@ class Command(BaseCommand):
                     time.sleep(delay)
                 continue
 
+            if not _is_safe_public_url(org.website):
+                self.stdout.write(self.style.WARNING("    → skipped: unsafe or private URL"))
+                if i < total:
+                    time.sleep(delay)
+                continue
+
             homepage_html = _http_get(org.website, timeout=10)
             if homepage_html is None:
                 homepage_html = _stealth_get(org.website)
@@ -157,6 +185,8 @@ class Command(BaseCommand):
                 if all(key in data for key in _CONTACT_FIELDS):
                     break
                 subpage_url = urljoin(org.website, path)
+                if not _is_safe_public_url(subpage_url):
+                    continue
                 subpage_html = _http_get(subpage_url, timeout=8)
                 if subpage_html is None:
                     continue
