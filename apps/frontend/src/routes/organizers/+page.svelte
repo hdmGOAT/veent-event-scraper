@@ -135,6 +135,14 @@
 					>
 						Contact
 					</th>
+					<th class="px-4 py-3">
+						<SortHeader
+							label="Source"
+							active={sortState.key === 'source'}
+							direction={sortState.direction}
+							onsort={() => sortBy('source')}
+						/>
+					</th>
 					<th
 						class="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wider text-muted"
 					>
@@ -144,18 +152,18 @@
 			</thead>
 
 			{#if loading && !data}
-				<TableSkeleton columns={5} />
+				<TableSkeleton columns={6} />
 			{:else}
 				<tbody>
 					{#if error}
 						<tr>
-							<td colspan="5" class="px-4 py-10 text-center text-sm text-danger">
+							<td colspan="6" class="px-4 py-10 text-center text-sm text-danger">
 								Failed to load organizers: {error}
 							</td>
 						</tr>
 					{:else if sorted.length === 0}
 						<tr>
-							<td colspan="5" class="px-4 py-10 text-center text-sm text-muted">
+							<td colspan="6" class="px-4 py-10 text-center text-sm text-muted">
 								No organizers found.
 							</td>
 						</tr>
@@ -174,13 +182,6 @@
 									>
 										{o.name}
 									</a>
-									{#if o.source}
-										<code
-											class="ml-0 mt-0.5 block w-fit rounded bg-bg px-1 font-mono text-xs text-muted"
-										>
-											{o.source}
-										</code>
-									{/if}
 								</td>
 								<td class="px-4 py-3">
 									<Badge status={o.status} />
@@ -202,6 +203,13 @@
 									{/if}
 									{#if !o.email && !o.phone}
 										<span class="text-muted">—</span>
+									{/if}
+								</td>
+								<td class="px-4 py-3">
+									{#if o.source}
+										<code class="rounded bg-bg px-1 font-mono text-xs text-muted">{o.source}</code>
+									{:else}
+										<span class="text-xs text-muted">—</span>
 									{/if}
 								</td>
 								<td class="px-4 py-3">
@@ -257,8 +265,8 @@
 		<div class="flex items-center justify-between text-sm text-muted">
 			<span>{data.total.toLocaleString()} organizers · page {data.page} of {data.pages}</span>
 			<div class="flex gap-2">
-				<button class="rounded-lg border border-border px-3 py-1.5 enabled:hover:bg-surface-2 disabled:opacity-40" disabled={page <= 1} onclick={() => (page -= 1)}>Previous</button>
-				<button class="rounded-lg border border-border px-3 py-1.5 enabled:hover:bg-surface-2 disabled:opacity-40" disabled={page >= data.pages} onclick={() => (page += 1)}>Next</button>
+				<button class="rounded-lg border border-border px-3 py-1.5 enabled:hover:bg-surface-2 disabled:opacity-40" disabled={page <= 1 || loading} onclick={() => (page -= 1)}>Previous</button>
+				<button class="rounded-lg border border-border px-3 py-1.5 enabled:hover:bg-surface-2 disabled:opacity-40" disabled={page >= data.pages || loading} onclick={() => (page += 1)}>Next</button>
 			</div>
 		</div>
 	{/if}
