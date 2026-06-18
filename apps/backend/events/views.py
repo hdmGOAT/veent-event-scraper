@@ -645,6 +645,42 @@ def api_dedup_trigger(request):
         return JsonResponse({"error": str(exc)}, status=500)
 
 
+_ALLOWED_SCRIPTS = {
+    "categorize-events": "categorize-neon-events.py",
+    "classify-venues": "classify-neon-venues.py",
+}
+
+
+@csrf_exempt
+@require_POST
+def api_script_trigger(request, script_name: str):
+    """Fire-and-forget trigger for long-running AI scripts in scripts/.
+
+    Returns immediately with {"started": true, "pid": <pid>}. The script runs
+    in a detached OS process — check server logs for output.
+    """
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    if script_name not in _ALLOWED_SCRIPTS:
+        return JsonResponse({"error": f"Unknown script: {script_name}"}, status=400)
+
+    scripts_dir = Path(__file__).resolve().parent.parent.parent / "scripts"
+    python = sys.executable
+    script_file = scripts_dir / _ALLOWED_SCRIPTS[script_name]
+
+    try:
+        process = subprocess.Popen(
+            [python, str(script_file)],
+            cwd=str(scripts_dir.parent),
+            start_new_session=True,
+        )
+        return JsonResponse({"started": True, "script": script_name, "pid": process.pid})
+    except Exception as exc:  # noqa: BLE001
+        return JsonResponse({"error": str(exc)}, status=500)
+
+
 def api_scraper_runs(request):
     try:
         limit = max(1, min(int(request.GET.get("limit", 50)), 200))

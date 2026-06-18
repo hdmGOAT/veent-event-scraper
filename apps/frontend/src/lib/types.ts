@@ -153,3 +153,9 @@ export interface DedupResult {
 	output: string;
 	entity: string;
 }
+
+export interface ScriptStartResult {
+	started: boolean;
+	script: string;
+	pid: number;
+}

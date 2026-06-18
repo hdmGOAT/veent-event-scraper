@@ -37,6 +37,11 @@
 	let dedupError = $state<string | null>(null);
 	let dedupOutput = $state<string | null>(null);
 
+	// AI script buttons — fire-and-forget; show "Started" confirmation briefly.
+	let scriptRunning = $state<Record<string, boolean>>({});
+	let scriptError = $state<Record<string, string | null>>({});
+	let scriptStarted = $state<Record<string, boolean>>({});
+
 	let pollingInterval: ReturnType<typeof setInterval> | null = null;
 
 	function startPolling() {
@@ -146,6 +151,27 @@
 		}
 	}
 
+	async function handleScript(scriptName: string) {
+		if (scriptRunning[scriptName]) return;
+		scriptRunning = { ...scriptRunning, [scriptName]: true };
+		scriptError = { ...scriptError, [scriptName]: null };
+		scriptStarted = { ...scriptStarted, [scriptName]: false };
+		try {
+			await api.runScript(scriptName);
+			scriptStarted = { ...scriptStarted, [scriptName]: true };
+			setTimeout(() => {
+				scriptStarted = { ...scriptStarted, [scriptName]: false };
+			}, 4000);
+		} catch (e) {
+			scriptError = {
+				...scriptError,
+				[scriptName]: e instanceof Error ? e.message : 'Failed to start'
+			};
+		} finally {
+			scriptRunning = { ...scriptRunning, [scriptName]: false };
+		}
+	}
+
 	async function handleDedup() {
 		if (deduplicating) return;
 		deduplicating = true;
@@ -179,6 +205,20 @@
 		<div class="flex flex-col items-end gap-1">
 			<div class="flex items-center gap-2">
 				<button
+					disabled={scriptRunning['categorize-events']}
+					onclick={() => handleScript('categorize-events')}
+					class="rounded-md bg-violet-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-50"
+				>
+					{scriptRunning['categorize-events'] ? 'Starting…' : scriptStarted['categorize-events'] ? 'Started ✓' : 'Categorize Events'}
+				</button>
+				<button
+					disabled={scriptRunning['classify-venues']}
+					onclick={() => handleScript('classify-venues')}
+					class="rounded-md bg-violet-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-50"
+				>
+					{scriptRunning['classify-venues'] ? 'Starting…' : scriptStarted['classify-venues'] ? 'Started ✓' : 'Classify Venues'}
+				</button>
+				<button
 					disabled={deduplicating}
 					onclick={handleDedup}
 					class="rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-50"
@@ -193,6 +233,12 @@
 					{runningAll ? 'Running All…' : 'Run All'}
 				</button>
 			</div>
+			{#if scriptError['categorize-events']}
+				<span class="text-xs text-danger">{scriptError['categorize-events']}</span>
+			{/if}
+			{#if scriptError['classify-venues']}
+				<span class="text-xs text-danger">{scriptError['classify-venues']}</span>
+			{/if}
 			{#if dedupError}
 				<span class="text-xs text-danger">{dedupError}</span>
 			{/if}
