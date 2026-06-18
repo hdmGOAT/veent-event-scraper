@@ -1,6 +1,8 @@
 import csv
 import json
+import logging
 import os
+import threading
 
 from django.contrib.admin.views.decorators import staff_member_required
 from django.core.paginator import Paginator
@@ -10,6 +12,8 @@ from django.shortcuts import get_object_or_404, render
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_POST
+
+logger = logging.getLogger(__name__)
 
 from .categories import normalize_category
 from .models import Event, Organizer, ScraperRun, Venue
@@ -648,6 +652,89 @@ def api_scraper_run_all(request):
     return JsonResponse({"created": created, "skipped": skipped}, status=200)
 
 
+@csrf_exempt
+@require_POST
+def api_dedup_trigger(request):
+    # SECURITY NOTE: Intentionally unauthenticated — same posture as
+    # api_scraper_trigger. This is an internal admin tool; revisit when real
+    # auth is added to the frontend.
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    scripts_dir = Path(__file__).resolve().parent.parent.parent / "scripts"
+    python = sys.executable
+
+    entity = request.POST.get("entity") or "all"  # default: all
+    if entity not in ("events", "venues", "organizers", "all"):
+        return JsonResponse({"error": "Invalid entity"}, status=400)
+
+    if not _DEDUP_LOCK.acquire(blocking=False):
+        return JsonResponse({"error": "Dedup already running"}, status=409)
+
+    try:
+        result = subprocess.run(
+            [python, str(scripts_dir / "deduplicate.py"), "--entity", entity],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            cwd=str(scripts_dir.parent),  # apps/backend
+        )
+        stdout = result.stdout.strip()
+        if result.returncode != 0:
+            logger.error("dedup script failed (entity=%s): %s", entity, result.stderr.strip())
+            return JsonResponse({"error": "Dedup operation failed"}, status=500)
+        return JsonResponse({"output": stdout, "entity": entity})
+    except subprocess.TimeoutExpired:
+        return JsonResponse({"error": "Dedup timed out after 120s"}, status=504)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("dedup trigger error (entity=%s): %s", entity, exc)
+        return JsonResponse({"error": "An error occurred"}, status=500)
+    finally:
+        _DEDUP_LOCK.release()
+
+
+_ALLOWED_SCRIPTS = {
+    "categorize-events": "categorize-neon-events.py",
+    "classify-venues": "classify-neon-venues.py",
+}
+
+
+@csrf_exempt
+@require_POST
+def api_script_trigger(request, script_name: str):
+    """Fire-and-forget trigger for long-running AI scripts in scripts/.
+
+    Returns immediately with {"started": true, "pid": <pid>}. The script runs
+    in a detached OS process — check server logs for output.
+
+    SECURITY NOTE: Intentionally unauthenticated — same posture as
+    api_scraper_trigger. This is an internal admin tool; revisit when real
+    auth is added to the frontend.
+    """
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    if script_name not in _ALLOWED_SCRIPTS:
+        return JsonResponse({"error": f"Unknown script: {script_name}"}, status=400)
+
+    scripts_dir = Path(__file__).resolve().parent.parent.parent / "scripts"
+    python = sys.executable
+    script_file = scripts_dir / _ALLOWED_SCRIPTS[script_name]
+
+    try:
+        process = subprocess.Popen(
+            [python, str(script_file)],
+            cwd=str(scripts_dir.parent),
+            start_new_session=True,
+        )
+        return JsonResponse({"started": True, "script": script_name, "pid": process.pid})
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("script trigger error (script=%s): %s", script_name, exc)
+        return JsonResponse({"error": "Failed to start script"}, status=500)
+
+
 def api_scraper_runs(request):
     try:
         limit = max(1, min(int(request.GET.get("limit", 50)), 200))
@@ -751,6 +838,11 @@ def api_scrapers(request):
 # ---------------------------------------------------------------------------
 
 _WEBHOOK_SECRET = os.environ.get("SCRAPER_WEBHOOK_SECRET", "")
+# Process-local lock — prevents concurrent dedup runs within one worker but
+# does NOT protect across multiple gunicorn workers. Acceptable for this
+# internal single-worker dev/staging setup; upgrade to a DB advisory lock or
+# Redis lock if moving to multi-worker production.
+_DEDUP_LOCK = threading.Lock()
 
 
 @csrf_exempt
