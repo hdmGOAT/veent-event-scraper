@@ -1,5 +1,6 @@
 import json
 import sys
+from io import StringIO
 from unittest import mock
 
 from django.contrib.auth import get_user_model
@@ -1524,3 +1525,290 @@ class OrganizerExportTests(TestCase):
         content = response.content.decode()
         self.assertIn("Confirmed Org", content)
         self.assertNotIn("Pending Org", content)
+
+class DeduplicateOrganizersCommandTests(TestCase):
+    """Tests for the ``deduplicate_organizers`` management command."""
+
+    _counter = 0
+
+    @classmethod
+    def _make_organizer(cls, **kwargs):
+        """Create and save an Organizer with a unique slug and sane defaults."""
+        cls._counter += 1
+        defaults = {
+            "name": f"Organizer {cls._counter}",
+            "slug": f"organizer-{cls._counter}",
+            "source": "source_a",
+            "status": Organizer.STATUS_PENDING,
+        }
+        defaults.update(kwargs)
+        return Organizer.objects.create(**defaults)
+
+    def _make_event(self, organizer, **kwargs):
+        DeduplicateOrganizersCommandTests._counter += 1
+        c = DeduplicateOrganizersCommandTests._counter
+        defaults = {
+            "name": f"Event {c}",
+            "slug": f"event-{c}",
+            "organizer_ref": organizer,
+        }
+        defaults.update(kwargs)
+        return Event.objects.create(**defaults)
+
+    # -- Normalization ------------------------------------------------------ #
+
+    def test_normalize_url_strips_www_and_trailing_slash(self):
+        from events.management.commands.deduplicate_organizers import _normalize_url
+        self.assertEqual(
+            _normalize_url("https://WWW.Example.com/page/"),
+            "https://example.com/page",
+        )
+
+    def test_normalize_url_blank_returns_empty(self):
+        from events.management.commands.deduplicate_organizers import _normalize_url
+        self.assertEqual(_normalize_url(""), "")
+        self.assertEqual(_normalize_url(None), "")
+
+    def test_normalize_email_lowercases(self):
+        from events.management.commands.deduplicate_organizers import _normalize_email
+        self.assertEqual(_normalize_email("  Admin@Example.COM  "), "admin@example.com")
+
+    def test_normalize_phone_strips_country_code(self):
+        from events.management.commands.deduplicate_organizers import _normalize_phone
+        self.assertEqual(_normalize_phone("+639171234567"), "9171234567")
+
+    def test_normalize_phone_too_short_returns_empty(self):
+        from events.management.commands.deduplicate_organizers import _normalize_phone
+        self.assertEqual(_normalize_phone("123"), "")
+
+    # -- Cluster detection -------------------------------------------------- #
+
+    def test_exact_website_match_across_sources_detected(self):
+        from events.management.commands.deduplicate_organizers import (
+            find_exact_match_clusters,
+        )
+        self._make_organizer(source="eventbrite", website="https://acme.ph")
+        self._make_organizer(source="planout", website="https://acme.ph")
+        clusters = find_exact_match_clusters(None)
+        self.assertEqual(len(clusters), 1)
+        self.assertEqual(len(clusters[0]), 2)
+
+    def test_same_source_not_clustered(self):
+        from events.management.commands.deduplicate_organizers import (
+            find_exact_match_clusters,
+        )
+        self._make_organizer(source="eventbrite", website="https://acme.ph")
+        self._make_organizer(source="eventbrite", website="https://acme.ph")
+        self.assertEqual(find_exact_match_clusters(None), [])
+
+    def test_email_match_across_sources_detected(self):
+        from events.management.commands.deduplicate_organizers import (
+            find_exact_match_clusters,
+        )
+        self._make_organizer(source="eventbrite", email="hi@acme.ph")
+        self._make_organizer(source="planout", email="HI@acme.ph")
+        clusters = find_exact_match_clusters(None)
+        self.assertEqual(len(clusters), 1)
+        self.assertEqual(len(clusters[0]), 2)
+
+    def test_phone_match_across_sources_detected(self):
+        from events.management.commands.deduplicate_organizers import (
+            find_exact_match_clusters,
+        )
+        self._make_organizer(source="eventbrite", phone="+639171234567")
+        self._make_organizer(source="planout", phone="09171234567")
+        clusters = find_exact_match_clusters(None)
+        self.assertEqual(len(clusters), 1)
+        self.assertEqual(len(clusters[0]), 2)
+
+    def test_blank_field_not_used_as_match_key(self):
+        from events.management.commands.deduplicate_organizers import (
+            find_exact_match_clusters,
+        )
+        self._make_organizer(source="eventbrite", website="")
+        self._make_organizer(source="planout", website="")
+        self.assertEqual(find_exact_match_clusters(None), [])
+
+    def test_source_filter_excludes_irrelevant_clusters(self):
+        from events.management.commands.deduplicate_organizers import (
+            find_exact_match_clusters,
+        )
+        # Cluster 1: A (eventbrite) + B (planout) share website.
+        self._make_organizer(source="eventbrite", website="https://a-b.ph")
+        self._make_organizer(source="planout", website="https://a-b.ph")
+        # Cluster 2: C (facebook) + D (planout) share email.
+        self._make_organizer(source="facebook", email="cd@x.ph")
+        self._make_organizer(source="planout", email="cd@x.ph")
+        clusters = find_exact_match_clusters(source_filter="eventbrite")
+        self.assertEqual(len(clusters), 1)
+        sources = {o.source for o in clusters[0]}
+        self.assertEqual(sources, {"eventbrite", "planout"})
+
+    # -- Winner selection --------------------------------------------------- #
+
+    def test_winner_is_confirmed_over_pending(self):
+        from events.management.commands.deduplicate_organizers import (
+            find_exact_match_clusters, select_winner,
+        )
+        self._make_organizer(
+            source="eventbrite", website="https://w.ph",
+            status=Organizer.STATUS_PENDING,
+        )
+        confirmed = self._make_organizer(
+            source="planout", website="https://w.ph",
+            status=Organizer.STATUS_CONFIRMED,
+        )
+        cluster = find_exact_match_clusters(None)[0]
+        winner, _losers = select_winner(cluster)
+        self.assertEqual(winner.pk, confirmed.pk)
+
+    def test_winner_is_higher_event_count(self):
+        from events.management.commands.deduplicate_organizers import (
+            find_exact_match_clusters, select_winner,
+        )
+        low = self._make_organizer(source="eventbrite", website="https://c.ph")
+        high = self._make_organizer(source="planout", website="https://c.ph")
+        self._make_event(high)
+        self._make_event(high)
+        self._make_event(high)
+        cluster = find_exact_match_clusters(None)[0]
+        winner, losers = select_winner(cluster)
+        self.assertEqual(winner.pk, high.pk)
+        self.assertEqual([l.pk for l in losers], [low.pk])
+
+    def test_winner_is_more_complete(self):
+        from events.management.commands.deduplicate_organizers import (
+            find_exact_match_clusters, select_winner,
+        )
+        sparse = self._make_organizer(source="eventbrite", website="https://m.ph")
+        full = self._make_organizer(
+            source="planout", website="https://m.ph", email="hi@m.ph",
+        )
+        cluster = find_exact_match_clusters(None)[0]
+        winner, _losers = select_winner(cluster)
+        self.assertEqual(winner.pk, full.pk)
+
+    def test_winner_is_lower_pk_on_tie(self):
+        from events.management.commands.deduplicate_organizers import (
+            find_exact_match_clusters, select_winner,
+        )
+        first = self._make_organizer(source="eventbrite", website="https://t.ph")
+        second = self._make_organizer(source="planout", website="https://t.ph")
+        cluster = find_exact_match_clusters(None)[0]
+        winner, _losers = select_winner(cluster)
+        self.assertEqual(winner.pk, min(first.pk, second.pk))
+
+    # -- Merge mechanics ---------------------------------------------------- #
+
+    def test_dry_run_makes_no_db_changes(self):
+        winner = self._make_organizer(source="eventbrite", website="https://d.ph")
+        loser = self._make_organizer(source="planout", website="https://d.ph")
+        event = self._make_event(loser)
+        out = StringIO()
+        call_command("deduplicate_organizers", "--dry-run", stdout=out)
+        event.refresh_from_db()
+        self.assertEqual(event.organizer_ref_id, loser.pk)
+        self.assertTrue(Organizer.objects.filter(pk=winner.pk).exists())
+        self.assertTrue(Organizer.objects.filter(pk=loser.pk).exists())
+
+    def test_execute_repoints_events_and_deletes_loser(self):
+        winner = self._make_organizer(
+            source="eventbrite", website="https://e.ph",
+            status=Organizer.STATUS_CONFIRMED,
+        )
+        loser = self._make_organizer(source="planout", website="https://e.ph")
+        event = self._make_event(loser)
+        out = StringIO()
+        call_command("deduplicate_organizers", "--execute", stdout=out)
+        event.refresh_from_db()
+        self.assertEqual(event.organizer_ref_id, winner.pk)
+        self.assertFalse(Organizer.objects.filter(pk=loser.pk).exists())
+
+    def test_execute_multiple_clusters_all_merged(self):
+        # Cluster A (3 organizers).
+        self._make_organizer(source="s1", website="https://ca.ph")
+        self._make_organizer(source="s2", website="https://ca.ph")
+        self._make_organizer(source="s3", website="https://ca.ph")
+        # Cluster B (3 organizers).
+        self._make_organizer(source="s1", email="cb@x.ph")
+        self._make_organizer(source="s2", email="cb@x.ph")
+        self._make_organizer(source="s3", email="cb@x.ph")
+        out = StringIO()
+        call_command("deduplicate_organizers", "--execute", stdout=out)
+        self.assertEqual(Organizer.objects.count(), 2)
+
+    def test_winner_scraped_at_updated_when_null(self):
+        recent = timezone.now()
+        winner = self._make_organizer(
+            source="eventbrite", website="https://sn.ph",
+            status=Organizer.STATUS_CONFIRMED, scraped_at=None,
+        )
+        self._make_organizer(
+            source="planout", website="https://sn.ph", scraped_at=recent,
+        )
+        out = StringIO()
+        call_command("deduplicate_organizers", "--execute", stdout=out)
+        winner.refresh_from_db()
+        self.assertEqual(winner.scraped_at, recent)
+
+    def test_winner_scraped_at_not_overwritten_when_set(self):
+        own = timezone.now() - timedelta(days=5)
+        loser_time = timezone.now()
+        winner = self._make_organizer(
+            source="eventbrite", website="https://so.ph",
+            status=Organizer.STATUS_CONFIRMED, scraped_at=own,
+        )
+        self._make_organizer(
+            source="planout", website="https://so.ph", scraped_at=loser_time,
+        )
+        out = StringIO()
+        call_command("deduplicate_organizers", "--execute", stdout=out)
+        winner.refresh_from_db()
+        self.assertEqual(winner.scraped_at, own)
+
+    def test_limit_caps_clusters_processed(self):
+        for i in range(3):
+            self._make_organizer(source="s1", website=f"https://lim{i}.ph")
+            self._make_organizer(source="s2", website=f"https://lim{i}.ph")
+        out = StringIO()
+        call_command("deduplicate_organizers", "--execute", "--limit", "1", stdout=out)
+        # Only one cluster merged: 6 - 1 deleted = 5 remain.
+        self.assertEqual(Organizer.objects.count(), 5)
+
+    def test_mutual_exclusion_raises_command_error(self):
+        from django.core.management.base import CommandError
+        with self.assertRaises(CommandError):
+            call_command("deduplicate_organizers", dry_run=True, execute=True)
+
+    # -- Fuzzy pass --------------------------------------------------------- #
+
+    def test_fuzzy_cluster_not_auto_merged(self):
+        a = self._make_organizer(source="eventbrite", name="Awesome Events PH")
+        b = self._make_organizer(source="planout", name="Awesome Events PHL")
+        out = StringIO()
+        call_command("deduplicate_organizers", "--execute", stdout=out)
+        self.assertTrue(Organizer.objects.filter(pk=a.pk).exists())
+        self.assertTrue(Organizer.objects.filter(pk=b.pk).exists())
+
+    def test_fuzzy_output_csv_created(self):
+        import csv as _csv
+        import os
+        import tempfile
+        self._make_organizer(source="eventbrite", name="Awesome Events PH")
+        self._make_organizer(source="planout", name="Awesome Events PHL")
+        path = os.path.join(tempfile.mkdtemp(), "test_fuzzy.csv")
+        out = StringIO()
+        call_command("deduplicate_organizers", "--fuzzy-output", path, stdout=out)
+        self.assertTrue(os.path.exists(path))
+        with open(path, encoding="utf-8") as handle:
+            rows = list(_csv.reader(handle))
+        self.assertEqual(
+            rows[0],
+            [
+                "cluster_id", "pk", "name", "source", "status",
+                "website", "email", "similarity_to_cluster_representative",
+            ],
+        )
+        names = {row[2] for row in rows[1:]}
+        self.assertIn("Awesome Events PH", names)
+        self.assertIn("Awesome Events PHL", names)
