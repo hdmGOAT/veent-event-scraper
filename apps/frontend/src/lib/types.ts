@@ -67,6 +67,19 @@ export interface OrganizerDetail extends Organizer {
 	}[];
 }
 
+export interface VenueMapPin {
+	slug: string;
+	name: string;
+	address: string;
+	city: string;
+	country: string;
+	primary_type_display: string;
+	agents_primary_types: string[];
+	rating: number | null;
+	latitude: number;
+	longitude: number;
+}
+
 export interface VenueRow {
 	slug: string;
 	name: string;
