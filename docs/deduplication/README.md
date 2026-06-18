@@ -34,8 +34,10 @@ pg_dump $DATABASE_URL > backup_$(date +%Y%m%d).sql
 
 ## Live dry-run results (baseline — 2026-06-18)
 
-| Entity | Duplicate groups found |
-|---|---|
-| Events | 11 |
-| Venues | 21 |
-| Organizers | 5 |
+| Entity | Duplicate groups found | Rows to delete |
+|---|---|---|
+| Events | 0 | 0 |
+| Venues | 16 | 17 |
+| Organizers | 2 | 2 |
+
+> Initial run detected 11 event, 21 venue, and 5 organizer groups. After fixing 4 false-positive bugs in `dedup.py` (fragment stripping, date proximity window, venue city guard, organizer name-word guard), the clean count settled at 0 / 16 / 2. See [overview.md — matching strategy](overview.md#matching-strategy) for the guard details.

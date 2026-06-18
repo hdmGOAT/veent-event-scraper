@@ -57,28 +57,36 @@ Duplicate detection uses two sequential passes per entity. Passes are merged (un
 
 ### Events
 
-| Pass | Key | Confidence |
-|---|---|---|
-| 1 | `normalize_url(event.url)` | High — same ticket URL means same event |
-| 2 | `(normalize_name(name), normalize_date(starts_at), normalize_city(venue.city))` | Medium — exact name + date + city |
+| Pass | Key | Guard | Confidence |
+|---|---|---|---|
+| 1 | `normalize_url(event.url)` | `starts_at` dates must be ≤ 7 days apart | High — same ticket URL + same date means same event |
+| 2 | `(normalize_name(name), normalize_date(starts_at), normalize_city(venue.city))` | none | Medium — exact name + date + city |
 
 > **Layer 1 (inline) uses Pass 1 only.** Name+date matching is expensive across large tables and runs in the full script only.
 
+**Why the 7-day date guard on Pass 1:** Some scrapers use a generic registration page URL (e.g. `https://organizer.myruntime.com/register`) shared across every event they host. Without the date guard, all events from that organizer would be incorrectly grouped. True cross-source duplicates (same event scraped from two platforms) always share the same `starts_at` date — scrapers read the same value from the source.
+
+> Note: `normalize_url` preserves the URL fragment (`#slug`). Scrapers like myruntime use `https://base-url/register#/event-slug` to differentiate events; stripping the fragment would collapse all their events into one group.
+
 ### Venues
 
-| Pass | Key | Confidence |
-|---|---|---|
-| 1 | `normalize_url(venue.website)` | High |
-| 2 | `(normalize_name(name), normalize_city(city))` | Medium |
+| Pass | Key | Guard | Confidence |
+|---|---|---|---|
+| 1 | `(normalize_url(website), normalize_city(city))` | Distinct non-empty `place_id` → skip | High |
+| 2 | `(normalize_name(name), normalize_city(city))` | Distinct non-empty `place_id` → skip | Medium |
 
-**Guard:** Two venues with distinct, non-empty `place_id` values are never auto-merged by name+city match — they are different Google Places entries.
+**`place_id` guard (both passes):** Two venues with distinct, non-empty `place_id` values are confirmed to be different Google Places entries and are never merged regardless of name or website match.
+
+**Why city is part of the website key:** A single institution (university, arts complex, shopping mall) may have multiple physically distinct venues under the same domain. Requiring the city alone is not sufficient, but pairing city with the website URL raises the bar: two venues must share website AND be in the same city before being considered duplicates.
 
 ### Organizers
 
-| Pass | Key | Confidence |
-|---|---|---|
-| 1 | `normalize_url(organizer.website)` | High |
-| 2 | `normalize_name(organizer.name)` | Medium — use with caution on generic names |
+| Pass | Key | Guard | Confidence |
+|---|---|---|---|
+| 1 | `normalize_url(organizer.website)` | Organizer names must share ≥ 1 word | High |
+| 2 | `normalize_name(organizer.name)` | none | Medium |
+
+**Why the name-word guard on Pass 1:** Multiple unrelated organizers can legitimately share a venue or mall's website (e.g. a sports organizer listing `gaisanograndmalls.com` as their event location). A shared word in their normalized names is required before a website-URL match triggers a group.
 
 ---
 
@@ -89,14 +97,14 @@ All string comparison keys are computed through normalization before grouping. T
 | Function | What it does |
 |---|---|
 | `normalize_name(s)` | Lowercase → strip accents (NFKD) → strip punctuation → collapse whitespace |
-| `normalize_url(url)` | Drop scheme → strip UTM params → sort query params → strip trailing slash |
+| `normalize_url(url)` | Drop scheme → strip UTM params → sort query params → strip trailing slash → **preserve fragment** |
 | `normalize_date(dt)` | Convert datetime to UTC → return `.date()` only |
 | `normalize_city(city)` | Lowercase + strip whitespace |
 
 **Example — URL normalization:**
 ```
 "https://Eventbrite.com/e/123?utm_source=fb&ref=home"
-→ "eventbrite.com/e/123?ref=home"
+→ "//eventbrite.com/e/123?ref=home"
 
 "http://eventbrite.com/e/123?ref=home/"
 → "eventbrite.com/e/123?ref=home"

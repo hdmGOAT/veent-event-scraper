@@ -64,8 +64,10 @@ def normalize_url(url: str | None) -> str:
     query_pairs.sort()
     query = urlencode(query_pairs)
 
-    # scheme dropped intentionally (empty); keep netloc + path + query.
-    return urlunparse(("", netloc, path, "", query, ""))
+    # scheme dropped intentionally (empty); keep netloc + path + query + fragment.
+    # Fragment is preserved: myruntime uses #/event-slug to differentiate events
+    # on the same base URL — dropping it would collapse all such events into one group.
+    return urlunparse(("", netloc, path, "", query, parsed.fragment))
 
 
 def normalize_date(dt) -> date | None:
@@ -173,12 +175,44 @@ def _group_by_key(rows: list[dict], key_fn) -> list[list[int]]:
 # ---------------------------------------------------------------------------
 
 
+def _date_proximity_ok(rows: list[dict], max_days: int = 7) -> bool:
+    """Return True if all starts_at dates in the group are within max_days of each other.
+
+    True cross-source duplicates (same event scraped from two platforms) always
+    share the same starts_at — the scrapers read the same date from the source.
+    A tight 7-day window excludes:
+      - Annual events reusing the same URL template (e.g. race registration pages)
+      - Different legs/rounds of an event series sharing an organizer URL
+      - Different events listed under the same organizer's Facebook profile
+    Rows with NULL starts_at are skipped from the proximity check.
+    """
+    dates = []
+    for row in rows:
+        dt = row.get("starts_at")
+        if dt is None:
+            continue
+        d = normalize_date(dt)
+        if d is not None:
+            dates.append(d)
+    if len(dates) < 2:
+        return True
+    from datetime import timedelta
+    min_d, max_d = min(dates), max(dates)
+    return (max_d - min_d).days <= max_days
+
+
 def find_event_duplicates(cursor) -> list[list[int]]:
     """Find duplicate events via URL, then name+date+city. Ordered groups."""
-    # Pass 1 — URL normalized match.
-    cursor.execute("SELECT id, url FROM events_event WHERE url != ''")
+    # Pass 1 — URL normalized match, with date proximity guard.
+    cursor.execute("SELECT id, url, starts_at FROM events_event WHERE url != ''")
     url_rows = [dict(r) for r in cursor.fetchall()]
-    groups = _group_by_key(url_rows, lambda r: normalize_url(r["url"]))
+    raw_url_groups = _group_by_key(url_rows, lambda r: normalize_url(r["url"]))
+    # Build lookup for proximity check.
+    row_by_id = {r["id"]: r for r in url_rows}
+    groups = [
+        g for g in raw_url_groups
+        if _date_proximity_ok([row_by_id[pk] for pk in g])
+    ]
 
     # Pass 2 — name + date + city exact match.
     cursor.execute(
@@ -199,28 +233,92 @@ def find_event_duplicates(cursor) -> list[list[int]]:
     return [_select_winner(cursor, "events_event", pks) for pks in merged]
 
 
+def _has_conflicting_place_ids(rows: list[dict]) -> bool:
+    """Return True if 2+ rows have distinct, non-empty place_id values.
+
+    A shared website (e.g. a university's homepage) can appear on multiple
+    physically distinct venues that each have their own Google Place ID.
+    When place_ids are distinct and non-empty we must NOT merge — the venues
+    are confirmed to be different locations.
+    """
+    place_ids = {r["place_id"] for r in rows if r.get("place_id")}
+    return len(place_ids) >= 2
+
+
 def find_venue_duplicates(cursor) -> list[list[int]]:
     """Find duplicate venues via website, then name+city. Ordered groups."""
-    cursor.execute("SELECT id, website FROM events_venue WHERE website != ''")
+    # Fetch place_id and city alongside website so we can apply both guards.
+    cursor.execute(
+        "SELECT id, website, place_id, city FROM events_venue WHERE website != ''"
+    )
     web_rows = [dict(r) for r in cursor.fetchall()]
-    groups = _group_by_key(web_rows, lambda r: normalize_url(r["website"]))
+    # Key: (normalized_url, normalized_city) — venues must share both website
+    # AND city. An institution (university, arts complex) can have many
+    # physically distinct venues under the same domain; the city is a minimum
+    # sanity check that they're at least in the same location.
+    raw_web_groups = _group_by_key(
+        web_rows,
+        lambda r: (normalize_url(r["website"]), normalize_city(r["city"])),
+    )
+    row_by_id = {r["id"]: r for r in web_rows}
+    # Discard any group where the venues have distinct confirmed place_ids —
+    # they are different physical locations that share an institution website.
+    groups = [
+        g for g in raw_web_groups
+        if not _has_conflicting_place_ids([row_by_id[pk] for pk in g])
+    ]
 
-    cursor.execute("SELECT id, name, city FROM events_venue")
+    cursor.execute("SELECT id, name, city, place_id FROM events_venue")
     nc_rows = [dict(r) for r in cursor.fetchall()]
-    groups += _group_by_key(
+    nc_row_by_id = {r["id"]: r for r in nc_rows}
+    raw_nc_groups = _group_by_key(
         nc_rows,
         lambda r: (normalize_name(r["name"]), normalize_city(r["city"])),
     )
+    groups += [
+        g for g in raw_nc_groups
+        if not _has_conflicting_place_ids([nc_row_by_id[pk] for pk in g])
+    ]
 
     merged = _merge_overlapping_groups(groups)
     return [_select_winner(cursor, "events_venue", pks) for pks in merged]
 
 
+def _names_share_words(rows: list[dict]) -> bool:
+    """Return True if all organizer names in the group share at least one word.
+
+    Organizers from different sports events may share a venue or mall website
+    (e.g. gaisanograndmalls.com) without being the same organisation. A shared
+    word in their names is required to confirm the website match is meaningful.
+    Single-character words are ignored to avoid false positives from initials.
+    """
+    word_sets = [
+        {w for w in normalize_name(r.get("name", "")).split() if len(w) > 1}
+        for r in rows
+    ]
+    if len(word_sets) < 2:
+        return True
+    # All pairs must share at least one word.
+    for i in range(len(word_sets) - 1):
+        if not (word_sets[i] & word_sets[i + 1]):
+            return False
+    return True
+
+
 def find_organizer_duplicates(cursor) -> list[list[int]]:
-    """Find duplicate organizers via website, then name. Ordered groups."""
-    cursor.execute("SELECT id, website FROM events_organizer WHERE website != ''")
+    """Find duplicate organizers via website (+ name guard), then name. Ordered groups."""
+    cursor.execute(
+        "SELECT id, website, name FROM events_organizer WHERE website != ''"
+    )
     web_rows = [dict(r) for r in cursor.fetchall()]
-    groups = _group_by_key(web_rows, lambda r: normalize_url(r["website"]))
+    raw_web_groups = _group_by_key(web_rows, lambda r: normalize_url(r["website"]))
+    row_by_id = {r["id"]: r for r in web_rows}
+    # Require that website-matched organizers share at least one name word —
+    # multiple unrelated organizers may legitimately share a venue/mall website.
+    groups = [
+        g for g in raw_web_groups
+        if _names_share_words([row_by_id[pk] for pk in g])
+    ]
 
     cursor.execute("SELECT id, name FROM events_organizer")
     name_rows = [dict(r) for r in cursor.fetchall()]

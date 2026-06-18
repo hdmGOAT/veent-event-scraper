@@ -44,6 +44,7 @@ Steps applied in order:
 4. Strip any query key whose name starts with `utm_`
 5. Sort remaining query params alphabetically
 6. Strip trailing slash from the path
+7. **Preserve the URL fragment** (`#slug`) — scrapers like myruntime use `https://base/register#/event-slug` to differentiate events; stripping the fragment would collapse all events from the same organizer into one group
 
 | Input | Output |
 |---|---|
@@ -51,6 +52,7 @@ Steps applied in order:
 | `"http://example.com/page"` | `"//example.com/page"` |
 | `"https://x.com?b=2&a=1"` | `"//x.com?a=1&b=2"` |
 | `"https://x.com?utm_source=fb&id=1"` | `"//x.com?id=1"` |
+| `"https://base.myruntime.com/register#/my-event"` | `"//base.myruntime.com/register#/my-event"` |
 | `None` | `""` |
 | `""` | `""` |
 
@@ -109,7 +111,7 @@ def find_event_duplicates(cursor) -> list[list[int]]
 
 Two-pass detection:
 
-1. **URL pass** — groups events by `normalize_url(url)` where `url != ''`
+1. **URL pass** — groups events by `normalize_url(url)` where `url != ''`. Groups are discarded if the `starts_at` dates across the group span more than **7 days** — true cross-source duplicates share the same date; different events from the same organizer page do not.
 2. **Name+date+city pass** — groups by `(normalize_name(name), normalize_date(starts_at), normalize_city(venue.city))`
 
 Results from both passes are union-merged (overlapping groups are combined). Winner selection applied to each final group.
@@ -126,10 +128,10 @@ def find_venue_duplicates(cursor) -> list[list[int]]
 
 Two-pass detection:
 
-1. **Website pass** — groups by `normalize_url(website)` where `website != ''`
-2. **Name+city pass** — groups by `(normalize_name(name), normalize_city(city))`
+1. **Website+city pass** — groups by `(normalize_url(website), normalize_city(city))` where `website != ''`. Both website AND city must match. Groups are discarded if any two venues in the group have distinct non-empty `place_id` values.
+2. **Name+city pass** — groups by `(normalize_name(name), normalize_city(city))`. Groups are discarded if any two venues have distinct non-empty `place_id` values.
 
-> Note: the standalone script applies an additional guard — venues with distinct non-empty `place_id` values are not merged by name+city alone. This guard is also present in the Django inline hook (`_dedup_after_save`).
+The `place_id` guard applies to both passes. An institution (university, arts complex) may have many distinct venues under the same domain and in the same city — only `place_id` can reliably distinguish them. When `place_id` is absent for all venues in a group, name+city or website+city match is used.
 
 ---
 
@@ -141,7 +143,7 @@ def find_organizer_duplicates(cursor) -> list[list[int]]
 
 Two-pass detection:
 
-1. **Website pass** — groups by `normalize_url(website)` where `website != ''`
+1. **Website pass** — groups by `normalize_url(website)` where `website != ''`. Groups are discarded unless all organizers in the group share at least one word in their normalized names. This prevents unrelated organizers that share a venue/mall website from being incorrectly merged.
 2. **Name pass** — groups by `normalize_name(name)`
 
 ---
@@ -229,6 +231,9 @@ UPDATE events_event SET organizer_ref_id = winner_id WHERE organizer_ref_id = AN
 | `_group_by_key(rows, key_fn)` | Bucket rows by a key function; return groups with 2+ members |
 | `_fill_missing(cursor, table, winner_id, loser_ids, skip_fields)` | Copy empty winner fields from losers via `UPDATE` |
 | `_is_empty(value) -> bool` | True for `None`, `""`, `[]`, `{}` |
+| `_date_proximity_ok(rows, max_days=7) -> bool` | True if all `starts_at` dates in a group span ≤ 7 days; guards event URL pass against annual-event false positives |
+| `_has_conflicting_place_ids(rows) -> bool` | True if 2+ rows have distinct non-empty `place_id`; guards venue passes against merging different Google Places entries |
+| `_names_share_words(rows) -> bool` | True if all organizer names share ≥ 1 word (ignoring single-char words); guards organizer website pass against shared-venue false positives |
 
 ---
 
