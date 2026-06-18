@@ -1,4 +1,5 @@
 import json
+import sys
 from unittest import mock
 
 from django.contrib.auth import get_user_model
@@ -1156,3 +1157,330 @@ class AiCategoriesTests(TestCase):
             result = ai_categories.batch_categorize([], cli_cmd="fake-claude")
         self.assertEqual(result, {})
         run.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Deduplication tests
+# ---------------------------------------------------------------------------
+
+import pathlib  # noqa: E402
+
+_scripts_dir = pathlib.Path(__file__).resolve().parent.parent / "scripts"
+if str(_scripts_dir) not in sys.path:
+    sys.path.insert(0, str(_scripts_dir))
+
+import dedup as dedup_utils  # noqa: E402
+
+
+def _dict_cursor():
+    """A RealDictCursor over Django's current (test-transaction) connection.
+
+    ``dedup.py`` expects ``cursor.fetchall()`` to yield mapping rows
+    (``row["id"]``), which Django's default cursor does not provide. Sharing the
+    underlying psycopg2 connection keeps reads/writes inside the same test
+    transaction so they roll back automatically.
+    """
+    import psycopg2.extras
+    from django.db import connection
+
+    connection.ensure_connection()
+    return connection.connection.cursor(
+        cursor_factory=psycopg2.extras.RealDictCursor
+    )
+
+
+class NormalizationTests(TestCase):
+    """Pure normalization helpers from scripts/dedup.py — no DB needed."""
+
+    def test_normalize_name_empty_string(self):
+        self.assertEqual(dedup_utils.normalize_name(""), "")
+
+    def test_normalize_name_none(self):
+        self.assertEqual(dedup_utils.normalize_name(None), "")
+
+    def test_normalize_name_accents(self):
+        self.assertEqual(
+            dedup_utils.normalize_name("Café Évènement"), "cafe evenement"
+        )
+
+    def test_normalize_name_punctuation(self):
+        self.assertEqual(dedup_utils.normalize_name("Hello, World!"), "hello world")
+
+    def test_normalize_name_extra_whitespace(self):
+        self.assertEqual(dedup_utils.normalize_name("  foo   bar  "), "foo bar")
+
+    def test_normalize_url_empty(self):
+        self.assertEqual(dedup_utils.normalize_url(""), "")
+        self.assertEqual(dedup_utils.normalize_url(None), "")
+
+    def test_normalize_url_strips_protocol(self):
+        self.assertEqual(
+            dedup_utils.normalize_url("https://example.com/"),
+            dedup_utils.normalize_url("http://example.com/"),
+        )
+
+    def test_normalize_url_strips_trailing_slash(self):
+        self.assertEqual(
+            dedup_utils.normalize_url("https://example.com/page/"),
+            dedup_utils.normalize_url("https://example.com/page"),
+        )
+
+    def test_normalize_url_strips_utm_params(self):
+        self.assertEqual(
+            dedup_utils.normalize_url("https://example.com/?utm_source=fb&id=1"),
+            dedup_utils.normalize_url("https://example.com/?id=1"),
+        )
+
+    def test_normalize_url_sorts_query_params(self):
+        self.assertEqual(
+            dedup_utils.normalize_url("https://x.com/?b=2&a=1"),
+            dedup_utils.normalize_url("https://x.com/?a=1&b=2"),
+        )
+
+    def test_normalize_date_datetime(self):
+        dt = timezone.now()
+        self.assertEqual(dedup_utils.normalize_date(dt), dt.astimezone(__import__("datetime").timezone.utc).date())
+
+    def test_normalize_date_none(self):
+        self.assertIsNone(dedup_utils.normalize_date(None))
+
+    def test_normalize_city_strips_whitespace(self):
+        self.assertEqual(dedup_utils.normalize_city("  Cagayan De Oro  "), "cagayan de oro")
+
+
+class FindDuplicatesTests(TestCase):
+    """Duplicate finders run against the test DB via a RealDictCursor."""
+
+    def test_find_venue_duplicates_by_website(self):
+        a = Venue.objects.create(name="Venue One", slug="v-one",
+                                 website="https://Same.example.com/")
+        b = Venue.objects.create(name="Venue Two", slug="v-two",
+                                 website="http://same.example.com")
+        with _dict_cursor() as cur:
+            groups = dedup_utils.find_venue_duplicates(cur)
+        flat = {pk for g in groups for pk in g}
+        self.assertIn(a.pk, flat)
+        self.assertIn(b.pk, flat)
+        self.assertEqual(len(groups), 1)
+
+    def test_find_venue_duplicates_by_name_city(self):
+        a = Venue.objects.create(name="City Hall", slug="ch-1", city="CDO")
+        b = Venue.objects.create(name="city hall", slug="ch-2", city="cdo")
+        with _dict_cursor() as cur:
+            groups = dedup_utils.find_venue_duplicates(cur)
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(set(groups[0]), {a.pk, b.pk})
+
+    def test_find_venue_duplicates_no_duplicates(self):
+        Venue.objects.create(name="Alpha", slug="alpha", city="A")
+        Venue.objects.create(name="Beta", slug="beta", city="B")
+        with _dict_cursor() as cur:
+            groups = dedup_utils.find_venue_duplicates(cur)
+        self.assertEqual(groups, [])
+
+    def test_find_organizer_duplicates_by_website(self):
+        a = Organizer.objects.create(name="Org A", slug="oa",
+                                     website="https://org.example/")
+        b = Organizer.objects.create(name="Org B", slug="ob",
+                                     website="http://org.example")
+        with _dict_cursor() as cur:
+            groups = dedup_utils.find_organizer_duplicates(cur)
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(set(groups[0]), {a.pk, b.pk})
+
+    def test_find_organizer_duplicates_by_name(self):
+        a = Organizer.objects.create(name="Repeat Org", slug="ro-1")
+        b = Organizer.objects.create(name="repeat org", slug="ro-2")
+        with _dict_cursor() as cur:
+            groups = dedup_utils.find_organizer_duplicates(cur)
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(set(groups[0]), {a.pk, b.pk})
+
+    def test_find_event_duplicates_by_url(self):
+        a = Event.objects.create(name="Run A", slug="run-a",
+                                 url="https://ev.example/run/")
+        b = Event.objects.create(name="Run B", slug="run-b",
+                                 url="http://ev.example/run")
+        with _dict_cursor() as cur:
+            groups = dedup_utils.find_event_duplicates(cur)
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(set(groups[0]), {a.pk, b.pk})
+
+    def test_find_event_duplicates_by_name_date_city(self):
+        venue = Venue.objects.create(name="Hall", slug="hall", city="CDO")
+        when = timezone.now()
+        a = Event.objects.create(name="Gala Night", slug="gala-1",
+                                 starts_at=when, venue=venue)
+        b = Event.objects.create(name="gala night", slug="gala-2",
+                                 starts_at=when, venue=venue)
+        with _dict_cursor() as cur:
+            groups = dedup_utils.find_event_duplicates(cur)
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(set(groups[0]), {a.pk, b.pk})
+
+    def test_find_duplicates_winner_is_first(self):
+        # Rich row has more non-null fields → should be the winner (first pk).
+        rich = Venue.objects.create(
+            name="Dup Venue", slug="dup-1", city="CDO",
+            address="123 Street", country="PH", website="https://dup.example/",
+            about="A rich description.",
+        )
+        sparse = Venue.objects.create(
+            name="dup venue", slug="dup-2", city="cdo",
+        )
+        with _dict_cursor() as cur:
+            groups = dedup_utils.find_venue_duplicates(cur)
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(groups[0][0], rich.pk)
+        self.assertIn(sparse.pk, groups[0][1:])
+
+
+class MergeTests(TestCase):
+    """Merge functions run against the test DB via a RealDictCursor."""
+
+    def test_merge_venues_remaps_fk(self):
+        winner = Venue.objects.create(name="W", slug="w", city="CDO")
+        loser = Venue.objects.create(name="L", slug="l", city="CDO")
+        ev = Event.objects.create(name="E", slug="e", venue=loser)
+        with _dict_cursor() as cur:
+            dedup_utils.merge_venues(cur, winner.pk, [loser.pk])
+        ev.refresh_from_db()
+        self.assertEqual(ev.venue_id, winner.pk)
+        self.assertFalse(Venue.objects.filter(pk=loser.pk).exists())
+
+    def test_merge_organizers_remaps_fk(self):
+        winner = Organizer.objects.create(name="W", slug="ow")
+        loser = Organizer.objects.create(name="L", slug="ol")
+        ev = Event.objects.create(name="E2", slug="e2", organizer_ref=loser)
+        with _dict_cursor() as cur:
+            dedup_utils.merge_organizers(cur, winner.pk, [loser.pk])
+        ev.refresh_from_db()
+        self.assertEqual(ev.organizer_ref_id, winner.pk)
+        self.assertFalse(Organizer.objects.filter(pk=loser.pk).exists())
+
+    def test_merge_events_hard_deletes_loser(self):
+        winner = Event.objects.create(name="W", slug="ew")
+        loser = Event.objects.create(name="L", slug="el")
+        before = Event.objects.count()
+        with _dict_cursor() as cur:
+            dedup_utils.merge_events(cur, winner.pk, [loser.pk])
+        self.assertEqual(Event.objects.count(), before - 1)
+        self.assertFalse(Event.objects.filter(pk=loser.pk).exists())
+
+    def test_merge_fills_missing_fields(self):
+        winner = Venue.objects.create(name="W", slug="fw", city="CDO")
+        loser = Venue.objects.create(name="L", slug="fl", city="CDO",
+                                     about="From loser.")
+        with _dict_cursor() as cur:
+            dedup_utils.merge_venues(cur, winner.pk, [loser.pk])
+        winner.refresh_from_db()
+        self.assertEqual(winner.about, "From loser.")
+
+    def test_merge_does_not_overwrite_existing_fields(self):
+        winner = Venue.objects.create(name="W", slug="ow2", city="CDO",
+                                      about="Winner about.")
+        loser = Venue.objects.create(name="L", slug="ol2", city="CDO",
+                                     about="Loser about.")
+        with _dict_cursor() as cur:
+            dedup_utils.merge_venues(cur, winner.pk, [loser.pk])
+        winner.refresh_from_db()
+        self.assertEqual(winner.about, "Winner about.")
+
+    def test_merge_protected_fields_not_overwritten_venue(self):
+        winner = Venue.objects.create(
+            name="W", slug="pw", city="CDO",
+            verification_status=Venue.VerificationStatus.VERIFIED,
+        )
+        loser = Venue.objects.create(
+            name="L", slug="pl", city="CDO",
+            verification_status=Venue.VerificationStatus.REJECTED,
+        )
+        with _dict_cursor() as cur:
+            dedup_utils.merge_venues(cur, winner.pk, [loser.pk])
+        winner.refresh_from_db()
+        self.assertEqual(
+            winner.verification_status, Venue.VerificationStatus.VERIFIED
+        )
+
+    def test_merge_protected_fields_not_overwritten_event(self):
+        winner = Event.objects.create(name="W", slug="aw",
+                                      agent_categories=["Music & Concert"])
+        loser = Event.objects.create(name="L", slug="al",
+                                     agent_categories=["Sports & Fitness"])
+        with _dict_cursor() as cur:
+            dedup_utils.merge_events(cur, winner.pk, [loser.pk])
+        winner.refresh_from_db()
+        self.assertEqual(winner.agent_categories, ["Music & Concert"])
+
+    def test_merge_protected_fields_not_overwritten_organizer(self):
+        winner = Organizer.objects.create(name="W", slug="sw",
+                                          status=Organizer.STATUS_CONFIRMED)
+        loser = Organizer.objects.create(name="L", slug="sl",
+                                         status=Organizer.STATUS_PENDING)
+        with _dict_cursor() as cur:
+            dedup_utils.merge_organizers(cur, winner.pk, [loser.pk])
+        winner.refresh_from_db()
+        self.assertEqual(winner.status, Organizer.STATUS_CONFIRMED)
+
+    def test_merge_slug_preserved(self):
+        winner = Venue.objects.create(name="W", slug="keep-slug", city="CDO")
+        loser = Venue.objects.create(name="L", slug="lose-slug", city="CDO")
+        with _dict_cursor() as cur:
+            dedup_utils.merge_venues(cur, winner.pk, [loser.pk])
+        winner.refresh_from_db()
+        self.assertEqual(winner.slug, "keep-slug")
+
+
+class DedupCommandTests(TestCase):
+    """Exercises the inline _dedup_after_save hook from scrapers/base.py."""
+
+    def test_dedup_after_save_venues_merges_by_name_city(self):
+        from events.scrapers.base import _dedup_after_save
+
+        a = Venue.objects.create(name="Town Hall", slug="th-1", city="CDO")
+        b = Venue.objects.create(name="town hall", slug="th-2", city="cdo")
+        _dedup_after_save("venues", [a.pk, b.pk])
+        self.assertEqual(Venue.objects.filter(pk__in=[a.pk, b.pk]).count(), 1)
+
+    def test_dedup_after_save_venues_keeps_distinct_place_ids(self):
+        from events.scrapers.base import _dedup_after_save
+
+        a = Venue.objects.create(name="Mall", slug="m-1", city="CDO",
+                                 place_id="pid-a")
+        b = Venue.objects.create(name="mall", slug="m-2", city="cdo",
+                                 place_id="pid-b")
+        _dedup_after_save("venues", [a.pk, b.pk])
+        # Distinct stable place_ids must not be merged.
+        self.assertEqual(Venue.objects.filter(pk__in=[a.pk, b.pk]).count(), 2)
+
+    def test_dedup_after_save_events_merges_by_url(self):
+        from events.scrapers.base import _dedup_after_save
+
+        a = Event.objects.create(name="Run A", slug="dr-a",
+                                 url="https://x.example/run/")
+        b = Event.objects.create(name="Run B", slug="dr-b",
+                                 url="http://x.example/run")
+        _dedup_after_save("events", [a.pk, b.pk])
+        self.assertEqual(Event.objects.filter(pk__in=[a.pk, b.pk]).count(), 1)
+
+    def test_dedup_after_save_organizers_merges_by_name(self):
+        from events.scrapers.base import _dedup_after_save
+
+        a = Organizer.objects.create(name="Same Org", slug="so-1")
+        b = Organizer.objects.create(name="same org", slug="so-2")
+        _dedup_after_save("organizers", [a.pk, b.pk])
+        self.assertEqual(Organizer.objects.filter(pk__in=[a.pk, b.pk]).count(), 1)
+
+    def test_dedup_after_save_empty_ids_noop(self):
+        from events.scrapers.base import _dedup_after_save
+
+        # No ids → no error, no DB change.
+        before = Venue.objects.count()
+        _dedup_after_save("venues", [])
+        self.assertEqual(Venue.objects.count(), before)
+
+    def test_dedup_after_save_never_raises(self):
+        from events.scrapers.base import _dedup_after_save
+
+        # Unknown entity is silently ignored (no dispatch), never raises.
+        _dedup_after_save("nonexistent", [1, 2, 3])
