@@ -1,7 +1,8 @@
 """Shared helper: extract contact info from parsed HTML.
 
-Pulls email, phone, social URLs, description, and postal address (city/country)
-out of a page's markup. Used by the organizer enrichment crawler.
+Pulls email, phone, social URLs, description, and postal address
+(street, city, country) out of a page's markup. Used by the organizer
+enrichment crawler.
 """
 import json
 import re
@@ -26,7 +27,7 @@ def extract_contact_info(html: str, base_url: str = "") -> dict:
     """Parse HTML and return a dict of contact fields found.
 
     Returns subset of: email, phone, facebook_url, instagram_url, description,
-    city, country. Only returns fields that were actually found (non-empty values).
+    address, city, country. Only returns fields that were actually found (non-empty values).
     """
     soup = BeautifulSoup(html, "lxml")
     result: dict = {}
@@ -72,13 +73,16 @@ def extract_contact_info(html: str, base_url: str = "") -> dict:
             continue
         address = _find_postal_address(data)
         if address:
+            street = address.get("streetAddress")
             locality = address.get("addressLocality")
             country = address.get("addressCountry")
+            if street and "address" not in result:
+                result["address"] = _stringify(street)[:500]
             if locality and "city" not in result:
                 result["city"] = _stringify(locality)
             if country and "country" not in result:
                 result["country"] = _stringify(country)
-        if "city" in result and "country" in result:
+        if "address" in result and "city" in result and "country" in result:
             break
 
     return result

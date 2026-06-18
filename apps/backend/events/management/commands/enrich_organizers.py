@@ -36,11 +36,12 @@ _HEADERS = {"User-Agent": _USER_AGENT}
 _CONTACT_FIELDS = (
     "email",
     "phone",
+    "address",
+    "city",
+    "country",
     "facebook_url",
     "instagram_url",
     "description",
-    "city",
-    "country",
 )
 
 
