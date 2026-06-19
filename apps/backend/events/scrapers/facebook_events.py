@@ -285,6 +285,28 @@ _EXTRACT_DETAIL_JS = r"""
         if (organizer_name) break;
     }
 
+    // Strategy 1b: listitem scan — organizer link lives in a sibling branch of
+    // the "Event by" text that the 6-level walk-up misses. FB consistently wraps
+    // the organizer section in div[role="listitem"] (often also carrying
+    // data-visualcompletion="ignore-dynamic"). Scan all such containers for any
+    // FB profile/page URL — /people/<name>/<id>/, /<slug>/, profile.php?id=.
+    if (!organizer_url) {
+        for (const item of document.querySelectorAll('[role="listitem"]')) {
+            if (isInSidebarNav(item)) continue;
+            // Must contain "Event by" text to be the right listitem
+            if (!/Event\s+by\b/i.test(item.textContent || '')) continue;
+            for (const a of item.querySelectorAll('a[href]')) {
+                const href = a.href || '';
+                if (FB_PAGE_RE.test(href) && !/\/events\//.test(href)) {
+                    organizer_url = cleanFbUrl(href);
+                    if (!organizer_name) organizer_name = (a.textContent || '').trim() || null;
+                    break;
+                }
+            }
+            if (organizer_url) break;
+        }
+    }
+
     // Strategy 2: "Meet your host" section (visible when logged in)
     if (!organizer_url) {
         const hostHeading = Array.from(document.querySelectorAll('span, div, h2, h3, strong'))
