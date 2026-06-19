@@ -24,9 +24,14 @@ class Command(BaseCommand):
             "--run-id", type=int, required=True,
             help="The ScraperRun.pk to execute.",
         )
+        parser.add_argument(
+            "--query-id", type=int, default=None,
+            help="When set, only this SearchQuery.pk is processed (single-query run).",
+        )
 
     def handle(self, *args, **options):
         run_id = options["run_id"]
+        query_id = options.get("query_id")
         try:
             run = ScraperRun.objects.get(id=run_id)
         except ScraperRun.DoesNotExist:
@@ -34,7 +39,10 @@ class Command(BaseCommand):
             self.stderr.write(f"ScraperRun {run_id} not found; nothing to run.")
             return
 
-        key = run.scraper_key
+        # The scraper_key may be "facebook_events:q:5" for single-query runs;
+        # extract the base key that maps to SCRAPERS.
+        raw_key = run.scraper_key
+        key = raw_key.split(":q:")[0] if ":q:" in raw_key else raw_key
         if key not in SCRAPERS:
             run.status = ScraperRun.Status.FAILED
             run.finished_at = timezone.now()
@@ -55,7 +63,8 @@ class Command(BaseCommand):
         run.refresh_from_db()
 
         try:
-            result = SCRAPERS[key]().run()
+            scraper = SCRAPERS[key]()
+            result = scraper.run(query_id=query_id) if query_id else scraper.run()
         except Exception:
             tb = traceback.format_exc()
             run.status = ScraperRun.Status.FAILED

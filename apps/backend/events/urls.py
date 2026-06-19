@@ -37,6 +37,10 @@ urlpatterns = [
     path("api/scrapers/runs/<int:run_id>/", views.api_scraper_run_detail, name="api_scraper_run_detail"),
     path("api/scrapers/runs/", views.api_scraper_runs, name="api_scraper_runs"),
     path("api/scrapers/", views.api_scrapers, name="api_scrapers"),
+    # Search queries — managed via the SvelteKit UI
+    path("api/search-queries/<int:pk>/run/", views.api_search_query_run, name="api_search_query_run"),
+    path("api/search-queries/<int:pk>/", views.api_search_query_detail, name="api_search_query_detail"),
+    path("api/search-queries/", views.api_search_queries, name="api_search_queries"),
     # n8n automation webhooks
     path("webhooks/scrape/", views.scraper_webhook, name="scraper_webhook"),
     path("webhooks/ingest-events/", views.ingest_events_webhook, name="ingest_events_webhook"),
