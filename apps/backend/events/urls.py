@@ -27,6 +27,7 @@ urlpatterns = [
     path("api/venues/map/", views.api_venues_map, name="api_venues_map"),
     path("api/venues/<slug:slug>/", views.api_venue_detail, name="api_venue_detail"),
     path("api/venues/", views.api_venues, name="api_venues"),
+    path("api/settings/proxy/", views.api_proxy_setting, name="api_proxy_setting"),
     # Scraper run jobs — more-specific paths before the api/scrapers/ catch-all.
     path("api/scrapers/<str:key>/run/", views.api_scraper_trigger, name="api_scraper_trigger"),
     path("api/scrapers/dedup/", views.api_dedup_trigger, name="api_dedup_trigger"),
