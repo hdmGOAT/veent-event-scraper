@@ -34,3 +34,4 @@ apps/frontend/build/
 \graphify-out
 
 .claude/hooks/.logs/
+.claude/chrome-devtools/tmp/
