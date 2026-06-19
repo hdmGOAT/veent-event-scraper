@@ -1,7 +1,7 @@
 <script lang="ts">
 	// Icon convention: use lucide-svelte components.
 	// Do not add inline <svg> strings. Size: 18px, strokeWidth: 2 for nav icons.
-	import { Calendar, ChevronDown, Icon, LayoutGrid, List, Map, MapPin, Menu, Radio, User, Users, X, Zap } from 'lucide-svelte';
+	import { Calendar, ChevronDown, Icon, LayoutGrid, List, Map, MapPin, Menu, Radio, Search, User, Users, X, Zap } from 'lucide-svelte';
 	import { page } from '$app/state';
 
 	type NavItem = { href: string; label: string; exact: boolean; icon: typeof Icon };
@@ -10,6 +10,7 @@
 	const items: NavItem[] = [
 		{ href: '/', label: 'Dashboard', exact: true, icon: LayoutGrid },
 		{ href: '/scrapers', label: 'Scraper Center', exact: false, icon: Radio },
+		{ href: '/search-queries', label: 'Search Queries', exact: false, icon: Search },
 		{ href: '/events', label: 'Events', exact: false, icon: Calendar },
 		{ href: '/organizers', label: 'Organizers', exact: false, icon: Users },
 	];
