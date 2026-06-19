@@ -452,6 +452,7 @@ _EXTRACT_DETAIL_JS = r"""
             organizer_name,
             organizer_url,
             description,
+            image_url:          document.querySelector('meta[property="og:image"]')?.content || '',
             respondent_count:   0,
             source_search_term: searchTerm,
         }],
@@ -753,6 +754,7 @@ class FacebookEventsScraper(BaseScraper):
             start_raw      = d.get("start_datetime") or card.get("start_datetime")
             external_id    = d.get("event_id") or card.get("event_id", "")
             description    = d.get("description") or card.get("short_description") or ""
+            image_url      = d.get("image_url") or ""
 
             venue = (
                 ScrapedVenue(
@@ -767,6 +769,7 @@ class FacebookEventsScraper(BaseScraper):
             yield ScrapedEvent(
                 name=title,
                 description=description,
+                image_url=image_url,
                 starts_at=_parse_fb_date(start_raw),
                 url=event_url,
                 external_id=external_id,
@@ -776,6 +779,15 @@ class FacebookEventsScraper(BaseScraper):
                 venue=venue,
             )
             processed += 1
+            logger.info(
+                "[%s] (%d/%d) %s | venue=%s | organizer=%s | img=%s | desc=%d chars",
+                self.source, processed, len(cards),
+                title,
+                venue_name or "—",
+                organizer or "—",
+                "yes" if image_url else "no",
+                len(description),
+            )
 
     # ── Organizer page scrape ─────────────────────────────────────────────────
 
@@ -839,6 +851,13 @@ class FacebookEventsScraper(BaseScraper):
                 for sq in queries:
                     try:
                         scraped[sq.id] = list(self._fetch_for_query(page, sq.query, max_events=max_events))
+                        n = len(scraped[sq.id])
+                        with_img  = sum(1 for e in scraped[sq.id] if e.image_url)
+                        with_desc = sum(1 for e in scraped[sq.id] if e.description)
+                        logger.info(
+                            "[%s] query '%s' done: %d events, %d with image, %d with description",
+                            self.source, sq.query, n, with_img, with_desc,
+                        )
                     except Exception as exc:
                         logger.warning("[%s] query '%s' failed, skipping: %s", self.source, sq.query, exc)
                         scraped[sq.id] = []
@@ -920,7 +939,15 @@ class FacebookEventsScraper(BaseScraper):
 
             total_created += result["created"]
             total_updated += result["updated"]
+            logger.info(
+                "[%s] saved query '%s': %d created, %d updated",
+                self.source, sq.query, result["created"], result["updated"],
+            )
 
+        logger.info(
+            "[%s] run complete — %d queries, %d created, %d updated",
+            self.source, len(queries), total_created, total_updated,
+        )
         return {
             "source": self.source,
             "created": total_created,
