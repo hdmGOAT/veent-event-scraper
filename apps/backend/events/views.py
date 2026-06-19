@@ -628,7 +628,9 @@ def api_proxy_setting(request):
             return JsonResponse({"error": "Invalid JSON"}, status=400)
         if "enabled" not in body:
             return JsonResponse({"error": "Missing 'enabled' field"}, status=400)
-        set_proxy_enabled(bool(body["enabled"]))
+        if not isinstance(body["enabled"], bool):
+            return JsonResponse({"error": "'enabled' must be a JSON boolean"}, status=400)
+        set_proxy_enabled(body["enabled"])
         return JsonResponse({"enabled": get_proxy_enabled()})
 
     return JsonResponse({"error": "Method not allowed"}, status=405)
