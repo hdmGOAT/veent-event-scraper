@@ -70,6 +70,7 @@
 		}
 		page = 1;
 	}
+
 </script>
 
 <svelte:head>
@@ -117,6 +118,7 @@
 				{/each}
 			</select>
 		{/if}
+
 	</div>
 
 	<div class="overflow-hidden rounded-xl border border-border bg-surface">

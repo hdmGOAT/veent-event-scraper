@@ -19,6 +19,7 @@ import type {
 	SourceCount,
 	Stats,
 	VenueDetail,
+	VenueMapPin,
 	VenueRow
 } from './types';
 
@@ -79,6 +80,7 @@ export const api = {
 	venues: (params: { q?: string; status?: string; ordering?: string; type?: string; page?: number } = {}, f?: Fetch) =>
 		get<Paginated<VenueRow>>(`/venues/${qs(params)}`, f),
 	venueTypes: (f?: Fetch) => get<string[]>('/venues/types/', f),
+	venueMapPins: (f?: Fetch) => get<VenueMapPin[]>('/venues/map/', f),
 	venue: (slug: string, f?: Fetch) => get<VenueDetail>(`/venues/${slug}/`, f),
 	scrapers: (f?: Fetch) => get<Scraper[]>('/scrapers/', f),
 	runScraper: (key: string) => post<{ id: number; status: ScraperRunStatus }>(`/scrapers/${key}/run/`),

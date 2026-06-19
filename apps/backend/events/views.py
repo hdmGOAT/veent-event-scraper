@@ -585,6 +585,20 @@ def api_venues(request):
     )
 
 
+def api_venues_map(request):
+    pins = (
+        Venue.objects.filter(latitude__isnull=False, longitude__isnull=False)
+        .annotate(event_count=Count("events"))
+        .values(
+            "slug", "name", "address", "city", "country",
+            "primary_type_display", "agents_primary_types",
+            "rating", "latitude", "longitude",
+            "verification_status", "website", "event_count",
+        )
+    )
+    return JsonResponse(list(pins), safe=False)
+
+
 # ---------------------------------------------------------------------------
 # Scraper run jobs — trigger runs from the UI and poll/list their status.
 # All endpoints are staff-only, mirroring the /review/ convention.
