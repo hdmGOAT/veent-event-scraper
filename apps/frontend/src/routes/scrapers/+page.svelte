@@ -30,6 +30,8 @@
 	let errors = $state<Map<string, string>>(new Map());
 	// Keys whose failure traceback is expanded.
 	let expandedErrors = $state<Set<string>>(new Set());
+	// Keys whose log terminal is expanded (collapsed by default).
+	let expandedLogs = $state<Set<string>>(new Set());
 	let showAllRuns = $state(false);
 
 	// "Run All" in-flight flag.
@@ -118,6 +120,13 @@
 		if (next.has(key)) next.delete(key);
 		else next.add(key);
 		expandedErrors = next;
+	}
+
+	function toggleLog(key: string) {
+		const next = new Set(expandedLogs);
+		if (next.has(key)) next.delete(key);
+		else next.add(key);
+		expandedLogs = next;
 	}
 
 	// Last-run line for a card, sourced from the ScraperRun history (last_run),
@@ -213,6 +222,20 @@
 		});
 		return () => stopPolling();
 	});
+
+	// Auto-scroll action: keeps <pre> pinned to the bottom as log lines arrive.
+	function autoscroll(node: HTMLElement) {
+		const obs = new MutationObserver(() => { node.scrollTop = node.scrollHeight; });
+		obs.observe(node, { childList: true, subtree: true, characterData: true });
+		node.scrollTop = node.scrollHeight;
+		return { destroy() { obs.disconnect(); } };
+	}
+
+	// Show only the last 30 lines in the card to keep it compact.
+	function trimLog(raw: string | null): string {
+		if (!raw) return '';
+		return raw.split('\n').filter(Boolean).slice(-30).join('\n');
+	}
 </script>
 
 <svelte:head>
@@ -335,8 +358,17 @@
 				<code class="mt-1 block text-xs text-muted">{s.key}</code>
 
 				{#if run}
-					<div class="mt-3">
+					<div class="mt-3 flex items-center gap-2">
 						<Badge status={run.status} />
+						{#if run.log_output && (isActive || run.status === 'success' || run.status === 'failed')}
+							<button
+								onclick={() => toggleLog(s.key)}
+								class="text-xs text-muted hover:text-text transition"
+								title={expandedLogs.has(s.key) ? 'Hide logs' : 'Show logs'}
+							>
+								{expandedLogs.has(s.key) ? '− logs' : '+ logs'}
+							</button>
+						{/if}
 					</div>
 				{/if}
 
@@ -363,6 +395,15 @@
 								{expandedErrors.has(s.key) ? 'show less' : 'show full'}
 							</button>
 						{/if}
+					</div>
+				{/if}
+
+				{#if run?.log_output && expandedLogs.has(s.key) && (isActive || run.status === 'success' || run.status === 'failed')}
+					<div class="mt-3">
+						<pre
+							use:autoscroll
+							class="h-36 overflow-y-auto rounded-md bg-neutral-950 p-2 text-xs leading-relaxed text-green-400 font-mono whitespace-pre-wrap"
+						>{trimLog(run.log_output)}</pre>
 					</div>
 				{/if}
 
