@@ -8,6 +8,11 @@
 
 	let { data }: { data: PageData } = $props();
 
+	// svelte-ignore state_referenced_locally
+	let proxyEnabled = $state<boolean>(data.proxyEnabled);
+	let proxyToggling = $state(false);
+	let proxyError = $state<string | null>(null);
+
 	// Local copy of the scraper list so we can refresh each card's last_run
 	// after a run finishes, without a manual page reload. Seeded once from the
 	// SSR load; subsequent updates come from api.scrapers() polling.
@@ -25,6 +30,8 @@
 	let errors = $state<Map<string, string>>(new Map());
 	// Keys whose failure traceback is expanded.
 	let expandedErrors = $state<Set<string>>(new Set());
+	// Keys whose log terminal is expanded (collapsed by default).
+	let expandedLogs = $state<Set<string>>(new Set());
 	let showAllRuns = $state(false);
 
 	// "Run All" in-flight flag.
@@ -115,6 +122,13 @@
 		expandedErrors = next;
 	}
 
+	function toggleLog(key: string) {
+		const next = new Set(expandedLogs);
+		if (next.has(key)) next.delete(key);
+		else next.add(key);
+		expandedLogs = next;
+	}
+
 	// Last-run line for a card, sourced from the ScraperRun history (last_run),
 	// not the stale event-derived last_scraped. An active poll run takes
 	// precedence over this and is rendered separately above.
@@ -172,6 +186,20 @@
 		}
 	}
 
+	async function handleProxyToggle() {
+		if (proxyToggling) return;
+		proxyToggling = true;
+		proxyError = null;
+		try {
+			const result = await api.setProxySetting(!proxyEnabled);
+			proxyEnabled = result.enabled;
+		} catch (e) {
+			proxyError = e instanceof Error ? e.message : 'Failed to toggle proxy';
+		} finally {
+			proxyToggling = false;
+		}
+	}
+
 	async function handleDedup() {
 		if (deduplicating) return;
 		deduplicating = true;
@@ -194,6 +222,20 @@
 		});
 		return () => stopPolling();
 	});
+
+	// Auto-scroll action: keeps <pre> pinned to the bottom as log lines arrive.
+	function autoscroll(node: HTMLElement) {
+		const obs = new MutationObserver(() => { node.scrollTop = node.scrollHeight; });
+		obs.observe(node, { childList: true, subtree: true, characterData: true });
+		node.scrollTop = node.scrollHeight;
+		return { destroy() { obs.disconnect(); } };
+	}
+
+	// Show only the last 30 lines in the card to keep it compact.
+	function trimLog(raw: string | null): string {
+		if (!raw) return '';
+		return raw.split('\n').filter(Boolean).slice(-30).join('\n');
+	}
 </script>
 
 <svelte:head>
@@ -204,6 +246,25 @@
 	{#snippet action()}
 		<div class="flex flex-col items-end gap-1">
 			<div class="flex items-center gap-2">
+				<button
+					disabled={proxyToggling}
+					onclick={handleProxyToggle}
+					class="flex items-center gap-2 rounded-md border px-3 py-2 text-sm font-medium transition
+						{proxyEnabled
+							? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20'
+							: 'border-border bg-surface-2 text-muted hover:bg-surface'}"
+					title="Toggle rotating proxy for all scrapers"
+				>
+					<span class="relative flex h-4 w-4 shrink-0 items-center justify-center">
+						{#if proxyEnabled}
+							<span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-50"></span>
+							<span class="relative inline-flex h-2.5 w-2.5 rounded-full bg-emerald-400"></span>
+						{:else}
+							<span class="inline-flex h-2.5 w-2.5 rounded-full bg-muted/50"></span>
+						{/if}
+					</span>
+					{proxyToggling ? 'Updating…' : proxyEnabled ? 'Proxy On' : 'Proxy Off'}
+				</button>
 				<button
 					disabled={scriptRunning['categorize-events']}
 					onclick={() => handleScript('categorize-events')}
@@ -247,6 +308,9 @@
 			{/if}
 			{#if runAllError}
 				<span class="text-xs text-danger">{runAllError}</span>
+			{/if}
+			{#if proxyError}
+				<span class="text-xs text-danger">{proxyError}</span>
 			{/if}
 		</div>
 	{/snippet}
@@ -294,8 +358,17 @@
 				<code class="mt-1 block text-xs text-muted">{s.key}</code>
 
 				{#if run}
-					<div class="mt-3">
+					<div class="mt-3 flex items-center gap-2">
 						<Badge status={run.status} />
+						{#if run.log_output && (isActive || run.status === 'success' || run.status === 'failed')}
+							<button
+								onclick={() => toggleLog(s.key)}
+								class="text-xs text-muted hover:text-text transition"
+								title={expandedLogs.has(s.key) ? 'Hide logs' : 'Show logs'}
+							>
+								{expandedLogs.has(s.key) ? '− logs' : '+ logs'}
+							</button>
+						{/if}
 					</div>
 				{/if}
 
@@ -322,6 +395,15 @@
 								{expandedErrors.has(s.key) ? 'show less' : 'show full'}
 							</button>
 						{/if}
+					</div>
+				{/if}
+
+				{#if run?.log_output && expandedLogs.has(s.key) && (isActive || run.status === 'success' || run.status === 'failed')}
+					<div class="mt-3">
+						<pre
+							use:autoscroll
+							class="h-36 overflow-y-auto rounded-md bg-neutral-950 p-2 text-xs leading-relaxed text-green-400 font-mono whitespace-pre-wrap"
+						>{trimLog(run.log_output)}</pre>
 					</div>
 				{/if}
 

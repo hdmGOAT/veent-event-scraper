@@ -27,6 +27,24 @@
 		pending: { color: '#f59e0b', label: 'Pending' }
 	};
 
+	function esc(s: string): string {
+		return s
+			.replace(/&/g, '&amp;')
+			.replace(/</g, '&lt;')
+			.replace(/>/g, '&gt;')
+			.replace(/"/g, '&quot;')
+			.replace(/'/g, '&#39;');
+	}
+
+	function safeUrl(url: string): string {
+		try {
+			const u = new URL(url);
+			return u.protocol === 'http:' || u.protocol === 'https:' ? url : '';
+		} catch {
+			return '';
+		}
+	}
+
 	function buildPopup(pin: VenueMapPin): string {
 		const typeLabel =
 			pin.agents_primary_types.length > 0
@@ -36,20 +54,21 @@
 		const location = [pin.city, pin.country].filter(Boolean).join(', ') || '—';
 		const showAddress = pin.address && pin.address !== location;
 		const st = statusMeta[pin.verification_status] ?? { color: '#94a3b8', label: pin.verification_status };
+		const websiteHref = safeUrl(pin.website ?? '');
 
 		return `
 			<div class="vm-popup">
-				<a class="vm-name" href="/venues/${pin.slug}">${pin.name}</a>
-				<span class="vm-type">${typeLabel}</span>
-				<span class="vm-loc">${location}</span>
-				${showAddress ? `<span class="vm-addr">${pin.address}</span>` : ''}
+				<a class="vm-name" href="/venues/${esc(pin.slug)}">${esc(pin.name)}</a>
+				<span class="vm-type">${esc(typeLabel)}</span>
+				<span class="vm-loc">${esc(location)}</span>
+				${showAddress ? `<span class="vm-addr">${esc(pin.address)}</span>` : ''}
 				<div class="vm-row">
 					${pin.rating != null ? `<span class="vm-rating">★ ${pin.rating}</span>` : ''}
 					${pin.event_count > 0 ? `<span class="vm-events">${pin.event_count} event${pin.event_count !== 1 ? 's' : ''}</span>` : ''}
 				</div>
 				<div class="vm-row">
-					<span class="vm-status" style="color:${st.color}">● ${st.label}</span>
-					${pin.website ? `<a class="vm-website" href="${pin.website}" target="_blank" rel="noopener noreferrer">↗ Website</a>` : ''}
+					<span class="vm-status" style="color:${st.color}">● ${esc(st.label)}</span>
+					${websiteHref ? `<a class="vm-website" href="${esc(websiteHref)}" target="_blank" rel="noopener noreferrer">↗ Website</a>` : ''}
 				</div>
 			</div>
 		`;

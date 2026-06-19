@@ -607,6 +607,10 @@ def api_venues_map(request):
 
 def _serialize_run(run):
     """Serialise a ScraperRun to the standard dict shape used by all run endpoints."""
+    include_log = run.status in ('queued', 'running') or (
+        run.finished_at is not None
+        and (timezone.now() - run.finished_at).total_seconds() < 300
+    )
     return {
         "id": run.id,
         "scraper_key": run.scraper_key,
@@ -620,7 +624,35 @@ def _serialize_run(run):
         "triggered_by": run.triggered_by.username if run.triggered_by_id else None,
         "created_at": run.created_at.isoformat(),
         "duration_seconds": run.duration_seconds,
+        "log_output": run.log_output if include_log else None,
     }
+
+
+@csrf_exempt
+def api_proxy_setting(request):
+    """GET current proxy-enabled state; POST to toggle it.
+
+    GET  → {"enabled": bool}
+    POST → {"enabled": bool}  (body)  → {"enabled": bool}
+    """
+    from .scrapers.proxy_manager import get_proxy_enabled, set_proxy_enabled
+
+    if request.method == "GET":
+        return JsonResponse({"enabled": get_proxy_enabled()})
+
+    if request.method == "POST":
+        try:
+            body = json.loads(request.body)
+        except (json.JSONDecodeError, ValueError):
+            return JsonResponse({"error": "Invalid JSON"}, status=400)
+        if "enabled" not in body:
+            return JsonResponse({"error": "Missing 'enabled' field"}, status=400)
+        if not isinstance(body["enabled"], bool):
+            return JsonResponse({"error": "'enabled' must be a JSON boolean"}, status=400)
+        set_proxy_enabled(body["enabled"])
+        return JsonResponse({"enabled": get_proxy_enabled()})
+
+    return JsonResponse({"error": "Method not allowed"}, status=405)
 
 
 @csrf_exempt

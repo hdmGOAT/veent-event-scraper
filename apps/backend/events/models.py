@@ -290,6 +290,9 @@ class ScraperRun(models.Model):
     extra_counts = models.JSONField(default=dict, blank=True)
     # Full traceback string on failure; empty on success.
     error_message = models.TextField(blank=True)
+    # Accumulated log lines from the worker subprocess, newline-separated.
+    # Flushed every ~2s by _DBLogHandler in run_scraper_job.py.
+    log_output = models.TextField(blank=True)
     pid = models.PositiveIntegerField(
         null=True, blank=True,
         help_text="OS PID of the worker subprocess; null for queued/pre-subprocess rows.",

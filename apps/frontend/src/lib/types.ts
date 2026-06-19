@@ -135,6 +135,7 @@ export interface ScraperRun {
 	triggered_by: string | null;
 	created_at: string;
 	duration_seconds: number | null;
+	log_output: string | null;
 }
 
 export interface ScraperLastRun {

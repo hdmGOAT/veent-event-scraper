@@ -140,5 +140,7 @@ export const api = {
 		patch<SearchQuery>(`/search-queries/${id}/`, body),
 	deleteSearchQuery: (id: number) => del(`/search-queries/${id}/`),
 	runSearchQuery: (id: number) =>
-		post<{ id: number; status: ScraperRunStatus; scraper_key: string }>(`/search-queries/${id}/run/`)
+		post<{ id: number; status: ScraperRunStatus; scraper_key: string }>(`/search-queries/${id}/run/`),
+	getProxySetting: (f?: Fetch) => get<{ enabled: boolean }>('/settings/proxy/', f),
+	setProxySetting: (enabled: boolean) => postJson<{ enabled: boolean }>('/settings/proxy/', { enabled })
 };
