@@ -367,7 +367,7 @@ _EXTRACT_DETAIL_JS = r"""
         if (UI_CHROME_SET.has(t.toLowerCase())) continue;
         // Skip platform/login UI text that leaks through as standalone leaf nodes
         if (/^(facebook|instagram|twitter|tiktok|youtube|privacy|terms|cookies?|see\s+more|see\s+less)$/i.test(t)) continue;
-        if (/^(log\s*in|sign\s*up|create\s*(new\s*)?account|forgot\s*(account|password)\??|email\s*address|phone\s*number|password|new\s*to\s*facebook|advertising|sponsored|suggested\s+for\s+you)$/i.test(t)) continue;
+        if (/^(log\s*in|sign\s*up|create\s*(new\s*)?account|forgot\s*(account|password)\??|email\s*address|phone\s*number|password|new\s*to\s*facebook|advertising|sponsored|suggested\s+for\s+you|ad\s+choices?)$/i.test(t)) continue;
         if (/^[A-Z]/.test(t) && t.length >= 5) { venue_name = t; break; }
     }
 
