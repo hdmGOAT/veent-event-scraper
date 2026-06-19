@@ -15,6 +15,14 @@ class Command(BaseCommand):
         parser.add_argument(
             "--list", action="store_true", help="List available scrapers and exit."
         )
+        parser.add_argument(
+            "--query-id", type=int, default=None, metavar="ID",
+            help="Run only the SearchQuery with this ID (facebook_events only).",
+        )
+        parser.add_argument(
+            "--max-events", type=int, default=None, metavar="N",
+            help="Stop after processing N events per query (useful for quick tests).",
+        )
 
     def handle(self, *args, **options):
         if options["list"]:
@@ -40,8 +48,13 @@ class Command(BaseCommand):
 
         for key in keys:
             self.stdout.write(f"Running scraper: {key} …")
+            run_kwargs = {}
+            if options["query_id"] is not None:
+                run_kwargs["query_id"] = options["query_id"]
+            if options["max_events"] is not None:
+                run_kwargs["max_events"] = options["max_events"]
             try:
-                result = SCRAPERS[key]().run()
+                result = SCRAPERS[key]().run(**run_kwargs)
             except Exception as exc:  # keep one failing scraper from killing the rest
                 self.stderr.write(self.style.ERROR(f"  {key} failed: {exc}"))
                 continue

@@ -53,24 +53,40 @@ _BLOCK_TYPES = {"image", "media"}
 
 _DISMISS_MODAL_JS = """
 () => {
+    let dismissed = false;
+
+    // 1. Remove any [role="dialog"] containing login/signup text
     for (const dialog of document.querySelectorAll('[role="dialog"]')) {
         const text = dialog.textContent || '';
-        if (!/log\\s*in|sign\\s*up|create\\s*(an?\\s*)?account/i.test(text)) continue;
+        if (!/log\\s*in|sign\\s*up|create\\s*(an?\\s*)?account|forgot\\s*(account|password)/i.test(text)) continue;
         const closeBtn = dialog.querySelector('[aria-label="Close"], [aria-label="close"]');
-        if (closeBtn) {
-            closeBtn.click();
-        } else {
-            dialog.remove();
-            document.querySelectorAll('[data-visualcompletion="ignore-dynamic"]').forEach(el => {
-                const pos = el.style?.position || getComputedStyle(el).position;
-                if (pos === 'fixed') el.remove();
-            });
-        }
-        document.body.style.overflow = '';
-        document.documentElement.style.overflow = '';
-        return true;
+        if (closeBtn) { closeBtn.click(); } else { dialog.remove(); }
+        dismissed = true;
     }
-    return false;
+
+    // 2. Nuke ALL fixed/sticky overlays that block the page content.
+    //    This catches FB's interstitial login wall even when it lacks role="dialog".
+    document.querySelectorAll('*').forEach(el => {
+        try {
+            const s = el.style;
+            const cs = getComputedStyle(el);
+            const pos = s.position || cs.position;
+            if (pos !== 'fixed' && pos !== 'sticky') return;
+            const zIndex = parseInt(s.zIndex || cs.zIndex, 10);
+            // Only remove high-z overlays that cover most of the viewport
+            if (zIndex < 100) return;
+            const rect = el.getBoundingClientRect();
+            if (rect.width > window.innerWidth * 0.5 && rect.height > window.innerHeight * 0.5) {
+                el.remove();
+                dismissed = true;
+            }
+        } catch {}
+    });
+
+    // 3. Restore scroll lock that FB sets when showing a modal
+    document.body.style.overflow = '';
+    document.documentElement.style.overflow = '';
+    return dismissed;
 }
 """
 
@@ -82,8 +98,9 @@ _EXTRACT_SEARCH_JS = r"""
     const DATE_WORD_RE  = /\b(mon|tue|wed|thu|fri|sat|sun|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|today|tomorrow|happening|yesterday)\b/i;
     const FULL_MONTH_RE = /\b(january|february|march|april|may|june|july|august|september|october|november|december)\b/i;
     const NOISE_RE      = /\b(interested|going|attending|share|invited|maybe)\b|\d+\s+(interested|going)|notifications?/i;
-    const UI_CHROME_SET = new Set(['events','home','watch','marketplace','menu','notifications','your events']);
-    const CITY_RE       = /^[A-Za-zÀ-ɏ][\w\sÀ-ɏ]{1,40},\s+[A-Za-zÀ-ɏ][\w\sÀ-ɏ]{1,40}$/;
+    const UI_CHROME_SET = new Set(['events','home','watch','marketplace','menu','notifications','your events','facebook','log in','sign up','create account','anyone']);
+    // Two-part "City, Country" OR three-part "City, State/Province, Country"
+    const CITY_RE       = /^[A-Za-zÀ-ɏ][\w\sÀ-ɏ]{1,40},\s+[A-Za-zÀ-ɏ][\w\sÀ-ɏ]{1,40}(,\s+[A-Za-zÀ-ɏ][\w\sÀ-ɏ]{1,40})?$/;
     const MIN_RESPONDENTS = 10;
 
     function leafText(el) {
@@ -208,8 +225,9 @@ _EXTRACT_DETAIL_JS = r"""
     const DATE_WORD_RE  = /\b(mon|tue|wed|thu|fri|sat|sun|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|today|tomorrow|happening|yesterday)\b/i;
     const FULL_MONTH_RE = /\b(january|february|march|april|may|june|july|august|september|october|november|december)\b/i;
     const NOISE_RE      = /\b(interested|going|attending|share|invited|maybe)\b|\d+\s+(interested|going)|notifications?/i;
-    const UI_CHROME_SET = new Set(['events','home','watch','marketplace','menu','notifications','your events']);
-    const CITY_RE       = /^[A-Za-zÀ-ɏ][\w\sÀ-ɏ]{1,40},\s+[A-Za-zÀ-ɏ][\w\sÀ-ɏ]{1,40}$/;
+    const UI_CHROME_SET = new Set(['events','home','watch','marketplace','menu','notifications','your events','facebook','log in','sign up','create account','anyone']);
+    // Two-part "City, Country" OR three-part "City, State/Province, Country"
+    const CITY_RE       = /^[A-Za-zÀ-ɏ][\w\sÀ-ɏ]{1,40},\s+[A-Za-zÀ-ɏ][\w\sÀ-ɏ]{1,40}(,\s+[A-Za-zÀ-ɏ][\w\sÀ-ɏ]{1,40})?$/;
 
     function leafText(el) {
         if (el.querySelectorAll('span, div, p').length > 3) return null;
@@ -330,14 +348,14 @@ _EXTRACT_DETAIL_JS = r"""
 
     // Normalised title used to skip the event title text that lives inside <span>
     // children of <h1> and would otherwise be mistaken for a venue name.
-    const titleNorm = title.toLowerCase().trim();
+    const titleNorm = title.toLowerCase().replace(/\s+/g, ' ').trim();
 
     let venue_name = null;
     for (const el of document.querySelectorAll('span, div, a')) {
         if (isInSidebarNav(el)) continue;
         const t = leafText(el);
         if (!t || t.length < 5 || t.length > 150) continue;
-        if (t.toLowerCase() === titleNorm) continue;          // skip event title
+        if (t.toLowerCase().replace(/\s+/g, ' ').trim() === titleNorm) continue; // skip event title
         if (DATE_WORD_RE.test(t) || FULL_MONTH_RE.test(t)) continue;
         if (NOISE_RE.test(t)) continue;
         if (CITY_RE.test(t)) continue;
@@ -347,6 +365,9 @@ _EXTRACT_DETAIL_JS = r"""
         if (/Tickets?|Find\s+tickets/i.test(t)) continue;
         if (/Discussion|About|Going|Interested|Invite/i.test(t)) continue;
         if (UI_CHROME_SET.has(t.toLowerCase())) continue;
+        // Skip platform/login UI text that leaks through as standalone leaf nodes
+        if (/^(facebook|instagram|twitter|tiktok|youtube|privacy|terms|cookies?|see\s+more|see\s+less)$/i.test(t)) continue;
+        if (/^(log\s*in|sign\s*up|create\s*(new\s*)?account|forgot\s*(account|password)\??|email\s*address|phone\s*number|password|new\s*to\s*facebook|advertising|sponsored|suggested\s+for\s+you)$/i.test(t)) continue;
         if (/^[A-Z]/.test(t) && t.length >= 5) { venue_name = t; break; }
     }
 
@@ -356,6 +377,69 @@ _EXTRACT_DETAIL_JS = r"""
         const t = leafText(el);
         if (!t || t.length > 60 || t.length < 5) continue;
         if (CITY_RE.test(t) && !DATE_WORD_RE.test(t) && !NOISE_RE.test(t)) { city_location = t; break; }
+    }
+
+    let description = null;
+    const DESC_SKIP_RE = /^(public|anyone|events?|about|going|interested|invited|discussion|tickets?|see\s+(more|less)|privacy|terms|log\s+in|sign\s+up)/i;
+
+    // Strategy A: FB's explicit event/post body container — textContent of the whole block
+    for (const el of document.querySelectorAll('[data-ad-comet-preview="message"], [data-testid="event-permalink-details"]')) {
+        const t = el.textContent?.trim();
+        if (t && t.length >= 20) { description = t.substring(0, 2000); break; }
+    }
+
+    // Strategy B: Collect all [role="paragraph"] leaves and join — FB breaks the
+    // description into many short <span role="paragraph"> nodes, each < 30 chars.
+    if (!description) {
+        const parts = [];
+        for (const el of document.querySelectorAll('[role="paragraph"]')) {
+            if (isInSidebarNav(el)) continue;
+            const t = el.textContent?.trim();
+            if (!t || t.toLowerCase() === titleNorm) continue;
+            if (DESC_SKIP_RE.test(t)) continue;
+            parts.push(t);
+        }
+        if (parts.length) description = parts.join('\n').substring(0, 2000);
+    }
+
+    // Strategy C: anchor on the "Event by" organizer element and search for
+    // [dir="auto"] within the same structural container. The event description
+    // and the organizer line both live inside the same event-details panel;
+    // venue/place descriptions live in a separate location section lower on the page.
+    if (!description) {
+        // Find the "Event by" element
+        let organizerEl = null;
+        for (const el of document.querySelectorAll('span, div')) {
+            if (isInSidebarNav(el)) continue;
+            const t = (el.textContent || '').trim();
+            if (/^Event\s+by\b/i.test(t) && t.length < 150) { organizerEl = el; break; }
+        }
+
+        // Walk up from organizer until we find a container with multiple [dir="auto"] children
+        let panel = null;
+        if (organizerEl) {
+            let node = organizerEl.parentElement;
+            for (let i = 0; i < 20 && node && node !== document.body; i++) {
+                if (node.querySelectorAll('[dir="auto"]').length >= 2) { panel = node; break; }
+                node = node.parentElement;
+            }
+        }
+
+        const searchRoot = panel || document;
+        for (const el of searchRoot.querySelectorAll('[dir="auto"]')) {
+            if (isInSidebarNav(el)) continue;
+            const t = el.textContent?.trim();
+            if (!t || t.length < 80 || t.length > 6000) continue;
+            if (t.toLowerCase().replace(/\s+/g, ' ') === titleNorm) continue;
+            if (DESC_SKIP_RE.test(t)) continue;
+            if (NOISE_RE.test(t)) continue;
+            if (DATE_WORD_RE.test(t) && t.length < 100) continue;
+            // Strip leading URL lines (some events post only a link at the top)
+            const stripped = t.replace(/^(https?:\/\/\S+|www\.\S+)\s*/i, '').trim();
+            if (!stripped) continue;
+            description = stripped.substring(0, 2000);
+            break;
+        }
     }
 
     return {
@@ -368,10 +452,23 @@ _EXTRACT_DETAIL_JS = r"""
             city_location,
             organizer_name,
             organizer_url,
+            description,
             respondent_count:   0,
             source_search_term: searchTerm,
         }],
-        debug: { mode: 'detail' },
+        debug: {
+            mode: 'detail',
+            descStrategyA: !!document.querySelector('[data-ad-comet-preview="message"], [data-testid="event-permalink-details"]'),
+            descParagraphCount: document.querySelectorAll('[role="paragraph"]').length,
+            descDirAutoCount: document.querySelectorAll('div[dir="auto"], span[dir="auto"]').length,
+            descFirstLong: (() => {
+                for (const el of document.querySelectorAll('span, div, p')) {
+                    const t = el.textContent?.trim();
+                    if (t && t.length >= 80) return t.substring(0, 100);
+                }
+                return null;
+            })(),
+        },
     };
 }
 """
@@ -579,7 +676,7 @@ class FacebookEventsScraper(BaseScraper):
 
     # ── Per-query scrape ──────────────────────────────────────────────────────
 
-    def _fetch_for_query(self, page, query: str) -> Iterable[ScrapedEvent]:
+    def _fetch_for_query(self, page, query: str, max_events: int | None = None) -> Iterable[ScrapedEvent]:
         search_url = _SEARCH_URL.format(query=urllib.parse.quote(query))
         self._goto(page, search_url)
         _pause(2.5, 5.0)
@@ -601,7 +698,10 @@ class FacebookEventsScraper(BaseScraper):
             self.source, query, len(cards), debug.get("skippedLowCount", 0),
         )
 
+        processed = 0
         for card in cards:
+            if max_events is not None and processed >= max_events:
+                break
             event_url = card.get("event_url", "")
             if not event_url:
                 continue
@@ -614,7 +714,27 @@ class FacebookEventsScraper(BaseScraper):
                 continue
             _pause(1.5, 3.5)
 
-            page.evaluate(_DISMISS_MODAL_JS)
+            # Dismiss modal, retrying until the event title is visible in the page
+            # title (confirms the login wall is gone and real content is loaded).
+            for _attempt in range(4):
+                page.evaluate(_DISMISS_MODAL_JS)
+                _pause(0.6, 1.2)
+                page_title = page.title()
+                if page_title and "log in" not in page_title.lower() and "facebook" != page_title.strip().lower():
+                    break
+
+            # Expand collapsed description ("See more") before extracting
+            try:
+                page.evaluate("""
+                    () => {
+                        const btn = Array.from(document.querySelectorAll('div[role="button"], span[role="button"]'))
+                            .find(el => /^see\\s+more$/i.test((el.textContent || '').trim()));
+                        if (btn) btn.click();
+                    }
+                """)
+                _pause(0.4, 0.8)
+            except Exception:
+                pass
 
             detail = page.evaluate(_EXTRACT_DETAIL_JS, query)
             detail_events = detail.get("events", [])
@@ -631,6 +751,7 @@ class FacebookEventsScraper(BaseScraper):
             organizer_url  = d.get("organizer_url") or ""
             start_raw      = d.get("start_datetime") or card.get("start_datetime")
             external_id    = d.get("event_id") or card.get("event_id", "")
+            description    = d.get("description") or card.get("short_description") or ""
 
             venue = (
                 ScrapedVenue(
@@ -644,6 +765,7 @@ class FacebookEventsScraper(BaseScraper):
 
             yield ScrapedEvent(
                 name=title,
+                description=description,
                 starts_at=_parse_fb_date(start_raw),
                 url=event_url,
                 external_id=external_id,
@@ -652,6 +774,7 @@ class FacebookEventsScraper(BaseScraper):
                 organizer_url=organizer_url,
                 venue=venue,
             )
+            processed += 1
 
     # ── Organizer page scrape ─────────────────────────────────────────────────
 
@@ -677,7 +800,7 @@ class FacebookEventsScraper(BaseScraper):
         # per-SearchQuery FK updates. Direct callers of fetch() get nothing.
         return iter([])
 
-    def run(self, query_id: int | None = None) -> dict:
+    def run(self, query_id: int | None = None, max_events: int | None = None) -> dict:
         """Run the scraper for all active SearchQuery rows (or just one if query_id set).
 
         Django ORM calls are deliberately kept OUTSIDE the sync_playwright() block.
@@ -712,7 +835,7 @@ class FacebookEventsScraper(BaseScraper):
             try:
                 # 2a — events
                 for sq in queries:
-                    scraped[sq.id] = list(self._fetch_for_query(page, sq.query))
+                    scraped[sq.id] = list(self._fetch_for_query(page, sq.query, max_events=max_events))
                     _pause(3.0, 6.0)
 
                 # 2b — organizer pages
