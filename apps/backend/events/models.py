@@ -122,6 +122,12 @@ class Event(models.Model):
     # Stable identifier from the source, used to deduplicate on re-scrape.
     external_id = models.CharField(max_length=255, blank=True, db_index=True)
     scraped_at = models.DateTimeField(null=True, blank=True)
+    # When events are found via a search query (e.g. facebook_events scraper),
+    # this links back to the SearchQuery row that produced them.
+    search_query = models.ForeignKey(
+        "SearchQuery", on_delete=models.SET_NULL,
+        null=True, blank=True, related_name="events",
+    )
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -220,6 +226,38 @@ class Organizer(models.Model):
         Use this before rendering a link to the organizer's detail page so we
         never emit a link that would 404."""
         return self.status != self.STATUS_REJECTED
+
+
+class SearchQuery(models.Model):
+    """A search term to run against a specific scraper source.
+
+    Mirrors the source_search_term concept from veent-fb-scraper but as a
+    managed entity: queries can be activated/deactivated from the admin without
+    touching code, and each event can reference the query that found it.
+    """
+
+    query = models.CharField(max_length=500)
+    source = models.CharField(
+        max_length=120,
+        help_text="Scraper key this query belongs to, e.g. 'facebook_events'.",
+    )
+    is_active = models.BooleanField(default=True, db_index=True)
+    last_run_at = models.DateTimeField(null=True, blank=True)
+    events_found_count = models.IntegerField(default=0)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["source", "query"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["source", "query"], name="unique_source_query"
+            )
+        ]
+
+    def __str__(self):
+        return f"[{self.source}] {self.query}"
 
 
 class ScraperRun(models.Model):

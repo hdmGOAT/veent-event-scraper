@@ -176,3 +176,14 @@ export interface ScriptStartResult {
 	script: string;
 	pid: number;
 }
+
+export interface SearchQuery {
+	id: number;
+	query: string;
+	source: string;
+	is_active: boolean;
+	last_run_at: string | null;
+	events_found_count: number;
+	created_at: string;
+	updated_at: string;
+}

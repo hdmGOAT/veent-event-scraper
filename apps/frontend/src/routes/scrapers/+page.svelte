@@ -360,6 +360,15 @@
 				{#if run}
 					<div class="mt-3 flex items-center gap-2">
 						<Badge status={run.status} />
+						{#if run.status === 'failed' && run.error_message}
+							<button
+								onclick={() => toggleError(s.key)}
+								class="text-xs text-danger/70 hover:text-danger transition"
+								title={expandedErrors.has(s.key) ? 'Hide error' : 'Show error'}
+							>
+								{expandedErrors.has(s.key) ? '− error' : '+ error'}
+							</button>
+						{/if}
 						{#if run.log_output && (isActive || run.status === 'success' || run.status === 'failed')}
 							<button
 								onclick={() => toggleLog(s.key)}
@@ -379,22 +388,9 @@
 					</div>
 				{/if}
 
-				{#if run?.status === 'failed' && run.error_message}
+				{#if run?.status === 'failed' && run.error_message && expandedErrors.has(s.key)}
 					<div class="mt-2">
-						<pre
-							class="overflow-x-auto whitespace-pre-wrap rounded-md bg-danger-bg/40 p-2 text-xs text-danger">{expandedErrors.has(
-								s.key
-							)
-								? run.error_message
-								: run.error_message.slice(0, 300)}</pre>
-						{#if run.error_message.length > 300}
-							<button
-								class="mt-1 text-xs text-accent hover:underline"
-								onclick={() => toggleError(s.key)}
-							>
-								{expandedErrors.has(s.key) ? 'show less' : 'show full'}
-							</button>
-						{/if}
+						<pre class="h-36 overflow-y-auto whitespace-pre-wrap rounded-md bg-neutral-950 p-2 text-xs leading-relaxed text-danger font-mono">{run.error_message}</pre>
 					</div>
 				{/if}
 

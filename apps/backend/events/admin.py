@@ -2,7 +2,16 @@ from django.contrib import admin, messages
 from django.db.models import Count
 
 from .management.commands.deduplicate_organizers import merge_cluster, select_winner
-from .models import Event, Organizer, ScraperRun, Venue
+from .models import Event, Organizer, ScraperRun, SearchQuery, Venue
+
+
+@admin.register(SearchQuery)
+class SearchQueryAdmin(admin.ModelAdmin):
+    list_display = ("query", "source", "is_active", "last_run_at", "events_found_count", "updated_at")
+    list_filter = ("source", "is_active")
+    list_editable = ("is_active",)
+    search_fields = ("query",)
+    readonly_fields = ("last_run_at", "events_found_count", "created_at", "updated_at")
 
 
 @admin.register(Venue)
