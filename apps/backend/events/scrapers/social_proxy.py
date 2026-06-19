@@ -26,6 +26,7 @@ from __future__ import annotations
 import logging
 import os
 import threading
+from urllib.parse import quote
 
 import requests
 
@@ -47,8 +48,8 @@ def social_proxy_configured() -> bool:
 
 
 def _build_proxy_url() -> str:
-    user = os.environ["DATAIMPULSE_USER"]
-    password = os.environ["DATAIMPULSE_PASS"]
+    user = quote(os.environ["DATAIMPULSE_USER"], safe="")
+    password = quote(os.environ["DATAIMPULSE_PASS"], safe="")
     host = os.environ.get("DATAIMPULSE_HOST", _DEFAULT_HOST)
     port = os.environ.get("DATAIMPULSE_PORT", _DEFAULT_PORT)
     return f"http://{user}:{password}@{host}:{port}"
@@ -76,15 +77,13 @@ def get_social_session(force_refresh: bool = False) -> requests.Session:
         if _cached_session is not None and not force_refresh:
             return _cached_session
 
-    proxy_url = _build_proxy_url()
-    session = requests.Session()
-    session.proxies.update({"http": proxy_url, "https": proxy_url})
+        proxy_url = _build_proxy_url()
+        session = requests.Session()
+        session.proxies.update({"http": proxy_url, "https": proxy_url})
+        _cached_session = session
 
     host = os.environ.get("DATAIMPULSE_HOST", _DEFAULT_HOST)
     logger.info("Social proxy session created via %s", host)
-
-    with _lock:
-        _cached_session = session
 
     return session
 
@@ -93,5 +92,8 @@ def reset_social_session() -> None:
     """Clear the cached session (e.g. after a ban or credential rotation)."""
     global _cached_session
     with _lock:
+        old = _cached_session
         _cached_session = None
+    if old is not None:
+        old.close()
     logger.info("Social proxy session cleared.")
