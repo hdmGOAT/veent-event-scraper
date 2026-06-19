@@ -241,50 +241,81 @@ _EXTRACT_DETAIL_JS = r"""
         if (FULL_MONTH_RE.test(t) && /\d{4}/.test(t))   { start_datetime = t; break; }
     }
 
-    // ── Host: "Meet your host" section ───────────────────────────────────────
-    // FB renders a card with the exact heading "Meet your host" that contains a
-    // link to the organiser's Facebook page. We find the heading by exact text
-    // match (no leafText nesting limit), then walk up to the card container.
+    // ── Organizer: "Event by [linked NAME]" ─────────────────────────────────
+    // On unauthenticated pages the organizer name appears as "Event by NAME"
+    // where NAME is a clickable <a> linking to their FB page. We find this
+    // element and walk up the DOM to locate the nearest FB page URL.
     let organizer_name = null;
     let organizer_url  = null;
 
     const FB_PAGE_RE = /^https?:\/\/(www\.)?facebook\.com\/(?!events\/|pages\/category\/|groups\/|photos\/|videos\/|share\/)([^/?#]{2,})/i;
 
-    const hostHeading = Array.from(document.querySelectorAll('span, div, h2, h3, strong'))
-        .find(el => /^meet\s+your\s+host$/i.test((el.textContent || '').trim()));
+    function cleanFbUrl(href) {
+        // profile.php?id=123 must keep the id param — it's the only identifier.
+        // All other FB page URLs have the slug in the path, so strip query string.
+        if (/\/profile\.php/i.test(href)) {
+            try {
+                const id = new URL(href).searchParams.get('id');
+                return id ? 'https://www.facebook.com/profile.php?id=' + id : href.split('?')[0];
+            } catch { return href.split('?')[0]; }
+        }
+        return href.split('?')[0];
+    }
 
-    if (hostHeading) {
-        let container = hostHeading.parentElement;
-        for (let i = 0; i < 10 && container && container !== document.body; i++) {
-            for (const a of container.querySelectorAll('a[href]')) {
+    for (const el of document.querySelectorAll('span, div, a')) {
+        if (isInSidebarNav(el)) continue;
+        const t = (el.textContent || '').trim();
+        if (!/^Event\s+by\b/i.test(t) || t.length > 150) continue;
+        const m = t.match(/^Event\s+by\s+(.{1,100})$/i);
+        if (m) organizer_name = m[1].trim();
+        // Walk up to find a sibling/ancestor containing the organizer page link
+        let node = el.parentElement || el;
+        for (let i = 0; i < 6 && node && node !== document.body; i++) {
+            for (const a of node.querySelectorAll('a[href]')) {
                 const href = a.href || '';
                 if (FB_PAGE_RE.test(href) && !/\/events\//.test(href)) {
-                    organizer_url  = href.split('?')[0];
-                    organizer_name = (a.textContent || '').trim() || null;
+                    organizer_url = cleanFbUrl(href);
+                    if (!organizer_name) organizer_name = (a.textContent || '').trim() || null;
                     break;
                 }
             }
             if (organizer_url) break;
-            container = container.parentElement;
+            node = node.parentElement;
+        }
+        if (organizer_name) break;
+    }
+
+    // Strategy 2: "Meet your host" section (visible when logged in)
+    if (!organizer_url) {
+        const hostHeading = Array.from(document.querySelectorAll('span, div, h2, h3, strong'))
+            .find(el => /^meet\s+your\s+host$/i.test((el.textContent || '').trim()));
+        if (hostHeading) {
+            let container = hostHeading.parentElement;
+            for (let i = 0; i < 10 && container && container !== document.body; i++) {
+                for (const a of container.querySelectorAll('a[href]')) {
+                    const href = a.href || '';
+                    if (FB_PAGE_RE.test(href) && !/\/events\//.test(href)) {
+                        organizer_url  = cleanFbUrl(href);
+                        organizer_name = organizer_name || (a.textContent || '').trim() || null;
+                        break;
+                    }
+                }
+                if (organizer_url) break;
+                container = container.parentElement;
+            }
         }
     }
 
-    // Fallback: plain "Event by NAME" text anywhere in the page body
-    if (!organizer_name) {
-        for (const el of document.querySelectorAll('span, div, a')) {
-            if (isInSidebarNav(el)) continue;
-            const t = leafText(el);
-            if (!t) continue;
-            const m = t.match(/^Event\s+by\s+(.{1,100})$/i);
-            if (m && !/https?:\/\//.test(m[1])) { organizer_name = m[1].trim(); break; }
-        }
-    }
+    // Normalised title used to skip the event title text that lives inside <span>
+    // children of <h1> and would otherwise be mistaken for a venue name.
+    const titleNorm = title.toLowerCase().trim();
 
     let venue_name = null;
     for (const el of document.querySelectorAll('span, div, a')) {
         if (isInSidebarNav(el)) continue;
         const t = leafText(el);
         if (!t || t.length < 5 || t.length > 150) continue;
+        if (t.toLowerCase() === titleNorm) continue;          // skip event title
         if (DATE_WORD_RE.test(t) || FULL_MONTH_RE.test(t)) continue;
         if (NOISE_RE.test(t)) continue;
         if (CITY_RE.test(t)) continue;
@@ -305,24 +336,6 @@ _EXTRACT_DETAIL_JS = r"""
         if (CITY_RE.test(t) && !DATE_WORD_RE.test(t) && !NOISE_RE.test(t)) { city_location = t; break; }
     }
 
-    // Description: FB rarely uses <p> — scan leaf-ish divs for the first
-    // substantial block that isn't a date, noise, or section heading.
-    let short_description = null;
-    const DESC_SKIP_RE = /^(meet your host|about|going|interested|invited|share|discussion|ticket|find ticket|public|anyone on)/i;
-    for (const el of document.querySelectorAll('div, p, span')) {
-        if (isInSidebarNav(el)) continue;
-        if (el.querySelectorAll('div, p').length > 2) continue; // skip containers
-        const t = el.textContent?.trim();
-        if (!t || t.length < 50 || t.length > 3000) continue;
-        if (FULL_MONTH_RE.test(t.substring(0, 40))) continue; // skip date blocks
-        if (NOISE_RE.test(t)) continue;
-        if (DESC_SKIP_RE.test(t)) continue;
-        if (UI_CHROME_SET.has(t.toLowerCase())) continue;
-        if (CITY_RE.test(t)) continue;
-        short_description = t.substring(0, 1000);
-        break;
-    }
-
     return {
         events: [{
             event_url:          eventUrl,
@@ -333,12 +346,82 @@ _EXTRACT_DETAIL_JS = r"""
             city_location,
             organizer_name,
             organizer_url,
-            short_description,
             respondent_count:   0,
             source_search_term: searchTerm,
         }],
         debug: { mode: 'detail' },
     };
+}
+"""
+
+# Organizer FB page extraction — email, phone, external website, description
+_EXTRACT_ORGANIZER_JS = r"""
+() => {
+    const WEBSITE_RE = /^https?:\/\/(?!(?:www\.)?(?:facebook|fb|instagram|twitter|x)\.com)[\w\-.]+\.[a-z]{2,}(\/[\w\-./?%&=]*)?$/i;
+    const EMAIL_RE   = /[\w.+\-]+@[\w\-]+\.[a-z]{2,}/i;
+    const PHONE_RE   = /^[\+\d][\d\s\-().]{5,20}[\d]$/;
+
+    function leafText(el) {
+        if (el.querySelectorAll('span, div, p').length > 3) return null;
+        return el.textContent?.trim() || null;
+    }
+    function isInSidebarNav(el) { return !!el.closest('[role="navigation"]'); }
+
+    const name = document.title.replace(/\s*[|·–\-]\s*facebook\s*$/i, '').trim() || null;
+
+    // Email — scan body text
+    let email = null;
+    const bodyText = document.body.innerText || '';
+    const emailMatch = bodyText.match(EMAIL_RE);
+    if (emailMatch) email = emailMatch[0];
+
+    // External website — FB wraps outbound links in l.facebook.com/l.php?u=<encoded>.
+    // We decode those first, then also check for any un-wrapped direct hrefs.
+    let website = null;
+    for (const a of document.querySelectorAll('a[href]')) {
+        const href = (a.href || '').trim();
+        if (/l\.facebook\.com\/l\.php/i.test(href)) {
+            try {
+                const real = decodeURIComponent(new URL(href).searchParams.get('u') || '');
+                if (real && WEBSITE_RE.test(real)) { website = real.split('?')[0]; break; }
+            } catch {}
+        }
+        if (WEBSITE_RE.test(href)) { website = href.split('?')[0]; break; }
+    }
+
+    // Phone — leaf elements whose text looks like a phone number
+    let phone = null;
+    for (const el of document.querySelectorAll('span, div, a')) {
+        if (isInSidebarNav(el)) continue;
+        const t = leafText(el);
+        if (!t) continue;
+        if (PHONE_RE.test(t) && (t.match(/\d/g) || []).length >= 7) {
+            phone = t.replace(/\s+/g, ' ').trim();
+            break;
+        }
+    }
+
+    // Description — first substantial text block that isn't UI chrome
+    let description = null;
+    const SKIP_RE = /^(about|photos?|videos?|events?|posts?|reviews?|community|send message|follow|like|home|see more|write a review)/i;
+    for (const el of document.querySelectorAll('div, p, span')) {
+        if (isInSidebarNav(el)) continue;
+        if (el.querySelectorAll('div, p').length > 2) continue;
+        const t = el.textContent?.trim();
+        if (!t || t.length < 40 || t.length > 2000) continue;
+        if (SKIP_RE.test(t)) continue;
+        if (/^\d+/.test(t) && t.length < 30) continue;
+        description = t.substring(0, 600);
+        break;
+    }
+
+    // Address — look for address-like text (street numbers, "St", "Ave", "Blvd", etc.)
+    let address = null;
+    const ADDR_RE = /\b\d+\s+[\w\s.,']{5,60}(?:st(?:reet)?|ave(?:nue)?|blvd|road|rd|drive|dr|lane|ln|barangay|brgy|purok)\b/i;
+    const addrMatch = bodyText.match(ADDR_RE);
+    if (addrMatch) address = addrMatch[0].trim();
+
+    return { name, email, phone, website, description, address };
 }
 """
 
@@ -376,6 +459,9 @@ def _parse_fb_date(raw: str | None) -> datetime | None:
     if not raw:
         return None
     raw = raw.strip()
+    # Strip end-time suffix: "Saturday, June 28, 2025 at 8 PM – 11 PM" → "…at 8 PM"
+    # FB always shows "start – end" in the same text element.
+    raw = re.sub(r'\s*[–\-]\s*\d.*$', '', raw).strip()
     for fmt in _DATE_FMTS:
         try:
             dt = datetime.strptime(raw, fmt)
@@ -521,7 +607,6 @@ class FacebookEventsScraper(BaseScraper):
             city           = city_location.split(",")[0].strip() if city_location else ""
             organizer      = d.get("organizer_name") or card.get("organizer_name") or ""
             organizer_url  = d.get("organizer_url") or ""
-            description    = d.get("short_description") or card.get("short_description") or ""
             start_raw      = d.get("start_datetime") or card.get("start_datetime")
             external_id    = d.get("event_id") or card.get("event_id", "")
 
@@ -537,7 +622,6 @@ class FacebookEventsScraper(BaseScraper):
 
             yield ScrapedEvent(
                 name=title,
-                description=description,
                 starts_at=_parse_fb_date(start_raw),
                 url=event_url,
                 external_id=external_id,
@@ -546,6 +630,23 @@ class FacebookEventsScraper(BaseScraper):
                 organizer_url=organizer_url,
                 venue=venue,
             )
+
+    # ── Organizer page scrape ─────────────────────────────────────────────────
+
+    def _fetch_organizer_page(self, page, url: str) -> dict:
+        """Visit an organizer's FB page and extract contact details."""
+        try:
+            self._goto(page, url)
+        except Exception as exc:
+            logger.warning("organizer page load failed %s: %s", url, exc)
+            return {}
+        _pause(1.5, 3.0)
+        page.evaluate(_DISMISS_MODAL_JS)
+        try:
+            return page.evaluate(_EXTRACT_ORGANIZER_JS) or {}
+        except Exception as exc:
+            logger.warning("organizer JS eval failed %s: %s", url, exc)
+            return {}
 
     # ── BaseScraper overrides ─────────────────────────────────────────────────
 
@@ -574,8 +675,12 @@ class FacebookEventsScraper(BaseScraper):
             return {"source": self.source, "created": 0, "updated": 0}
 
         # ── 2. Scrape (inside playwright, no ORM) ─────────────────────────────
-        # Collect {sq.id: [ScrapedEvent, ...]} without touching Django ORM.
+        # Phase 2a: scrape event cards + detail pages.
+        # Phase 2b: visit each unique organizer FB page for enriched contact data.
+        # No Django ORM calls inside this block.
         scraped: dict[int, list] = {}
+        # url -> {name, email, phone, website, description, address}
+        org_details: dict[str, dict] = {}
 
         with sync_playwright() as pw:
             browser, context = self._browser_context(pw)
@@ -583,9 +688,26 @@ class FacebookEventsScraper(BaseScraper):
             Stealth().use_sync(page)
             self._block_heavy_resources(page)
             try:
+                # 2a — events
                 for sq in queries:
                     scraped[sq.id] = list(self._fetch_for_query(page, sq.query))
                     _pause(3.0, 6.0)
+
+                # 2b — organizer pages
+                all_events_flat = [e for evts in scraped.values() for e in evts]
+                seen_org_urls: set[str] = set()
+                for se in all_events_flat:
+                    url = (se.organizer_url or "").rstrip("/")
+                    if not url or url in seen_org_urls:
+                        continue
+                    seen_org_urls.add(url)
+                    logger.info("[%s] visiting organizer page: %s", self.source, url)
+                    details = self._fetch_organizer_page(page, url)
+                    # Merge: use scraped organizer name if page didn't return one
+                    if not details.get("name"):
+                        details["name"] = se.organizer
+                    org_details[url] = details
+                    _pause(2.0, 4.0)
             finally:
                 context.close()
                 browser.close()
@@ -593,7 +715,6 @@ class FacebookEventsScraper(BaseScraper):
         # ── 3. Persist (ORM outside playwright) ───────────────────────────────
 
         # Upsert organizers first so save_events() can resolve organizer_ref FK.
-        # Dedup key: FB page slug from URL when available, otherwise organizer name.
         all_events = [e for events in scraped.values() for e in events]
         seen_org_keys: set[str] = set()
         scraped_orgs: list[ScrapedOrganizer] = []
@@ -606,14 +727,27 @@ class FacebookEventsScraper(BaseScraper):
             if key in seen_org_keys:
                 continue
             seen_org_keys.add(key)
-            # Use the FB page slug as external_id (e.g. "orbitzatexconeoncdo")
-            # so re-runs update rather than duplicate; empty string is fine for name-only rows.
-            external_id = url.split("/")[-1] if url else ""
+            # external_id: slug from path, or numeric id for profile.php?id= URLs
+            if "profile.php" in url:
+                m = re.search(r'[?&]id=(\d+)', url)
+                external_id = m.group(1) if m else ""
+            else:
+                external_id = url.rstrip("/").split("/")[-1] if url else ""
+            # Enrich with data fetched from the organizer's FB page
+            d = org_details.get(url, {})
             scraped_orgs.append(ScrapedOrganizer(
-                name=name,
+                name=d.get("name") or name,
+                # website MUST be the FB URL so _resolve_organizer() can match it
+                # against Organizer.website when save_events() runs.
+                # The external website (if found) goes into source_url for reference.
                 website=url,
+                email=d.get("email") or "",
+                phone=d.get("phone") or "",
+                address=d.get("address") or "",
+                description=d.get("description") or "",
                 facebook_url=url,
                 external_id=external_id,
+                source_url=d.get("website") or "",
             ))
         if scraped_orgs:
             save_organizers(self.source, scraped_orgs)
