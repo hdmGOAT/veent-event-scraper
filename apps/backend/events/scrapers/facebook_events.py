@@ -367,7 +367,7 @@ _EXTRACT_DETAIL_JS = r"""
         if (UI_CHROME_SET.has(t.toLowerCase())) continue;
         // Skip platform/login UI text that leaks through as standalone leaf nodes
         if (/^(facebook|instagram|twitter|tiktok|youtube|privacy|terms|cookies?|see\s+more|see\s+less)$/i.test(t)) continue;
-        if (/^(log\s*in|sign\s*up|create\s*(new\s*)?account|forgot\s*(account|password)\??|email\s*address|phone\s*number|password|new\s*to\s*facebook|advertising|sponsored|suggested\s+for\s+you)$/i.test(t)) continue;
+        if (/^(log\s*in|sign\s*up|create\s*(new\s*)?account|forgot\s*(account|password)\??|email\s*address|phone\s*number|password|new\s*to\s*facebook|advertising|sponsored|suggested\s+for\s+you|ad\s+choices?)$/i.test(t)) continue;
         if (/^[A-Z]/.test(t) && t.length >= 5) { venue_name = t; break; }
     }
 
@@ -863,7 +863,7 @@ class FacebookEventsScraper(BaseScraper):
                         scraped[sq.id] = []
                     _pause(3.0, 6.0)
 
-                # 2b — organizer pages
+                # 2b — organizer pages (best-effort; failures must not abort the save)
                 all_events_flat = [e for evts in scraped.values() for e in evts]
                 seen_org_urls: set[str] = set()
                 for se in all_events_flat:
@@ -872,7 +872,11 @@ class FacebookEventsScraper(BaseScraper):
                         continue
                     seen_org_urls.add(url)
                     logger.info("[%s] visiting organizer page: %s", self.source, url)
-                    details = self._fetch_organizer_page(page, url)
+                    try:
+                        details = self._fetch_organizer_page(page, url)
+                    except Exception as exc:
+                        logger.warning("[%s] organizer page failed, skipping enrichment for %s: %s", self.source, url, exc)
+                        continue
                     # Merge: use scraped organizer name if page didn't return one
                     if not details.get("name"):
                         details["name"] = se.organizer
