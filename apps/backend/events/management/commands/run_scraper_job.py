@@ -133,9 +133,13 @@ class Command(BaseCommand):
         # (including scrapers, HTTP libraries, Playwright, etc.) flows into
         # ScraperRun.log_output and becomes visible in the UI.
         handler = _DBLogHandler(run_id)
-        handler.setLevel(logging.INFO)
+        handler.setLevel(logging.DEBUG)
         handler.setFormatter(logging.Formatter('%(levelname)s %(name)s: %(message)s'))
         root_logger = logging.getLogger()
+        # Lower the root logger level so INFO/DEBUG records propagate to our handler.
+        # Safe here because this is a dedicated worker subprocess with no request handling.
+        original_level = root_logger.level
+        root_logger.setLevel(logging.DEBUG)
         root_logger.addHandler(handler)
 
         try:
@@ -144,6 +148,7 @@ class Command(BaseCommand):
             tb = traceback.format_exc()
             handler.stop()
             root_logger.removeHandler(handler)
+            root_logger.setLevel(original_level)
             run.status = ScraperRun.Status.FAILED
             run.finished_at = timezone.now()
             run.error_message = tb
@@ -156,6 +161,7 @@ class Command(BaseCommand):
         # in the same poll tick as the SUCCESS status.
         handler.stop()
         root_logger.removeHandler(handler)
+        root_logger.setLevel(original_level)
 
         created, updated, extra_counts = _map_result(result)
         run.status = ScraperRun.Status.SUCCESS

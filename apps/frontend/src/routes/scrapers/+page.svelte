@@ -30,6 +30,8 @@
 	let errors = $state<Map<string, string>>(new Map());
 	// Keys whose failure traceback is expanded.
 	let expandedErrors = $state<Set<string>>(new Set());
+	// Keys whose log terminal is expanded (collapsed by default).
+	let expandedLogs = $state<Set<string>>(new Set());
 	let showAllRuns = $state(false);
 
 	// "Run All" in-flight flag.
@@ -118,6 +120,13 @@
 		if (next.has(key)) next.delete(key);
 		else next.add(key);
 		expandedErrors = next;
+	}
+
+	function toggleLog(key: string) {
+		const next = new Set(expandedLogs);
+		if (next.has(key)) next.delete(key);
+		else next.add(key);
+		expandedLogs = next;
 	}
 
 	// Last-run line for a card, sourced from the ScraperRun history (last_run),
@@ -349,8 +358,17 @@
 				<code class="mt-1 block text-xs text-muted">{s.key}</code>
 
 				{#if run}
-					<div class="mt-3">
+					<div class="mt-3 flex items-center gap-2">
 						<Badge status={run.status} />
+						{#if run.log_output && (isActive || run.status === 'success' || run.status === 'failed')}
+							<button
+								onclick={() => toggleLog(s.key)}
+								class="text-xs text-muted hover:text-text transition"
+								title={expandedLogs.has(s.key) ? 'Hide logs' : 'Show logs'}
+							>
+								{expandedLogs.has(s.key) ? '− logs' : '+ logs'}
+							</button>
+						{/if}
 					</div>
 				{/if}
 
@@ -380,7 +398,7 @@
 					</div>
 				{/if}
 
-				{#if run?.log_output && (isActive || run.status === 'success' || run.status === 'failed')}
+				{#if run?.log_output && expandedLogs.has(s.key) && (isActive || run.status === 'success' || run.status === 'failed')}
 					<div class="mt-3">
 						<pre
 							use:autoscroll
