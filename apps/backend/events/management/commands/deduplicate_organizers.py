@@ -434,7 +434,7 @@ class Command(BaseCommand):
         return ""
 
     def _print_dry_run_cluster(self, index, winner, losers, result, matched_on):
-        members = [winner] + losers
+        members = [winner, *losers]
         self.stdout.write(
             f"Cluster {index} ({len(members)} organizers, "
             f'{result["events_repointed"]} events would be re-pointed):'

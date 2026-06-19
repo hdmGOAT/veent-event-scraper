@@ -747,9 +747,7 @@ class FacebookEventsScraper(BaseScraper):
             city_location  = d.get("city_location", "")
             loc_parts      = [p.strip() for p in city_location.split(",")] if city_location else []
             city           = loc_parts[0] if loc_parts else ""
-            # 3-part "City, Province, Country" → use last part; 2-part → last part too.
-            # Fall back to "Philippines" only when city_location gives no country hint.
-            country        = loc_parts[-1] if len(loc_parts) >= 2 else ("Philippines" if city else "")
+            country        = loc_parts[-1] if len(loc_parts) >= 2 else ""
             organizer      = d.get("organizer_name") or card.get("organizer_name") or ""
             organizer_url  = d.get("organizer_url") or ""
             start_raw      = d.get("start_datetime") or card.get("start_datetime")

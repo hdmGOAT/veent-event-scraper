@@ -78,6 +78,8 @@ def get_social_session(force_refresh: bool = False) -> requests.Session:
             return _cached_session
 
         proxy_url = _build_proxy_url()
+        if _cached_session is not None:
+            _cached_session.close()
         session = requests.Session()
         session.proxies.update({"http": proxy_url, "https": proxy_url})
         _cached_session = session

@@ -81,13 +81,19 @@ def trigger_scraper_run(key: str, triggered_by=None, query_id: int | None = None
     if query_id:
         cmd += ["--query-id", str(query_id)]
 
-    proc = subprocess.Popen(
-        cmd,
-        # POSIX setsid: give the child its own session + process group so the whole
-        # tree (including Playwright's chromium) can be killed with os.killpg.
-        start_new_session=True,
-        cwd=str(settings.BASE_DIR),
-    )
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            # POSIX setsid: give the child its own session + process group so the whole
+            # tree (including Playwright's chromium) can be killed with os.killpg.
+            start_new_session=True,
+            cwd=str(settings.BASE_DIR),
+        )
+    except Exception:
+        run.status = ScraperRun.Status.FAILED
+        run.finished_at = timezone.now()
+        run.save(update_fields=["status", "finished_at", "updated_at"])
+        raise
 
     # Store the pid synchronously so cancel_run has a target even for QUEUED runs.
     run.pid = proc.pid

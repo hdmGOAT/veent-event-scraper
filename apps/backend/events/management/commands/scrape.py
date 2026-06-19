@@ -41,6 +41,10 @@ class Command(BaseCommand):
             return
 
         source = options["source"]
+        if not source and (options.get("query_id") is not None or options.get("max_events") is not None):
+            raise CommandError(
+                "--query-id and --max-events require a specific source to be specified."
+            )
         if source:
             if source not in SCRAPERS:
                 raise CommandError(

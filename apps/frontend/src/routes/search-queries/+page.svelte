@@ -1,7 +1,8 @@
 <script lang="ts">
 	import { api } from '$lib/api';
 	import PageHeader from '$lib/components/PageHeader.svelte';
-	import type { ScraperRun, SearchQuery } from '$lib/types';
+	import type { SearchQuery } from '$lib/types';
+	import type { ScraperRunStatus } from '$lib/types';
 	import { Play, PlayCircle, Plus, RefreshCw, Search, Trash2, ToggleLeft, ToggleRight } from 'lucide-svelte';
 
 	let { data } = $props();
@@ -15,8 +16,8 @@
 	let adding = $state(false);
 	let addError = $state('');
 
-	// Per-row run state: query id → ScraperRun or null
-	let runningRows = $state<Map<number, ScraperRun | null>>(new Map());
+	// Per-row run state: query id → partial run shape (only scraper_key is needed for polling)
+	let runningRows = $state<Map<number, { id: number; status: ScraperRunStatus; scraper_key: string } | null>>(new Map());
 	let runningAll = $state(false);
 	let runAllError = $state('');
 
@@ -131,7 +132,7 @@
 		try {
 			const run = await api.runSearchQuery(sq.id);
 			// Fetch the full run detail so we have scraper_key for polling
-			runningRows = new Map([...runningRows, [sq.id, run as unknown as ScraperRun]]);
+			runningRows = new Map([...runningRows, [sq.id, run]]);
 			startPolling();
 		} catch (e) {
 			alert(e instanceof Error ? e.message : 'Failed to start run');

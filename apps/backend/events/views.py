@@ -973,7 +973,7 @@ def api_search_query_detail(request, pk):
             changed.append("source")
 
         if changed:
-            sq.save(update_fields=changed + ["updated_at"])
+            sq.save(update_fields=[*changed, "updated_at"])
 
         return JsonResponse(_serialize_search_query(sq))
 

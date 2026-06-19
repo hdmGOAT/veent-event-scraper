@@ -1674,7 +1674,7 @@ class DeduplicateOrganizersCommandTests(TestCase):
         cluster = find_exact_match_clusters(None)[0]
         winner, losers = select_winner(cluster)
         self.assertEqual(winner.pk, high.pk)
-        self.assertEqual([l.pk for l in losers], [low.pk])
+        self.assertEqual([loser.pk for loser in losers], [low.pk])
 
     def test_winner_is_more_complete(self):
         from events.management.commands.deduplicate_organizers import (

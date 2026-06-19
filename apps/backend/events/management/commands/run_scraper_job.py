@@ -13,6 +13,8 @@ from collections import deque
 
 from django.core.management.base import BaseCommand
 from django.db import connection
+from django.db.models import F, Value
+from django.db.models.functions import Concat
 from django.utils import timezone
 
 from events.models import ScraperRun
@@ -75,13 +77,11 @@ class _DBLogHandler(logging.Handler):
 
         chunk = '\n'.join(lines) + '\n'
         try:
-            with connection.cursor() as cur:
-                cur.execute(
-                    'UPDATE events_scraperrun SET log_output = log_output || %s WHERE id = %s',
-                    [chunk, self._run_id],
-                )
+            ScraperRun.objects.filter(pk=self._run_id).update(
+                log_output=Concat(F("log_output"), Value(chunk))
+            )
         except Exception:
-            pass  # Don't let log flush errors crash the scraper
+            traceback.print_exc()  # surface flush errors to stderr without crashing
 
     def stop(self) -> None:
         """Cancel the timer and do one final synchronous flush."""

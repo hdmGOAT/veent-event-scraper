@@ -129,6 +129,8 @@ def get_proxy_session(force_refresh: bool = False) -> requests.Session:
             session = requests.Session()
             session.proxies.update(_make_proxies(host_port))
             with _lock:
+                if _cached_session is not None:
+                    _cached_session.close()
                 _cached_session = session
             return session
 
@@ -142,6 +144,8 @@ def reset_proxy_session() -> None:
     """Clear the cached session so the next call re-elects a proxy."""
     global _cached_session
     with _lock:
+        if _cached_session is not None:
+            _cached_session.close()
         _cached_session = None
     logger.info("Proxy session cleared; next get_session() will re-elect.")
 
