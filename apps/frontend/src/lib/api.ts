@@ -57,6 +57,22 @@ async function post<T>(path: string): Promise<T> {
 	return res.json() as Promise<T>;
 }
 
+async function postBody<T>(path: string, body: unknown): Promise<T> {
+	const res = await fetch(`/api${path}`, {
+		method: 'POST',
+		headers: {
+			'X-CSRFToken': getCsrfToken(),
+			'Content-Type': 'application/json'
+		},
+		credentials: 'include',
+		body: JSON.stringify(body)
+	});
+	if (!res.ok) {
+		throw new Error(`API ${path} failed: ${res.status} ${res.statusText}`);
+	}
+	return res.json() as Promise<T>;
+}
+
 function qs(params: Record<string, string | number | undefined>): string {
 	const sp = new URLSearchParams();
 	for (const [k, v] of Object.entries(params)) {
@@ -91,5 +107,7 @@ export const api = {
 		get<ScraperRun[]>(`/scrapers/runs/${limit ? `?limit=${limit}` : ''}`, f),
 	activeRuns: (f?: Fetch) => get<ScraperRun[]>('/scrapers/runs/active/', f),
 	scraperRun: (id: number, f?: Fetch) => get<ScraperRun>(`/scrapers/runs/${id}/`, f),
-	cancelRun: (id: number) => post<ScraperRun>(`/scrapers/runs/${id}/cancel/`)
+	cancelRun: (id: number) => post<ScraperRun>(`/scrapers/runs/${id}/cancel/`),
+	getProxySetting: (f?: Fetch) => get<{ enabled: boolean }>('/settings/proxy/', f),
+	setProxySetting: (enabled: boolean) => postBody<{ enabled: boolean }>('/settings/proxy/', { enabled })
 };

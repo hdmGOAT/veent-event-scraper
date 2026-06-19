@@ -8,6 +8,11 @@
 
 	let { data }: { data: PageData } = $props();
 
+	// svelte-ignore state_referenced_locally
+	let proxyEnabled = $state<boolean>(data.proxyEnabled);
+	let proxyToggling = $state(false);
+	let proxyError = $state<string | null>(null);
+
 	// Local copy of the scraper list so we can refresh each card's last_run
 	// after a run finishes, without a manual page reload. Seeded once from the
 	// SSR load; subsequent updates come from api.scrapers() polling.
@@ -172,6 +177,20 @@
 		}
 	}
 
+	async function handleProxyToggle() {
+		if (proxyToggling) return;
+		proxyToggling = true;
+		proxyError = null;
+		try {
+			const result = await api.setProxySetting(!proxyEnabled);
+			proxyEnabled = result.enabled;
+		} catch (e) {
+			proxyError = e instanceof Error ? e.message : 'Failed to toggle proxy';
+		} finally {
+			proxyToggling = false;
+		}
+	}
+
 	async function handleDedup() {
 		if (deduplicating) return;
 		deduplicating = true;
@@ -219,6 +238,25 @@
 		<div class="flex flex-col items-end gap-1">
 			<div class="flex items-center gap-2">
 				<button
+					disabled={proxyToggling}
+					onclick={handleProxyToggle}
+					class="flex items-center gap-2 rounded-md border px-3 py-2 text-sm font-medium transition
+						{proxyEnabled
+							? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20'
+							: 'border-border bg-surface-2 text-muted hover:bg-surface'}"
+					title="Toggle rotating proxy for all scrapers"
+				>
+					<span class="relative flex h-4 w-4 shrink-0 items-center justify-center">
+						{#if proxyEnabled}
+							<span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-50"></span>
+							<span class="relative inline-flex h-2.5 w-2.5 rounded-full bg-emerald-400"></span>
+						{:else}
+							<span class="inline-flex h-2.5 w-2.5 rounded-full bg-muted/50"></span>
+						{/if}
+					</span>
+					{proxyToggling ? 'Updating…' : proxyEnabled ? 'Proxy On' : 'Proxy Off'}
+				</button>
+				<button
 					disabled={scriptRunning['categorize-events']}
 					onclick={() => handleScript('categorize-events')}
 					class="rounded-md bg-violet-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-50"
@@ -261,6 +299,9 @@
 			{/if}
 			{#if runAllError}
 				<span class="text-xs text-danger">{runAllError}</span>
+			{/if}
+			{#if proxyError}
+				<span class="text-xs text-danger">{proxyError}</span>
 			{/if}
 		</div>
 	{/snippet}

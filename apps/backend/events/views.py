@@ -629,6 +629,33 @@ def _serialize_run(run):
 
 
 @csrf_exempt
+def api_proxy_setting(request):
+    """GET current proxy-enabled state; POST to toggle it.
+
+    GET  → {"enabled": bool}
+    POST → {"enabled": bool}  (body)  → {"enabled": bool}
+    """
+    from .scrapers.proxy_manager import get_proxy_enabled, set_proxy_enabled
+
+    if request.method == "GET":
+        return JsonResponse({"enabled": get_proxy_enabled()})
+
+    if request.method == "POST":
+        try:
+            body = json.loads(request.body)
+        except (json.JSONDecodeError, ValueError):
+            return JsonResponse({"error": "Invalid JSON"}, status=400)
+        if "enabled" not in body:
+            return JsonResponse({"error": "Missing 'enabled' field"}, status=400)
+        if not isinstance(body["enabled"], bool):
+            return JsonResponse({"error": "'enabled' must be a JSON boolean"}, status=400)
+        set_proxy_enabled(body["enabled"])
+        return JsonResponse({"enabled": get_proxy_enabled()})
+
+    return JsonResponse({"error": "Method not allowed"}, status=405)
+
+
+@csrf_exempt
 @require_POST
 def api_scraper_trigger(request, key):
     # SECURITY NOTE: This endpoint is unauthenticated intentionally. The
