@@ -4,15 +4,20 @@ Proxy routing is ON by default. Disable it by setting:
 
     SCRAPER_USE_PROXY=false   (or 0 / no)
 
+Combines three public proxy lists (HTTP, SOCKS4, SOCKS5) fetched in parallel
+and shuffled into a single candidate pool. Requires PySocks:
+
+    pip install requests[socks]
+
 Usage in scrapers:
     from .proxy_manager import get_session
 
     session = get_session()          # proxy Session when on; plain Session when off
     resp = session.get("https://example.com", timeout=20)
 
-When proxy mode is active the first call downloads the public proxy list,
-shuffles it, and tests candidates until one passes an HTTPS connectivity check.
-The working proxy is cached in a module-level Session so all subsequent
+When proxy mode is active the first call downloads all proxy lists, shuffles
+the combined pool, and tests candidates until one passes an HTTPS connectivity
+check. The working proxy is cached in a module-level Session so all subsequent
 ``get_session()`` calls reuse the same proxy without re-testing.
 
 To force a new proxy election (e.g. after a 403 or ban):
@@ -26,21 +31,23 @@ import logging
 import os
 import random
 import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
 
 logger = logging.getLogger(__name__)
 
-_PROXY_LIST_URL = (
-    "https://raw.githubusercontent.com/TheSpeedX/SOCKS-List/master/http.txt"
-)
-# Test HTTPS tunneling explicitly — we need proxies that support CONNECT, since
-# most scraped sites use HTTPS. Plain HTTP tests elect proxies that pass but
-# then fail on HTTPS targets.
+# (scheme, list_url) pairs — fetched in parallel during election.
+_PROXY_SOURCES: list[tuple[str, str]] = [
+    ("socks5", "https://raw.githubusercontent.com/TheSpeedX/SOCKS-List/master/socks5.txt"),
+    ("socks4", "https://raw.githubusercontent.com/TheSpeedX/SOCKS-List/master/socks4.txt"),
+    ("http",   "https://raw.githubusercontent.com/TheSpeedX/SOCKS-List/master/http.txt"),
+]
+
 _TEST_URL = "https://httpbin.org/ip"
 _CONNECT_TIMEOUT = 5   # seconds to establish TCP connection
 _READ_TIMEOUT = 8      # seconds to receive first byte
-_MAX_TRIES = 100       # free proxy lists are noisy; cast a wide net
+_MAX_TRIES = 150       # larger combined pool; still a sensible cap
 
 _cached_session: requests.Session | None = None
 
@@ -72,23 +79,40 @@ def set_proxy_enabled(val: bool) -> None:
             reset_proxy_session()  # RLock allows re-entry from the same thread
 
 
-def _fetch_proxy_list() -> list[str]:
-    logger.info("Fetching proxy list from %s", _PROXY_LIST_URL)
-    resp = requests.get(_PROXY_LIST_URL, timeout=20)
-    resp.raise_for_status()
-    return [line.strip() for line in resp.text.splitlines() if line.strip()]
+def _fetch_one(scheme: str, url: str) -> list[tuple[str, str]]:
+    """Fetch a single proxy list and return [(scheme, host:port), ...]."""
+    try:
+        resp = requests.get(url, timeout=20)
+        resp.raise_for_status()
+        entries = [line.strip() for line in resp.text.splitlines() if line.strip()]
+        logger.info("Fetched %d %s proxies", len(entries), scheme)
+        return [(scheme, e) for e in entries]
+    except Exception as exc:
+        logger.warning("Failed to fetch %s proxy list: %s", scheme, exc)
+        return []
 
 
-def _make_proxies(host_port: str) -> dict[str, str]:
-    url = f"http://{host_port}"
+def _fetch_all_proxies() -> list[tuple[str, str]]:
+    """Fetch all proxy lists in parallel and return a shuffled combined pool."""
+    combined: list[tuple[str, str]] = []
+    with ThreadPoolExecutor(max_workers=len(_PROXY_SOURCES)) as pool:
+        futures = {pool.submit(_fetch_one, scheme, url): scheme for scheme, url in _PROXY_SOURCES}
+        for future in as_completed(futures):
+            combined.extend(future.result())
+    random.shuffle(combined)
+    return combined
+
+
+def _make_proxies(scheme: str, host_port: str) -> dict[str, str]:
+    url = f"{scheme}://{host_port}"
     return {"http": url, "https": url}
 
 
-def _test_proxy(host_port: str) -> bool:
+def _test_proxy(scheme: str, host_port: str) -> bool:
     try:
         resp = requests.get(
             _TEST_URL,
-            proxies=_make_proxies(host_port),
+            proxies=_make_proxies(scheme, host_port),
             timeout=(_CONNECT_TIMEOUT, _READ_TIMEOUT),
         )
         return resp.status_code == 200
@@ -99,10 +123,10 @@ def _test_proxy(host_port: str) -> bool:
 def get_proxy_session(force_refresh: bool = False) -> requests.Session:
     """Return a requests.Session pre-configured with a working proxy.
 
-    On the first call (or when ``force_refresh=True``) this downloads the
-    proxy list, shuffles it, and tests candidates sequentially until one
-    succeeds.  Raises ``RuntimeError`` if no working proxy is found within
-    ``_MAX_TRIES`` attempts.
+    On the first call (or when ``force_refresh=True``) this downloads all
+    proxy lists in parallel, shuffles the combined pool, and tests candidates
+    sequentially until one succeeds.  Raises ``RuntimeError`` if no working
+    proxy is found within ``_MAX_TRIES`` attempts.
 
     The cache read and write are both guarded by ``_lock``; the expensive
     proxy-election network I/O runs outside the lock so it doesn't stall
@@ -115,26 +139,31 @@ def get_proxy_session(force_refresh: bool = False) -> requests.Session:
             return _cached_session
 
     # Proxy election happens outside the lock — can take 30+ seconds.
-    candidates = _fetch_proxy_list()
-    random.shuffle(candidates)
+    candidates = _fetch_all_proxies()
 
     tried = 0
-    for host_port in candidates:
+    for scheme, host_port in candidates:
         if tried >= _MAX_TRIES:
             break
         tried += 1
-        logger.debug("Testing proxy %s (%d/%d)", host_port, tried, min(len(candidates), _MAX_TRIES))
-        if _test_proxy(host_port):
-            logger.info("Elected proxy: %s (tested %d candidate(s))", host_port, tried)
+        logger.debug(
+            "Testing %s proxy %s (%d/%d)",
+            scheme, host_port, tried, min(len(candidates), _MAX_TRIES),
+        )
+        if _test_proxy(scheme, host_port):
+            logger.info(
+                "Elected %s proxy: %s (tested %d candidate(s))",
+                scheme, host_port, tried,
+            )
             session = requests.Session()
-            session.proxies.update(_make_proxies(host_port))
+            session.proxies.update(_make_proxies(scheme, host_port))
             with _lock:
                 _cached_session = session
             return session
 
     raise RuntimeError(
-        f"No working proxy found after {tried} attempt(s). "
-        "The list may be stale or all tested proxies are down."
+        f"No working proxy found after {tried} attempt(s) across all protocol types. "
+        "The lists may be stale or all tested proxies are down."
     )
 
 
