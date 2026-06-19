@@ -194,6 +194,20 @@
 		});
 		return () => stopPolling();
 	});
+
+	// Auto-scroll action: keeps <pre> pinned to the bottom as log lines arrive.
+	function autoscroll(node: HTMLElement) {
+		const obs = new MutationObserver(() => { node.scrollTop = node.scrollHeight; });
+		obs.observe(node, { childList: true, subtree: true, characterData: true });
+		node.scrollTop = node.scrollHeight;
+		return { destroy() { obs.disconnect(); } };
+	}
+
+	// Show only the last 30 lines in the card to keep it compact.
+	function trimLog(raw: string | null): string {
+		if (!raw) return '';
+		return raw.split('\n').filter(Boolean).slice(-30).join('\n');
+	}
 </script>
 
 <svelte:head>
@@ -322,6 +336,15 @@
 								{expandedErrors.has(s.key) ? 'show less' : 'show full'}
 							</button>
 						{/if}
+					</div>
+				{/if}
+
+				{#if run?.log_output && (isActive || run.status === 'success' || run.status === 'failed')}
+					<div class="mt-3">
+						<pre
+							use:autoscroll
+							class="h-36 overflow-y-auto rounded-md bg-neutral-950 p-2 text-xs leading-relaxed text-green-400 font-mono whitespace-pre-wrap"
+						>{trimLog(run.log_output)}</pre>
 					</div>
 				{/if}
 

@@ -607,6 +607,10 @@ def api_venues_map(request):
 
 def _serialize_run(run):
     """Serialise a ScraperRun to the standard dict shape used by all run endpoints."""
+    include_log = run.status in ('queued', 'running') or (
+        run.finished_at is not None
+        and (timezone.now() - run.finished_at).total_seconds() < 300
+    )
     return {
         "id": run.id,
         "scraper_key": run.scraper_key,
@@ -620,6 +624,7 @@ def _serialize_run(run):
         "triggered_by": run.triggered_by.username if run.triggered_by_id else None,
         "created_at": run.created_at.isoformat(),
         "duration_seconds": run.duration_seconds,
+        "log_output": run.log_output if include_log else None,
     }
 
 
