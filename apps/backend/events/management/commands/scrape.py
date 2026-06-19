@@ -1,6 +1,15 @@
+import inspect
+
 from django.core.management.base import BaseCommand, CommandError
 
 from events.scrapers import SCRAPERS
+
+
+def _positive_int(value):
+    ivalue = int(value)
+    if ivalue <= 0:
+        raise ValueError
+    return ivalue
 
 
 class Command(BaseCommand):
@@ -16,11 +25,11 @@ class Command(BaseCommand):
             "--list", action="store_true", help="List available scrapers and exit."
         )
         parser.add_argument(
-            "--query-id", type=int, default=None, metavar="ID",
+            "--query-id", type=_positive_int, default=None, metavar="ID",
             help="Run only the SearchQuery with this ID (facebook_events only).",
         )
         parser.add_argument(
-            "--max-events", type=int, default=None, metavar="N",
+            "--max-events", type=_positive_int, default=None, metavar="N",
             help="Stop after processing N events per query (useful for quick tests).",
         )
 
@@ -54,7 +63,10 @@ class Command(BaseCommand):
             if options["max_events"] is not None:
                 run_kwargs["max_events"] = options["max_events"]
             try:
-                result = SCRAPERS[key]().run(**run_kwargs)
+                scraper = SCRAPERS[key]()
+                accepted = inspect.signature(scraper.run).parameters
+                filtered_kwargs = {k: v for k, v in run_kwargs.items() if k in accepted}
+                result = scraper.run(**filtered_kwargs)
             except Exception as exc:  # keep one failing scraper from killing the rest
                 self.stderr.write(self.style.ERROR(f"  {key} failed: {exc}"))
                 continue

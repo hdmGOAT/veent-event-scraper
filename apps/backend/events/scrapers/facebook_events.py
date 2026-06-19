@@ -74,7 +74,7 @@ _DISMISS_MODAL_JS = """
             if (pos !== 'fixed' && pos !== 'sticky') return;
             const zIndex = parseInt(s.zIndex || cs.zIndex, 10);
             // Only remove high-z overlays that cover most of the viewport
-            if (zIndex < 100) return;
+            if (isNaN(zIndex) || zIndex < 100) return;
             const rect = el.getBoundingClientRect();
             if (rect.width > window.innerWidth * 0.5 && rect.height > window.innerHeight * 0.5) {
                 el.remove();
@@ -388,11 +388,32 @@ _EXTRACT_DETAIL_JS = r"""
         if (t && t.length >= 20) { description = t.substring(0, 2000); break; }
     }
 
-    // Strategy B: Collect all [role="paragraph"] leaves and join — FB breaks the
-    // description into many short <span role="paragraph"> nodes, each < 30 chars.
+    // Identify the event-details panel once — used by both Strategy B and C.
+    // Walk up from the "Event by" organizer element to find the enclosing panel
+    // that contains both the organizer line and [dir="auto"] description blocks.
+    let eventPanel = null;
+    {
+        let organizerEl = null;
+        for (const el of document.querySelectorAll('span, div')) {
+            if (isInSidebarNav(el)) continue;
+            const t = (el.textContent || '').trim();
+            if (/^Event\s+by\b/i.test(t) && t.length < 150) { organizerEl = el; break; }
+        }
+        if (organizerEl) {
+            let node = organizerEl.parentElement;
+            for (let i = 0; i < 20 && node && node !== document.body; i++) {
+                if (node.querySelectorAll('[dir="auto"]').length >= 2) { eventPanel = node; break; }
+                node = node.parentElement;
+            }
+        }
+    }
+    const searchRoot = eventPanel || document;
+
+    // Strategy B: Collect all [role="paragraph"] leaves within the panel and join.
+    // FB breaks the description into many short <span role="paragraph"> nodes, each < 30 chars.
     if (!description) {
         const parts = [];
-        for (const el of document.querySelectorAll('[role="paragraph"]')) {
+        for (const el of searchRoot.querySelectorAll('[role="paragraph"]')) {
             if (isInSidebarNav(el)) continue;
             const t = el.textContent?.trim();
             if (!t || t.toLowerCase() === titleNorm) continue;
@@ -402,30 +423,8 @@ _EXTRACT_DETAIL_JS = r"""
         if (parts.length) description = parts.join('\n').substring(0, 2000);
     }
 
-    // Strategy C: anchor on the "Event by" organizer element and search for
-    // [dir="auto"] within the same structural container. The event description
-    // and the organizer line both live inside the same event-details panel;
-    // venue/place descriptions live in a separate location section lower on the page.
+    // Strategy C: [dir="auto"] containers scoped to the event-details panel.
     if (!description) {
-        // Find the "Event by" element
-        let organizerEl = null;
-        for (const el of document.querySelectorAll('span, div')) {
-            if (isInSidebarNav(el)) continue;
-            const t = (el.textContent || '').trim();
-            if (/^Event\s+by\b/i.test(t) && t.length < 150) { organizerEl = el; break; }
-        }
-
-        // Walk up from organizer until we find a container with multiple [dir="auto"] children
-        let panel = null;
-        if (organizerEl) {
-            let node = organizerEl.parentElement;
-            for (let i = 0; i < 20 && node && node !== document.body; i++) {
-                if (node.querySelectorAll('[dir="auto"]').length >= 2) { panel = node; break; }
-                node = node.parentElement;
-            }
-        }
-
-        const searchRoot = panel || document;
         for (const el of searchRoot.querySelectorAll('[dir="auto"]')) {
             if (isInSidebarNav(el)) continue;
             const t = el.textContent?.trim();
@@ -733,8 +732,8 @@ class FacebookEventsScraper(BaseScraper):
                     }
                 """)
                 _pause(0.4, 0.8)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("see-more expansion failed for %s: %s", event_url, exc)
 
             detail = page.evaluate(_EXTRACT_DETAIL_JS, query)
             detail_events = detail.get("events", [])
@@ -746,7 +745,11 @@ class FacebookEventsScraper(BaseScraper):
 
             venue_name     = d.get("venue_name") or card.get("venue_name") or ""
             city_location  = d.get("city_location", "")
-            city           = city_location.split(",")[0].strip() if city_location else ""
+            loc_parts      = [p.strip() for p in city_location.split(",")] if city_location else []
+            city           = loc_parts[0] if loc_parts else ""
+            # 3-part "City, Province, Country" → use last part; 2-part → last part too.
+            # Fall back to "Philippines" only when city_location gives no country hint.
+            country        = loc_parts[-1] if len(loc_parts) >= 2 else ("Philippines" if city else "")
             organizer      = d.get("organizer_name") or card.get("organizer_name") or ""
             organizer_url  = d.get("organizer_url") or ""
             start_raw      = d.get("start_datetime") or card.get("start_datetime")
@@ -757,7 +760,7 @@ class FacebookEventsScraper(BaseScraper):
                 ScrapedVenue(
                     name=venue_name,
                     city=city,
-                    country="Philippines" if city else "",
+                    country=country,
                 )
                 if venue_name
                 else None
@@ -807,6 +810,7 @@ class FacebookEventsScraper(BaseScraper):
         Playwright's sync API runs its own event loop internally; Django detects that
         as an async context and raises SynchronousOnlyOperation if ORM is called inside.
         """
+        from django.db import models
         from django.utils import timezone
         from events.models import Event, SearchQuery
 
@@ -835,7 +839,11 @@ class FacebookEventsScraper(BaseScraper):
             try:
                 # 2a — events
                 for sq in queries:
-                    scraped[sq.id] = list(self._fetch_for_query(page, sq.query, max_events=max_events))
+                    try:
+                        scraped[sq.id] = list(self._fetch_for_query(page, sq.query, max_events=max_events))
+                    except Exception as exc:
+                        logger.warning("[%s] query '%s' failed, skipping: %s", self.source, sq.query, exc)
+                        scraped[sq.id] = []
                     _pause(3.0, 6.0)
 
                 # 2b — organizer pages
@@ -906,9 +914,11 @@ class FacebookEventsScraper(BaseScraper):
                 search_query__isnull=True,
             ).update(search_query=sq)
 
-            sq.last_run_at = timezone.now()
-            sq.events_found_count += result["created"]
-            sq.save(update_fields=["last_run_at", "events_found_count", "updated_at"])
+            SearchQuery.objects.filter(pk=sq.pk).update(
+                last_run_at=timezone.now(),
+                events_found_count=models.F("events_found_count") + result["created"] + result["updated"],
+                updated_at=timezone.now(),
+            )
 
             total_created += result["created"]
             total_updated += result["updated"]
