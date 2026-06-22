@@ -553,6 +553,12 @@ _EXTRACT_ORGANIZER_JS = r"""
 }
 """
 
+def _sanitize_url(url: str) -> str:
+    """Return scheme+host+path only, stripping query strings and fragments."""
+    p = urllib.parse.urlparse(url)
+    return urllib.parse.urlunparse((p.scheme, p.netloc, p.path, "", "", ""))
+
+
 # ── Humanization helpers ──────────────────────────────────────────────────────
 
 def _pause(lo: float = 1.0, hi: float = 3.5) -> None:
@@ -800,7 +806,7 @@ class FacebookEventsScraper(BaseScraper):
                 organizer or "—",
                 "yes" if image_url else "no",
                 len(description),
-                registration_url or "—",
+                _sanitize_url(registration_url) if registration_url else "—",
             )
 
     # ── Organizer page scrape ─────────────────────────────────────────────────

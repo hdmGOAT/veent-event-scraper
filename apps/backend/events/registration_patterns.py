@@ -27,6 +27,6 @@ def find_registration_url(text: str) -> str:
     for raw_url in url_re.findall(text):
         url = raw_url.rstrip('.,);"\'>]')
         for _label, pattern in REGISTRATION_PATTERNS:
-            if pattern.search(url):
+            if pattern.match(url):
                 return url
     return ""
