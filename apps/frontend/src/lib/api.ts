@@ -106,6 +106,35 @@ function qs(params: Record<string, string | number | undefined>): string {
 	return s ? `?${s}` : '';
 }
 
+// ---------------------------------------------------------------------------
+// Node scraper API — hits /node-api/* (proxied to node-scraper on :8001).
+// No Django CSRF needed; Hono has its own CORS allow-list.
+// ---------------------------------------------------------------------------
+
+async function nodeGet<T>(path: string): Promise<T> {
+	const res = await fetch(`/node-api${path}`);
+	if (!res.ok) throw new Error(`Node API ${path} failed: ${res.status} ${res.statusText}`);
+	return res.json() as Promise<T>;
+}
+
+async function nodePost<T>(path: string): Promise<T> {
+	const res = await fetch(`/node-api${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json' } });
+	if (!res.ok) {
+		const err = await res.json().catch(() => ({}));
+		throw new Error((err as { error?: string }).error ?? `Node API ${path} failed: ${res.status}`);
+	}
+	return res.json() as Promise<T>;
+}
+
+export const nodeApi = {
+	scrapers: () => nodeGet<Scraper[]>('/scrapers'),
+	runScraper: (key: string) => nodePost<{ id: number; status: ScraperRunStatus }>(`/scrapers/${key}/run`),
+	runAll: () => nodePost<RunAllResult>('/scrapers/run-all'),
+	scraperRuns: (limit?: number) => nodeGet<ScraperRun[]>(`/scrapers/runs${limit ? `?limit=${limit}` : ''}`),
+	activeRuns: () => nodeGet<ScraperRun[]>('/scrapers/runs/active'),
+	cancelRun: (id: number) => nodePost<ScraperRun>(`/scrapers/runs/${id}/cancel`)
+};
+
 export const api = {
 	stats: (f?: Fetch) => get<Stats>('/stats/', f),
 	eventsBySource: (f?: Fetch) => get<SourceCount[]>('/events/by-source/', f),
