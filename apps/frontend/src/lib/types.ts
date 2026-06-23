@@ -150,6 +150,9 @@ export interface Scraper {
 	// Most recent ScraperRun for this key (null if it has never been run),
 	// annotated by api_scrapers. Drives the card's "last run" line.
 	last_run: ScraperLastRun | null;
+	// When true, the Scraper Center shows a keyword picker for this scraper and
+	// its run accepts query_ids. Returned by api_scrapers.
+	supports_keywords: boolean;
 	// Derived client-side from the activeRuns poll; not returned by api_scrapers.
 	active_run?: ScraperRun | null;
 }

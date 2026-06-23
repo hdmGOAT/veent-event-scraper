@@ -3,7 +3,7 @@
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import { api } from '$lib/api';
 	import { formatDateTime, titleize } from '$lib/format';
-	import type { Scraper, ScraperRun } from '$lib/types';
+	import type { Scraper, ScraperRun, SearchQuery } from '$lib/types';
 	import type { PageData } from './$types';
 
 	let { data }: { data: PageData } = $props();
@@ -33,6 +33,18 @@
 	// Keys whose log terminal is expanded (collapsed by default).
 	let expandedLogs = $state<Set<string>>(new Set());
 	let showAllRuns = $state(false);
+
+	// Keyword picker modal state (for scrapers with supports_keywords).
+	let keywordPickerKey = $state<string | null>(null);
+	let allKeywords = $state<SearchQuery[]>([]);
+	let selectedKeywordIds = $state<Set<number>>(new Set());
+	let keywordsLoading = $state(false);
+	let keywordPickerError = $state<string | null>(null);
+
+	// Two-step picker: step 1 = keyword selection, step 2 = location selection.
+	let pickerStep = $state<1 | 2>(1);
+	let selectedLocations = $state<Set<string>>(new Set());
+	const AVAILABLE_LOCATIONS = ['philippines', 'singapore'];
 
 	// "Run All" in-flight flag.
 	let runningAll = $state(false);
@@ -90,6 +102,67 @@
 		errors = new Map([...errors].filter(([k]) => k !== key));
 		try {
 			await api.runScraper(key);
+			await pollActive();
+			startPolling();
+		} catch (e) {
+			const msg = e instanceof Error ? e.message : 'Failed to start run';
+			errors = new Map([...errors, [key, msg]]);
+		} finally {
+			triggering = new Set([...triggering].filter((k) => k !== key));
+		}
+	}
+
+	async function openKeywordPicker(key: string) {
+		keywordPickerKey = key;
+		selectedKeywordIds = new Set();
+		pickerStep = 1;
+		selectedLocations = new Set();
+		keywordPickerError = null;
+		keywordsLoading = true;
+		try {
+			allKeywords = await api.searchQueries();
+		} catch (e) {
+			keywordPickerError = e instanceof Error ? e.message : 'Failed to load keywords';
+		} finally {
+			keywordsLoading = false;
+		}
+	}
+
+	function closeKeywordPicker() {
+		keywordPickerKey = null;
+		allKeywords = [];
+		selectedKeywordIds = new Set();
+		pickerStep = 1;
+		selectedLocations = new Set();
+		keywordPickerError = null;
+	}
+
+	function toggleKeyword(id: number) {
+		const next = new Set(selectedKeywordIds);
+		if (next.has(id)) next.delete(id);
+		else next.add(id);
+		selectedKeywordIds = next;
+	}
+
+	function selectAllKeywordsThenNext() {
+		const ids = allKeywords.filter((k) => k.is_active).map((k) => k.id);
+		selectedKeywordIds = new Set(ids);
+		pickerStep = 2;
+	}
+
+	async function handleRunFinal(key: string, overrideIds?: number[]) {
+		const ids = overrideIds ?? [...selectedKeywordIds];
+		if (ids.length === 0) return;
+		if (triggering.has(key) || runningMap.has(key)) return;
+		const locs = [...selectedLocations];
+		triggering = new Set([...triggering, key]);
+		errors = new Map([...errors].filter(([k]) => k !== key));
+		closeKeywordPicker();
+		try {
+			await api.runScraper(key, {
+				query_ids: ids,
+				...(locs.length > 0 ? { locations: locs } : {})
+			});
 			await pollActive();
 			startPolling();
 		} catch (e) {
@@ -339,7 +412,7 @@
 					<div class="flex gap-2">
 						<button
 							disabled={isActive || triggering.has(s.key)}
-							onclick={() => handleRun(s.key)}
+							onclick={() => (s.supports_keywords ? openKeywordPicker(s.key) : handleRun(s.key))}
 							class="rounded-md border border-border px-2.5 py-1 text-xs text-text transition hover:bg-surface-2 disabled:cursor-not-allowed disabled:opacity-50"
 						>
 							{triggering.has(s.key) ? 'Starting…' : 'Run'}
@@ -457,3 +530,123 @@
 		{/if}
 	</section>
 </div>
+
+{#if keywordPickerKey}
+	<div
+		class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+		role="dialog"
+		aria-modal="true"
+	>
+		<div class="flex max-h-[80vh] w-full max-w-lg flex-col rounded-xl border border-border bg-surface shadow-xl">
+			<div class="flex items-center justify-between border-b border-border px-5 py-4">
+				<h3 class="font-semibold text-heading">
+					{#if pickerStep === 1}
+						Select keywords — {titleize(keywordPickerKey)}
+					{:else}
+						Select locations — {titleize(keywordPickerKey)}
+					{/if}
+				</h3>
+				<button
+					onclick={closeKeywordPicker}
+					class="text-muted transition hover:text-text"
+					aria-label="Close"
+				>✕</button>
+			</div>
+
+			{#if pickerStep === 1}
+				<div class="flex-1 overflow-y-auto px-5 py-4">
+					{#if keywordsLoading}
+						<div class="flex items-center justify-center py-10">
+							<span class="h-6 w-6 animate-spin rounded-full border-2 border-accent border-t-transparent" aria-label="Loading"></span>
+						</div>
+					{:else if keywordPickerError}
+						<p class="text-sm text-danger">{keywordPickerError}</p>
+					{:else if allKeywords.length === 0}
+						<p class="text-sm text-muted">No keywords found. Add some on the Search Queries page.</p>
+					{:else}
+						<ul class="space-y-1">
+							{#each allKeywords as kw (kw.id)}
+								<li>
+									<label
+										class="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm {kw.is_active ? 'text-text hover:bg-surface-2' : 'text-muted opacity-60'}"
+									>
+										<input
+											type="checkbox"
+											disabled={!kw.is_active}
+											checked={selectedKeywordIds.has(kw.id)}
+											onchange={() => toggleKeyword(kw.id)}
+											class="h-4 w-4 rounded border-border"
+										/>
+										<span class="truncate">{kw.query}</span>
+										{#if !kw.is_active}
+											<span class="ml-auto text-xs text-muted">inactive</span>
+										{/if}
+									</label>
+								</li>
+							{/each}
+						</ul>
+					{/if}
+				</div>
+
+				<div class="flex items-center justify-between gap-2 border-t border-border px-5 py-4">
+					<button
+						onclick={closeKeywordPicker}
+						class="rounded-md border border-border px-3 py-1.5 text-sm text-text transition hover:bg-surface-2"
+					>Cancel</button>
+					<div class="flex gap-2">
+						<button
+							disabled={keywordsLoading || allKeywords.filter((k) => k.is_active).length === 0}
+							onclick={selectAllKeywordsThenNext}
+							class="rounded-md border border-border px-3 py-1.5 text-sm text-text transition hover:bg-surface-2 disabled:cursor-not-allowed disabled:opacity-50"
+						>Select All → Next</button>
+						<button
+							disabled={selectedKeywordIds.size === 0}
+							onclick={() => (pickerStep = 2)}
+							class="rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-white transition hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-50"
+						>Next →</button>
+					</div>
+				</div>
+			{:else}
+				<div class="flex-1 overflow-y-auto px-5 py-4">
+					<p class="text-sm font-medium text-heading">Select locations</p>
+					<p class="mt-1 text-xs text-muted">Each selected keyword will be searched once per location.</p>
+					<div class="mt-4 space-y-2">
+						{#each AVAILABLE_LOCATIONS as loc}
+							<label class="flex items-center gap-2 text-sm text-text cursor-pointer">
+								<input
+									type="checkbox"
+									checked={selectedLocations.has(loc)}
+									onchange={(e) => {
+										if (e.currentTarget.checked) selectedLocations.add(loc);
+										else selectedLocations.delete(loc);
+										selectedLocations = selectedLocations; // trigger reactivity
+									}}
+									class="accent-accent"
+								/>
+								<span class="capitalize">{loc}</span>
+							</label>
+						{/each}
+					</div>
+					<p class="mt-4 text-xs text-muted">Running {selectedKeywordIds.size} keyword(s)</p>
+				</div>
+
+				<div class="flex items-center justify-between gap-2 border-t border-border px-5 py-4">
+					<button
+						onclick={closeKeywordPicker}
+						class="rounded-md border border-border px-3 py-1.5 text-sm text-text transition hover:bg-surface-2"
+					>Cancel</button>
+					<div class="flex gap-2">
+						<button
+							onclick={() => (pickerStep = 1)}
+							class="rounded-md border border-border px-3 py-1.5 text-sm text-text transition hover:bg-surface-2"
+						>← Back</button>
+						<button
+							onclick={() => handleRunFinal(keywordPickerKey!)}
+							class="rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-white transition hover:bg-accent/90"
+						>Run</button>
+					</div>
+				</div>
+			{/if}
+		</div>
+	</div>
+{/if}
