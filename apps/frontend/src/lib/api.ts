@@ -19,6 +19,7 @@ import type {
 	SearchQuery,
 	SourceCount,
 	Stats,
+	TrackerNote,
 	VenueDetail,
 	VenueMapPin,
 	VenueRow
@@ -146,6 +147,8 @@ export const api = {
 	organizers: (params: { q?: string; status?: string; page?: number } = {}, f?: Fetch) =>
 		get<Paginated<Organizer>>(`/organizers/${qs(params)}`, f),
 	organizer: (slug: string, f?: Fetch) => get<OrganizerDetail>(`/organizers/${slug}/`, f),
+	updateOrganizerStatus: (slug: string, status: string) =>
+		patch<{ slug: string; status: string }>(`/organizers/${slug}/`, { status }),
 	venues: (params: { q?: string; status?: string; ordering?: string; type?: string; page?: number } = {}, f?: Fetch) =>
 		get<Paginated<VenueRow>>(`/venues/${qs(params)}`, f),
 	venueTypes: (f?: Fetch) => get<string[]>('/venues/types/', f),
@@ -174,5 +177,9 @@ export const api = {
 	runSearchQuery: (id: number) =>
 		post<{ id: number; status: ScraperRunStatus; scraper_key: string }>(`/search-queries/${id}/run/`),
 	getProxySetting: (f?: Fetch) => get<{ enabled: boolean }>('/settings/proxy/', f),
-	setProxySetting: (enabled: boolean) => postJson<{ enabled: boolean }>('/settings/proxy/', { enabled })
+	setProxySetting: (enabled: boolean) => postJson<{ enabled: boolean }>('/settings/proxy/', { enabled }),
+	trackerNotes: (f?: Fetch) => get<TrackerNote[]>('/tracker-notes/', f),
+	upsertNote: (entity_type: 'event' | 'organizer', entity_slug: string, content: string) =>
+		postJson<TrackerNote>('/tracker-notes/', { entity_type, entity_slug, content }),
+	deleteNote: (id: number) => del(`/tracker-notes/${id}/`)
 };

@@ -53,6 +53,8 @@ DEBUG = True
 
 ALLOWED_HOSTS = ['localhost', '127.0.0.1', 'testserver']
 
+CSRF_TRUSTED_ORIGINS = ['http://localhost:5173', 'http://127.0.0.1:5173']
+
 # Google Places API key for the venue scraper. Set via environment or .env;
 # never hardcode or commit a real key. Empty string when unset.
 PLACES_API_KEY = os.environ.get('PLACES_API_KEY', '')
