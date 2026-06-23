@@ -676,6 +676,27 @@ class FacebookEventsScraper(BaseScraper):
         )
         return None
 
+    def _is_free_proxy(self, proxy: dict | None) -> bool:
+        """Return True if proxy came from the free list (not DataImpulse)."""
+        if not proxy:
+            return False
+        di_host = os.environ.get("DATAIMPULSE_HOST", "gw.dataimpulse.com")
+        return di_host not in proxy.get("server", "")
+
+    def _rotate_free_proxy(self) -> dict | None:
+        """Force a new free-proxy election and return the updated Playwright proxy dict."""
+        from .proxy_manager import reset_proxy_session, get_proxy_session
+        reset_proxy_session()
+        try:
+            session = get_proxy_session(force_refresh=True)
+            proxy_url = session.proxies.get("https") or session.proxies.get("http")
+            if proxy_url:
+                logger.info("[%s] rotated to new free proxy: %s", self.source, proxy_url)
+                return {"server": proxy_url}
+        except Exception as exc:
+            logger.warning("[%s] free proxy rotation failed: %s — running without proxy.", self.source, exc)
+        return None
+
     # ── Browser context ───────────────────────────────────────────────────────
 
     def _browser_context(self, pw, proxy: dict | None = None):
@@ -916,6 +937,8 @@ class FacebookEventsScraper(BaseScraper):
         # Resolve proxy once per run — avoids a preflight HTTP request on every
         # keyword iteration and ensures consistent proxy config for all keywords.
         proxy = self._resolve_proxy()
+        consecutive_timeouts = 0
+        _TIMEOUT_ROTATE_THRESHOLD = 3  # rotate free proxy after this many consecutive timeouts
 
         # ── 2. Scrape phase — NO ORM inside the playwright block ──────────────
         # Django raises SynchronousOnlyOperation when ORM queries run while an
@@ -942,6 +965,7 @@ class FacebookEventsScraper(BaseScraper):
                 try:
                     try:
                         cards = list(self._fetch_for_query(page, effective_term, max_events=max_events))
+                        consecutive_timeouts = 0  # reset on any success
                         n = len(cards)
                         with_img  = sum(1 for e in cards if e.image_url)
                         with_desc = sum(1 for e in cards if e.description)
@@ -950,7 +974,20 @@ class FacebookEventsScraper(BaseScraper):
                             self.source, effective_term, n, with_img, with_desc,
                         )
                     except Exception as exc:
-                        logger.warning("[%s] search '%s' failed, skipping: %s", self.source, effective_term, exc)
+                        is_timeout = "timeout" in str(exc).lower()
+                        if is_timeout and self._is_free_proxy(proxy):
+                            consecutive_timeouts += 1
+                            logger.warning(
+                                "[%s] timeout on '%s' (consecutive: %d/%d)",
+                                self.source, effective_term, consecutive_timeouts, _TIMEOUT_ROTATE_THRESHOLD,
+                            )
+                            if consecutive_timeouts >= _TIMEOUT_ROTATE_THRESHOLD:
+                                logger.warning("[%s] rotating free proxy after %d consecutive timeouts", self.source, consecutive_timeouts)
+                                proxy = self._rotate_free_proxy()
+                                consecutive_timeouts = 0
+                        else:
+                            consecutive_timeouts = 0
+                            logger.warning("[%s] search '%s' failed, skipping: %s", self.source, effective_term, exc)
                         _pause(3.0, 6.0)
                         continue
 
