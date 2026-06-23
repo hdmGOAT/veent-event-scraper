@@ -442,9 +442,14 @@ def _parse_post_date(raw: str | None) -> datetime | None:
 
 
 def _post_external_id(post_url: str) -> str:
-    """Derive a stable dedup key from the post URL path."""
-    path = post_url.split("?")[0].split("facebook.com/")[-1].strip("/")
-    return path.replace("/", "_") or post_url[-40:]
+    """Derive a stable dedup key from the post URL.
+
+    Query params are preserved because story.php?story_fbid=123 and
+    story.php?story_fbid=456 have the same path but are distinct posts.
+    """
+    # Keep everything after facebook.com/ including query string
+    after_domain = post_url.split("facebook.com/")[-1].strip("/")
+    return after_domain.replace("/", "_") or post_url[-40:]
 
 
 # ── Scraper ───────────────────────────────────────────────────────────────────
@@ -891,8 +896,8 @@ class FacebookPostsScraper(FacebookEventsScraper):
                     self.source, post_url[:60],
                     (title or "")[:40],
                     organizer_name[:30] if organizer_name else "—",
-                    organizer_email or "—",
-                    organizer_phone or "—",
+                    "present" if organizer_email else "—",
+                    "present" if organizer_phone else "—",
                     registration_url or "—",
                 )
 

@@ -80,7 +80,7 @@ Each caption is checked by `_is_eligible()` **before** hitting the LLM:
 
 Posts that pass the pre-filter are sent to Ollama:
 
-```
+```json
 POST http://localhost:11434/api/generate
 {
   "model": "llama3.2:3b",
@@ -119,7 +119,7 @@ Organizer names/contacts are saved via `save_organizers()`.
 
 ## Full Data Flow
 
-```
+```text
 .env: FB_COOKIES_FILE
         |
         v
@@ -209,7 +209,7 @@ All settings go in `apps/backend/.env`.
 
 If another machine on your network runs Ollama:
 
-```
+```env
 OLLAMA_BASE=http://192.168.1.50:11434
 OLLAMA_MODEL=llama3:8b
 ```
@@ -277,7 +277,7 @@ results are all client-side rendered and gated behind login). Cookies are requir
 
 FB session cookies typically last 30–90 days. When they expire you will see:
 
-```
+```text
 page: ... | title: Facebook    ← no notification count, means not logged in
 '<query>': 0 raw posts extracted
 ```
@@ -388,7 +388,7 @@ ollama list
 
 ### `unparseable output` warnings — bad JSON from model
 
-**Cause:** Small models sometimes wrap JSON in markdown or add extra prose.
+**Cause:** Small models sometimes wrap JSON in Markdown or add extra prose.
 
 **Fix options:**
 - Switch to a larger/better instruction model (`OLLAMA_MODEL=mistral`)

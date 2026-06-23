@@ -12,15 +12,24 @@ Then add to apps/backend/.env:
     FB_COOKIES_FILE=scripts/fb_cookies.json
 """
 
+import glob
 import json
 import os
 import sys
 import time
 
 BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-VENV_SITE = os.path.join(BACKEND_DIR, "..", "..", ".venv", "Lib", "site-packages")
-if os.path.isdir(VENV_SITE):
-    sys.path.insert(0, os.path.abspath(VENV_SITE))
+# Try Windows path first, then Linux/macOS path
+_venv_root = os.path.join(BACKEND_DIR, "..", "..", ".venv")
+_candidates = [
+    os.path.join(_venv_root, "Lib", "site-packages"),          # Windows
+    os.path.join(_venv_root, "lib", "site-packages"),           # Linux/macOS (some)
+]
+_candidates += glob.glob(os.path.join(_venv_root, "lib", "python*", "site-packages"))
+for VENV_SITE in _candidates:
+    if os.path.isdir(VENV_SITE):
+        sys.path.insert(0, os.path.abspath(VENV_SITE))
+        break
 
 from playwright.sync_api import sync_playwright
 
@@ -85,10 +94,10 @@ def main():
         print(f"Saved {len(fb_cookies)} cookies → {out_path}")
         print()
         print("Next steps:")
-        print(f"  1. Add to apps/backend/.env:")
+        print("  1. Add to apps/backend/.env:")
         print(f"       FB_COOKIES_FILE={out_path}")
-        print(f"  2. Run the scraper:")
-        print(f"       python manage.py scrape facebook_posts --max-events 3")
+        print("  2. Run the scraper:")
+        print("       python manage.py scrape facebook_posts --max-events 3")
         print()
 
         browser.close()
