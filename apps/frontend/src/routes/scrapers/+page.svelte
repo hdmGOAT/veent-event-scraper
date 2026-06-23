@@ -230,6 +230,11 @@
 		return `Last run: ${when} · ${titleize(lr.status)}`;
 	}
 
+	function formatBytes(bytes: number | undefined | null): string {
+		if (!bytes) return '—';
+		return (bytes / 1_048_576).toFixed(1) + ' MB';
+	}
+
 	function formatDuration(seconds: number | null): string {
 		if (seconds === null) return '—';
 		if (seconds < 1) return '<1s';
@@ -547,6 +552,12 @@
 					</div>
 				{/if}
 
+				{#if run?.extra_counts?.total_bytes}
+					<div class="mt-1 text-xs text-muted">
+						{formatBytes(run.extra_counts.total_bytes)} transferred
+					</div>
+				{/if}
+
 				{#if run?.status === 'success'}
 					<div class="mt-2 text-xs text-muted">
 						{run.created_count} created, {run.updated_count} updated{#if run.extra_counts.organizers_created !== undefined}
@@ -611,6 +622,7 @@
 							<th class="px-4 py-2 font-medium">Duration</th>
 							<th class="px-4 py-2 font-medium">Created</th>
 							<th class="px-4 py-2 font-medium">Updated</th>
+							<th class="px-4 py-2 font-medium">Bandwidth</th>
 						</tr>
 					</thead>
 					<tbody>
@@ -622,6 +634,7 @@
 								<td class="px-4 py-2 text-muted">{formatDuration(r.duration_seconds)}</td>
 								<td class="px-4 py-2 text-muted">{r.created_count}</td>
 								<td class="px-4 py-2 text-muted">{r.updated_count}</td>
+								<td class="px-4 py-2 text-muted">{formatBytes(r.extra_counts?.total_bytes)}</td>
 							</tr>
 						{/each}
 					</tbody>

@@ -92,7 +92,7 @@ class BaseScraper:
         """Yield ScrapedEvent instances. Implemented by subclasses."""
         raise NotImplementedError
 
-    def run(self) -> dict:
+    def run(self, on_progress=None) -> dict:
         if not self.source:
             raise ValueError(f"{type(self).__name__}.source must be set")
         events = list(self.fetch())
