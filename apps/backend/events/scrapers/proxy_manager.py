@@ -46,7 +46,6 @@ _PROXY_LIST_URLS = [
 _TEST_URL = "https://httpbin.org/ip"
 _CONNECT_TIMEOUT = 5   # seconds to establish TCP connection
 _READ_TIMEOUT = 8      # seconds to receive first byte
-_MAX_TRIES = 100       # free proxy lists are noisy; cast a wide net
 _TEST_WORKERS = 20     # concurrent proxy testers
 
 _cached_session: requests.Session | None = None
@@ -86,21 +85,41 @@ def _fetch_one(url: str) -> list[str]:
 
 
 def _fetch_proxy_list() -> list[str]:
-    seen: set[str] = set()
-    combined: list[str] = []
+    # Fetch all sources in parallel, collect per-source lists.
+    per_source: list[list[str]] = []
     with ThreadPoolExecutor(max_workers=len(_PROXY_LIST_URLS)) as pool:
         futures = {pool.submit(_fetch_one, url): url for url in _PROXY_LIST_URLS}
+        source_results: dict[str, list[str]] = {}
         for fut in as_completed(futures):
             url = futures[fut]
             try:
-                for entry in fut.result():
-                    if entry not in seen:
-                        seen.add(entry)
-                        combined.append(entry)
-                logger.info("Fetched from %s — pool now %d unique", url, len(combined))
+                entries = fut.result()
+                source_results[url] = entries
+                logger.info("Fetched %d proxies from %s", len(entries), url)
             except Exception as exc:
                 logger.warning("Failed to fetch proxy list from %s: %s", url, exc)
-    logger.info("Combined proxy pool: %d unique candidates", len(combined))
+
+    # Shuffle each source independently so we sample randomly within each,
+    # then round-robin interleave so the combined list is diverse across sources
+    # rather than front-loaded with whichever source had the most entries.
+    sources = list(source_results.values())
+    for src in sources:
+        random.shuffle(src)
+
+    seen: set[str] = set()
+    combined: list[str] = []
+    for i in range(max((len(s) for s in sources), default=0)):
+        for src in sources:
+            if i < len(src):
+                entry = src[i]
+                if entry not in seen:
+                    seen.add(entry)
+                    combined.append(entry)
+
+    logger.info(
+        "Combined proxy pool: %d unique candidates from %d source(s)",
+        len(combined), len(sources),
+    )
     return combined
 
 
@@ -124,10 +143,11 @@ def _test_proxy(host_port: str) -> bool:
 def get_proxy_session(force_refresh: bool = False) -> requests.Session:
     """Return a requests.Session pre-configured with a working proxy.
 
-    On the first call (or when ``force_refresh=True``) this downloads the
-    proxy list, shuffles it, and tests candidates sequentially until one
-    succeeds.  Raises ``RuntimeError`` if no working proxy is found within
-    ``_MAX_TRIES`` attempts.
+    On the first call (or when ``force_refresh=True``) this fetches all
+    proxy sources in parallel, round-robin interleaves them for diversity,
+    then tests the full pool with ``_TEST_WORKERS`` concurrent workers,
+    stopping as soon as the first candidate passes.  Raises ``RuntimeError``
+    if no working proxy is found in the entire pool.
 
     The cache read and write are both guarded by ``_lock``; the expensive
     proxy-election network I/O runs outside the lock so it doesn't stall
@@ -141,8 +161,6 @@ def get_proxy_session(force_refresh: bool = False) -> requests.Session:
 
     # Proxy election happens outside the lock — can take 30+ seconds.
     candidates = _fetch_proxy_list()
-    random.shuffle(candidates)
-    batch = candidates[: _MAX_TRIES]
 
     winner: str | None = None
     found = threading.Event()
@@ -156,7 +174,7 @@ def get_proxy_session(force_refresh: bool = False) -> requests.Session:
         return None
 
     with ThreadPoolExecutor(max_workers=_TEST_WORKERS) as pool:
-        futures = {pool.submit(_test_one, hp): hp for hp in batch}
+        futures = {pool.submit(_test_one, hp): hp for hp in candidates}
         for fut in as_completed(futures):
             result = fut.result()
             if result and not found.is_set():
@@ -165,7 +183,7 @@ def get_proxy_session(force_refresh: bool = False) -> requests.Session:
                 break
 
     if winner:
-        logger.info("Elected proxy: %s (from %d candidates)", winner, len(batch))
+        logger.info("Elected proxy: %s (from %d candidates)", winner, len(candidates))
         session = requests.Session()
         session.proxies.update(_make_proxies(winner))
         with _lock:
@@ -175,7 +193,7 @@ def get_proxy_session(force_refresh: bool = False) -> requests.Session:
         return session
 
     raise RuntimeError(
-        f"No working proxy found after testing {len(batch)} candidate(s). "
+        f"No working proxy found after testing {len(candidates)} candidate(s). "
         "The list may be stale or all tested proxies are down."
     )
 
