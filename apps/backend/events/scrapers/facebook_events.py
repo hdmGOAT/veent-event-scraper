@@ -937,19 +937,19 @@ class FacebookEventsScraper(BaseScraper):
         # Resolve proxy once per run — avoids a preflight HTTP request on every
         # keyword iteration and ensures consistent proxy config for all keywords.
         proxy = self._resolve_proxy()
-        consecutive_timeouts = 0
-        _TIMEOUT_ROTATE_THRESHOLD = 3  # rotate free proxy after this many consecutive timeouts
+        # Track whether we started on a free proxy — flag is independent of the
+        # proxy dict so rotation keeps working even if _rotate_free_proxy returns None.
+        using_free_proxy = self._is_free_proxy(proxy)
+        failure_score = 0   # accumulates across the run; all failures count when on free proxy
+        _ROTATE_THRESHOLD = 4
 
-        # ── 2. Scrape phase — NO ORM inside the playwright block ──────────────
-        # Django raises SynchronousOnlyOperation when ORM queries run while an
-        # asyncio event loop is active. sync_playwright() keeps a loop alive for
-        # its entire duration, so all DB writes must happen AFTER the block exits.
-        # We collect (sq, cards, per-keyword organizer details) here and persist
-        # them in Phase 3 below.
+        # ── 2. Scrape + save per keyword ──────────────────────────────────────
+        # ORM calls inside sync_playwright() are safe: run_scraper_job sets
+        # DJANGO_ALLOW_ASYNC_UNSAFE=true for this subprocess.
         org_details: dict[str, dict] = {}   # url → enriched organizer data (global dedup)
         seen_org_urls: set[str] = set()     # dedup organizer page visits across keywords
-        # (sq, effective_term, cards scraped for this work item)
-        keyword_results: list[tuple] = []
+        seen_org_keys: set[str] = set()     # dedup organizer upserts globally
+        total_created = total_updated = 0
 
         with sync_playwright() as pw:
             for i, (sq, location_suffix) in enumerate(work_items, 1):
@@ -965,7 +965,7 @@ class FacebookEventsScraper(BaseScraper):
                 try:
                     try:
                         cards = list(self._fetch_for_query(page, effective_term, max_events=max_events))
-                        consecutive_timeouts = 0  # reset on any success
+                        failure_score = max(0, failure_score - 1)  # ease off on success
                         n = len(cards)
                         with_img  = sum(1 for e in cards if e.image_url)
                         with_desc = sum(1 for e in cards if e.description)
@@ -974,20 +974,19 @@ class FacebookEventsScraper(BaseScraper):
                             self.source, effective_term, n, with_img, with_desc,
                         )
                     except Exception as exc:
-                        is_timeout = "timeout" in str(exc).lower()
-                        if is_timeout and self._is_free_proxy(proxy):
-                            consecutive_timeouts += 1
+                        logger.warning("[%s] search '%s' failed, skipping: %s", self.source, effective_term, exc)
+                        if using_free_proxy:
+                            failure_score += 1
                             logger.warning(
-                                "[%s] timeout on '%s' (consecutive: %d/%d)",
-                                self.source, effective_term, consecutive_timeouts, _TIMEOUT_ROTATE_THRESHOLD,
+                                "[%s] free proxy failure score: %d/%d",
+                                self.source, failure_score, _ROTATE_THRESHOLD,
                             )
-                            if consecutive_timeouts >= _TIMEOUT_ROTATE_THRESHOLD:
-                                logger.warning("[%s] rotating free proxy after %d consecutive timeouts", self.source, consecutive_timeouts)
-                                proxy = self._rotate_free_proxy()
-                                consecutive_timeouts = 0
-                        else:
-                            consecutive_timeouts = 0
-                            logger.warning("[%s] search '%s' failed, skipping: %s", self.source, effective_term, exc)
+                            if failure_score >= _ROTATE_THRESHOLD:
+                                logger.warning("[%s] rotating free proxy (score %d)", self.source, failure_score)
+                                new_proxy = self._rotate_free_proxy()
+                                if new_proxy:
+                                    proxy = new_proxy
+                                failure_score = 0
                         _pause(3.0, 6.0)
                         continue
 
@@ -1003,64 +1002,58 @@ class FacebookEventsScraper(BaseScraper):
                             details["name"] = se.organizer
                         org_details[url] = details
                         _pause(2.0, 4.0)
-
-                    keyword_results.append((sq, effective_term, cards))
                 finally:
                     context.close()
                     browser.close()
 
+                # Save immediately — a crash or cancellation won't lose this keyword's data.
+                kw_orgs: list[ScrapedOrganizer] = []
+                for se in cards:
+                    name = (se.organizer or "").strip()
+                    url  = (se.organizer_url or "").rstrip("/")
+                    if not name:
+                        continue
+                    key = url or name.lower()
+                    if key in seen_org_keys:
+                        continue
+                    seen_org_keys.add(key)
+                    if "profile.php" in url:
+                        m = re.search(r'[?&]id=(\d+)', url)
+                        external_id = m.group(1) if m else ""
+                    else:
+                        external_id = url.rstrip("/").split("/")[-1] if url else ""
+                    d = org_details.get(url, {})
+                    kw_orgs.append(ScrapedOrganizer(
+                        name=d.get("name") or name,
+                        website=url,
+                        email=d.get("email") or "",
+                        phone=d.get("phone") or "",
+                        address=d.get("address") or "",
+                        description=d.get("description") or "",
+                        facebook_url=url,
+                        external_id=external_id,
+                        source_url=d.get("website") or "",
+                    ))
+                if kw_orgs:
+                    save_organizers(self.source, kw_orgs)
+
+                result = save_events(self.source, cards)
+                Event.objects.filter(
+                    pk__in=result.get("event_ids", []),
+                    search_query__isnull=True,
+                ).update(search_query=sq)
+                SearchQuery.objects.filter(pk=sq.pk).update(
+                    last_run_at=timezone.now(),
+                    events_found_count=models.F("events_found_count") + result["created"] + result["updated"],
+                    updated_at=timezone.now(),
+                )
+                total_created += result["created"]
+                total_updated += result["updated"]
+                logger.info(
+                    "[%s] saved query '%s': %d created, %d updated",
+                    self.source, effective_term, result["created"], result["updated"],
+                )
                 _pause(3.0, 6.0)
-
-        # ── 3. Persist phase — all ORM calls happen after playwright has exited ─
-        seen_org_keys: set[str] = set()
-        total_created = total_updated = 0
-        for sq, effective_term, cards in keyword_results:
-            kw_orgs: list[ScrapedOrganizer] = []
-            for se in cards:
-                name = (se.organizer or "").strip()
-                url  = (se.organizer_url or "").rstrip("/")
-                if not name:
-                    continue
-                key = url or name.lower()
-                if key in seen_org_keys:
-                    continue
-                seen_org_keys.add(key)
-                if "profile.php" in url:
-                    m = re.search(r'[?&]id=(\d+)', url)
-                    external_id = m.group(1) if m else ""
-                else:
-                    external_id = url.rstrip("/").split("/")[-1] if url else ""
-                d = org_details.get(url, {})
-                kw_orgs.append(ScrapedOrganizer(
-                    name=d.get("name") or name,
-                    website=url,
-                    email=d.get("email") or "",
-                    phone=d.get("phone") or "",
-                    address=d.get("address") or "",
-                    description=d.get("description") or "",
-                    facebook_url=url,
-                    external_id=external_id,
-                    source_url=d.get("website") or "",
-                ))
-            if kw_orgs:
-                save_organizers(self.source, kw_orgs)
-
-            result = save_events(self.source, cards)
-            Event.objects.filter(
-                pk__in=result.get("event_ids", []),
-                search_query__isnull=True,
-            ).update(search_query=sq)
-            SearchQuery.objects.filter(pk=sq.pk).update(
-                last_run_at=timezone.now(),
-                events_found_count=models.F("events_found_count") + result["created"] + result["updated"],
-                updated_at=timezone.now(),
-            )
-            total_created += result["created"]
-            total_updated += result["updated"]
-            logger.info(
-                "[%s] saved query '%s': %d created, %d updated",
-                self.source, effective_term, result["created"], result["updated"],
-            )
 
         logger.info(
             "[%s] run complete — %d queries, %d created, %d updated",
