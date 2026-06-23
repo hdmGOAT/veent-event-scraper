@@ -100,7 +100,12 @@ _EXTRACT_SEARCH_JS = r"""
     const DATE_WORD_RE  = /\b(mon|tue|wed|thu|fri|sat|sun|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|today|tomorrow|happening|yesterday)\b/i;
     const FULL_MONTH_RE = /\b(january|february|march|april|may|june|july|august|september|october|november|december)\b/i;
     const NOISE_RE      = /\b(interested|going|attending|share|invited|maybe)\b|\d+\s+(interested|going)|notifications?/i;
-    const UI_CHROME_SET = new Set(['events','home','watch','marketplace','menu','notifications','your events','facebook','log in','sign up','create account','anyone']);
+    const UI_CHROME_SET = new Set([
+      'events','home','watch','marketplace','menu','notifications',
+      'your events','facebook','log in','sign up','create account','anyone',
+      'forgotten account?','ad choices','ad choices ·','sponsored','create new account',
+      'see more','see less','view more','learn more','privacy','terms','cookies',
+    ]);
     // Two-part "City, Country" OR three-part "City, State/Province, Country"
     const CITY_RE       = /^[A-Za-zÀ-ɏ][\w\sÀ-ɏ]{1,40},\s+[A-Za-zÀ-ɏ][\w\sÀ-ɏ]{1,40}(,\s+[A-Za-zÀ-ɏ][\w\sÀ-ɏ]{1,40})?$/;
     const MIN_RESPONDENTS = 10;
@@ -163,6 +168,30 @@ _EXTRACT_SEARCH_JS = r"""
         return null;
     }
 
+    function pickVenueLine(lines) {
+        function looksLikeVenue(t) {
+            if (t.endsWith('?')) return false;
+            if (/·/.test(t)) return false;
+            if (/^(ad|sponsored|suggested|people you may know)/i.test(t)) return false;
+            return true;
+        }
+        let passedDate = false, count = 0;
+        for (const t of lines) {
+            if (DATE_WORD_RE.test(t)) { passedDate = true; continue; }
+            if (!passedDate) continue;
+            if (isNoise(t) || !looksLikeVenue(t)) continue;
+            if (count === 1) return t;
+            count++;
+        }
+        count = 0;
+        for (const t of lines) {
+            if (isNoise(t) || !looksLikeVenue(t)) continue;
+            if (count === 1) return t;
+            count++;
+        }
+        return null;
+    }
+
     const seenRoots = new Set(), seenUrls = new Set(), events = [];
     let skippedLowCount = 0;
 
@@ -177,6 +206,10 @@ _EXTRACT_SEARCH_JS = r"""
         seenRoots.add(root); seenUrls.add(eventUrl);
 
         const lines           = getTextLines(root);
+        const isAdCard = lines.some(t =>
+            /^(ad|sponsored)$/i.test(t) || t.toLowerCase() === 'ad choices'
+        );
+        if (isAdCard) continue;
         const respondent_count = parseRespondentCount(lines);
         if (respondent_count !== null && respondent_count < MIN_RESPONDENTS) { skippedLowCount++; continue; }
 
@@ -208,7 +241,7 @@ _EXTRACT_SEARCH_JS = r"""
             event_id:           idMatch ? idMatch[1] : '',
             title,
             start_datetime,
-            venue_name:         pickLineAfterDate(lines, 1) || null,
+            venue_name:         pickVenueLine(lines) || null,
             organizer_name,
             short_description,
             respondent_count:   respondent_count ?? 0,
