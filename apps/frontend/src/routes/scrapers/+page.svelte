@@ -5,6 +5,7 @@
 	import { formatDateTime, titleize } from '$lib/format';
 	import type { Scraper, ScraperRun, SearchQuery } from '$lib/types';
 	import type { PageData } from './$types';
+	import { SvelteSet } from 'svelte/reactivity';
 
 	let { data }: { data: PageData } = $props();
 
@@ -43,7 +44,7 @@
 
 	// Two-step picker: step 1 = keyword selection, step 2 = location selection.
 	let pickerStep = $state<1 | 2>(1);
-	let selectedLocations = $state<Set<string>>(new Set());
+	let selectedLocations = $state(new SvelteSet<string>());
 	const AVAILABLE_LOCATIONS = ['philippines', 'singapore'];
 
 	// "Run All" in-flight flag.
@@ -95,7 +96,7 @@
 				const next = new Map<string, ScraperRun>();
 				for (const run of active.value) next.set(run.scraper_key, run);
 				runningMap = next;
-				if (active.value.length === 0 && (nodeActive.status !== 'fulfilled' || nodeActive.value.length === 0) && pollingInterval !== null) {
+				if (active.value.length === 0 && (nodeActive.status !== 'fulfilled' || nodeActive.value.length === 0)) {
 					stopPolling();
 					[recentRuns, scrapers] = await Promise.all([api.scraperRuns(), api.scrapers()]);
 				}
@@ -132,7 +133,7 @@
 		keywordPickerKey = key;
 		selectedKeywordIds = new Set();
 		pickerStep = 1;
-		selectedLocations = new Set();
+		selectedLocations = new SvelteSet<string>();
 		keywordPickerError = null;
 		keywordsLoading = true;
 		try {
@@ -149,7 +150,7 @@
 		allKeywords = [];
 		selectedKeywordIds = new Set();
 		pickerStep = 1;
-		selectedLocations = new Set();
+		selectedLocations = new SvelteSet<string>();
 		keywordPickerError = null;
 	}
 
@@ -640,10 +641,12 @@
 		class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
 		role="dialog"
 		aria-modal="true"
+		aria-labelledby="keyword-picker-heading"
+		onkeydown={(e) => { if (e.key === 'Escape') closeKeywordPicker(); }}
 	>
 		<div class="flex max-h-[80vh] w-full max-w-lg flex-col rounded-xl border border-border bg-surface shadow-xl">
 			<div class="flex items-center justify-between border-b border-border px-5 py-4">
-				<h3 class="font-semibold text-heading">
+				<h3 id="keyword-picker-heading" class="font-semibold text-heading">
 					{#if pickerStep === 1}
 						Select keywords — {titleize(keywordPickerKey)}
 					{:else}
@@ -723,7 +726,6 @@
 									onchange={(e) => {
 										if (e.currentTarget.checked) selectedLocations.add(loc);
 										else selectedLocations.delete(loc);
-										selectedLocations = selectedLocations; // trigger reactivity
 									}}
 									class="accent-accent"
 								/>

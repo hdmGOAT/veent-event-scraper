@@ -96,7 +96,7 @@ with a single attribute.
 Old API clients that send `source` in POST still work; it is stored if present.
 
 **`POST /api/scrapers/<key>/run/` body schema:**
-```
+```json
 { "query_ids": [1, 2, 3] }   // optional; omit for a full run
 ```
 Response is unchanged: `{ "id": ..., "status": ... }`.
@@ -208,14 +208,14 @@ backwards compat (single-query runs from `/search-queries` page).
 6. **Update `run_scraper_job`** in
    `apps/backend/events/management/commands/run_scraper_job.py`:
    - In `add_arguments`, add:
-     ```
+     ```python
      parser.add_argument(
          "--query-ids", type=str, default=None,
          help="Comma-separated SearchQuery PKs to restrict this run.",
      )
      ```
    - In `handle`, after `query_id = options.get("query_id")`, add:
-     ```
+     ```python
      raw_ids = options.get("query_ids")
      query_ids = [int(x) for x in raw_ids.split(",") if x.strip()] if raw_ids else None
      ```

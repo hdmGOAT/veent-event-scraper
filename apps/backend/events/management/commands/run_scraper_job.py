@@ -113,6 +113,13 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **options):
+        # This worker is a dedicated OS subprocess — no actual async code runs here.
+        # Playwright's sync API leaves a stopped (not running) event loop in the thread,
+        # which trips Django's async-context guard when ORM calls are made afterwards.
+        # The env var is Django's official escape hatch for this pattern.
+        import os as _os
+        _os.environ["DJANGO_ALLOW_ASYNC_UNSAFE"] = "true"
+
         run_id = options["run_id"]
         query_id = options.get("query_id")
         raw_ids = options.get("query_ids")

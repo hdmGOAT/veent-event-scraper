@@ -3,6 +3,16 @@
 from django.db import migrations, models
 
 
+def _dedup_search_queries(apps, schema_editor):
+    SearchQuery = apps.get_model("events", "SearchQuery")
+    seen = {}
+    for sq in SearchQuery.objects.order_by("pk"):
+        if sq.query in seen:
+            sq.delete()
+        else:
+            seen[sq.query] = sq.pk
+
+
 class Migration(migrations.Migration):
 
     dependencies = [
@@ -23,6 +33,7 @@ class Migration(migrations.Migration):
             name='source',
             field=models.CharField(blank=True, default='', help_text='Scraper key that found this query, if any. Legacy field.', max_length=120),
         ),
+        migrations.RunPython(_dedup_search_queries, migrations.RunPython.noop),
         migrations.AddConstraint(
             model_name='searchquery',
             constraint=models.UniqueConstraint(fields=('query',), name='unique_query'),
