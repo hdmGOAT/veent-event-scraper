@@ -221,12 +221,14 @@ _EXTRACT_SEARCH_JS = r"""
             ? (timeEl.getAttribute('datetime') || timeEl.textContent.trim())
             : (lines.find(t => DATE_WORD_RE.test(t) && t.length < 80) || null);
 
-        // organizer: "Event by NAME"
+        // organizer: "Event by NAME" or "Hosted by NAME"
+        // Use raw textContent (not leafText) — FB's React DOM nests many spans
+        // inside the "Event by" container so leafText() always returns null here.
         let organizer_name = null;
         for (const el of root.querySelectorAll('span, div')) {
-            const t = leafText(el);
-            if (!t) continue;
-            const m = t.match(/^Event\s+by\s+(.{1,100})$/i);
+            const t = (el.textContent || '').trim();
+            if (!t || t.length > 150) continue;
+            const m = t.match(/^(?:Event|Hosted)\s+by\s+(.{1,100})$/i);
             if (m && !/https?:\/\//.test(m[1])) { organizer_name = m[1].trim(); break; }
         }
 
@@ -318,12 +320,13 @@ _EXTRACT_DETAIL_JS = r"""
     for (const el of document.querySelectorAll('span, div, a')) {
         if (isInSidebarNav(el)) continue;
         const t = (el.textContent || '').trim();
-        if (!/^Event\s+by\b/i.test(t) || t.length > 150) continue;
-        const m = t.match(/^Event\s+by\s+(.{1,100})$/i);
+        if ((!/^Event\s+by\b/i.test(t) && !/^Hosted\s+by\b/i.test(t)) || t.length > 150) continue;
+        const m = t.match(/^(?:Event|Hosted)\s+by\s+(.{1,100})$/i);
         if (m) organizer_name = m[1].trim();
-        // Walk up to find a sibling/ancestor containing the organizer page link
-        let node = el.parentElement || el;
-        for (let i = 0; i < 6 && node && node !== document.body; i++) {
+        // The org link is typically a direct child <a> of the matched element.
+        // Start the search from el itself, then walk up to siblings/ancestors.
+        let node = el;
+        for (let i = 0; i < 7 && node && node !== document.body; i++) {
             for (const a of node.querySelectorAll('a[href]')) {
                 const href = a.href || '';
                 if (FB_PAGE_RE.test(href) && !/\/events\//.test(href)) {
@@ -346,8 +349,8 @@ _EXTRACT_DETAIL_JS = r"""
     if (!organizer_url) {
         for (const item of document.querySelectorAll('[role="listitem"]')) {
             if (isInSidebarNav(item)) continue;
-            // Must contain "Event by" text to be the right listitem
-            if (!/Event\s+by\b/i.test(item.textContent || '')) continue;
+            // Must contain "Event by" or "Hosted by" text to be the right listitem
+            if (!/(?:Event|Hosted)\s+by\b/i.test(item.textContent || '')) continue;
             for (const a of item.querySelectorAll('a[href]')) {
                 const href = a.href || '';
                 if (FB_PAGE_RE.test(href) && !/\/events\//.test(href)) {
@@ -360,23 +363,64 @@ _EXTRACT_DETAIL_JS = r"""
         }
     }
 
-    // Strategy 2: "Meet your host" section (visible when logged in)
+    // Strategy 2: "Meet your host" / "Hosted by" / "Host" section
+    // Three layouts observed:
+    //   - Logged-in:        "Meet your host" heading + linked org card
+    //   - Unauth variant A: "Hosted by" heading + linked org card
+    //   - Unauth variant B: "Host" heading + plain text org name (NO link — FB gates it)
+    // We try to extract URL+name via the link first, then fall back to plain text.
     if (!organizer_url) {
         const hostHeading = Array.from(document.querySelectorAll('span, div, h2, h3, strong'))
-            .find(el => /^meet\s+your\s+host$/i.test((el.textContent || '').trim()));
+            .find(el => /^(meet\s+your\s+host|hosted\s+by|host)$/i.test((el.textContent || '').trim()));
         if (hostHeading) {
+            // Walk UP from the heading to find the host section container, then
+            // search DOWN for either a linked org card or a plain text org name.
             let container = hostHeading.parentElement;
             for (let i = 0; i < 10 && container && container !== document.body; i++) {
+                // Try linked variant first
                 for (const a of container.querySelectorAll('a[href]')) {
                     const href = a.href || '';
                     if (FB_PAGE_RE.test(href) && !/\/events\//.test(href)) {
-                        organizer_url  = cleanFbUrl(href);
-                        organizer_name = organizer_name || (a.textContent || '').trim() || null;
+                        organizer_url = cleanFbUrl(href);
+                        if (!organizer_name) {
+                            // Pick the first short, clean text child — skip metadata lines
+                            // like "28 past events", "Page", "Nonprofit organization".
+                            let nameFromAnchor = null;
+                            for (const span of a.querySelectorAll('span, strong')) {
+                                const t = (span.textContent || '').trim();
+                                if (t.length >= 2 && t.length <= 100 &&
+                                    !/past\s+events?|^\d+\s|page$|nonprofit|organization|group|community/i.test(t)) {
+                                    nameFromAnchor = t;
+                                    break;
+                                }
+                            }
+                            organizer_name = nameFromAnchor || (a.textContent || '').split(/[\n·]/)[0].trim() || null;
+                        }
                         break;
                     }
                 }
                 if (organizer_url) break;
                 container = container.parentElement;
+            }
+
+            // Fallback: unauthenticated "Host" section with NO link.
+            // Pick the first leaf-like text sibling/descendant that isn't the heading itself.
+            if (!organizer_name) {
+                let hostContainer = hostHeading.parentElement;
+                for (let i = 0; i < 6 && hostContainer && hostContainer !== document.body; i++) {
+                    for (const el of hostContainer.querySelectorAll('span, div, strong')) {
+                        const t = (el.textContent || '').trim();
+                        if (!t || t === (hostHeading.textContent || '').trim()) continue;
+                        if (t.length < 2 || t.length > 120) continue;
+                        // Skip metadata-like strings
+                        if (/past\s+events?|^\d+\s|nonprofit|organization|group|community|privacy|terms/i.test(t)) continue;
+                        if (UI_CHROME_SET.has(t.toLowerCase())) continue;
+                        organizer_name = t;
+                        break;
+                    }
+                    if (organizer_name) break;
+                    hostContainer = hostContainer.parentElement;
+                }
             }
         }
     }
@@ -394,7 +438,7 @@ _EXTRACT_DETAIL_JS = r"""
         if (DATE_WORD_RE.test(t) || FULL_MONTH_RE.test(t)) continue;
         if (NOISE_RE.test(t)) continue;
         if (CITY_RE.test(t)) continue;
-        if (/^Event\s+by\b/i.test(t)) continue;
+        if (/^(?:Event|Hosted)\s+by\b/i.test(t)) continue;
         if (/people\s+respond/i.test(t)) continue;
         if (/Public|Anyone\s+on/i.test(t)) continue;
         if (/Tickets?|Find\s+tickets/i.test(t)) continue;
@@ -432,7 +476,7 @@ _EXTRACT_DETAIL_JS = r"""
         for (const el of document.querySelectorAll('span, div')) {
             if (isInSidebarNav(el)) continue;
             const t = (el.textContent || '').trim();
-            if (/^Event\s+by\b/i.test(t) && t.length < 150) { organizerEl = el; break; }
+            if (/^(?:Event|Hosted)\s+by\b/i.test(t) && t.length < 150) { organizerEl = el; break; }
         }
         if (organizerEl) {
             let node = organizerEl.parentElement;
