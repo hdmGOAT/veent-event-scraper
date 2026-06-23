@@ -671,7 +671,7 @@ def api_scraper_trigger(request, key):
         return JsonResponse({"error": "Unknown scraper key"}, status=404)
 
     body = {}
-    if request.body:
+    if request.body and "application/json" in request.content_type:
         try:
             body = json.loads(request.body)
         except (json.JSONDecodeError, ValueError):
