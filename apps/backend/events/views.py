@@ -670,8 +670,32 @@ def api_scraper_trigger(request, key):
     if key not in SCRAPERS:
         return JsonResponse({"error": "Unknown scraper key"}, status=404)
 
+    body = {}
+    if request.body:
+        try:
+            body = json.loads(request.body)
+        except (json.JSONDecodeError, ValueError):
+            pass
+    query_ids = body.get("query_ids") or None
+    if query_ids is not None and not (
+        isinstance(query_ids, list) and all(isinstance(i, int) for i in query_ids)
+    ):
+        return JsonResponse(
+            {"error": "query_ids must be a list of integers"}, status=400
+        )
+
+    locations = body.get("locations") or None
+    if locations is not None:
+        if not isinstance(locations, list) or not all(isinstance(l, str) for l in locations):
+            return JsonResponse({"error": "locations must be a list of strings"}, status=400)
+        unknown = [l for l in locations if l not in ("philippines", "singapore")]
+        if unknown:
+            return JsonResponse({"error": f"Unknown location: '{unknown[0]}'"}, status=400)
+
     triggered_by = request.user if request.user.is_authenticated else None
-    run, already_active = trigger_scraper_run(key, triggered_by=triggered_by)
+    run, already_active = trigger_scraper_run(
+        key, triggered_by=triggered_by, query_ids=query_ids, locations=locations
+    )
     if already_active:
         return JsonResponse({"error": "Scraper already running"}, status=409)
 
@@ -872,6 +896,9 @@ def api_scrapers(request):
                 "key": key,
                 "last_scraped": last_scraped.isoformat() if last_scraped else None,
                 "last_run": last_run,
+                "supports_keywords": getattr(
+                    SCRAPERS[key], "supports_keywords", False
+                ),
             }
         )
 
@@ -915,16 +942,15 @@ def api_search_queries(request):
 
         query = (data.get("query") or "").strip()
         source = (data.get("source") or "").strip()
-        if not query or not source:
-            return JsonResponse({"error": "query and source are required"}, status=400)
+        if not query:
+            return JsonResponse({"error": "query is required"}, status=400)
 
         sq, created = SearchQuery.objects.get_or_create(
             query=query,
-            source=source,
-            defaults={"is_active": data.get("is_active", True)},
+            defaults={"is_active": data.get("is_active", True), "source": source},
         )
         if not created:
-            return JsonResponse({"error": "Query already exists for this source"}, status=409)
+            return JsonResponse({"error": "Query already exists"}, status=409)
 
         return JsonResponse(_serialize_search_query(sq), status=201)
 
@@ -942,8 +968,12 @@ def api_search_query_run(request, pk):
     """
     sq = get_object_or_404(SearchQuery, pk=pk)
     triggered_by = request.user if request.user.is_authenticated else None
+    # Rows created without a source default to the only query-capable scraper
+    # today (facebook_events). When other scrapers opt in, they will set source
+    # on creation or a richer lookup will be added.
+    scraper_key = sq.source or "facebook_events"
     run, already_active = trigger_scraper_run(
-        sq.source, triggered_by=triggered_by, query_id=sq.pk
+        scraper_key, triggered_by=triggered_by, query_id=sq.pk
     )
     if already_active:
         return JsonResponse({"error": "This query is already running"}, status=409)

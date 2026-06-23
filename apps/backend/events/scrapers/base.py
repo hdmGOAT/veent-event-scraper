@@ -84,6 +84,9 @@ class BaseScraper:
     """
 
     source: str = ""
+    # Opt-in flag: when True, the Scraper Center shows a keyword picker for
+    # this scraper and its ``run()`` accepts ``query_ids``. Default off.
+    supports_keywords: bool = False
 
     def fetch(self) -> Iterable[ScrapedEvent]:
         """Yield ScrapedEvent instances. Implemented by subclasses."""

@@ -103,10 +103,22 @@ class Command(BaseCommand):
             "--query-id", type=int, default=None,
             help="When set, only this SearchQuery.pk is processed (single-query run).",
         )
+        parser.add_argument(
+            "--query-ids", type=str, default=None,
+            help="Comma-separated SearchQuery PKs to restrict this run.",
+        )
+        parser.add_argument(
+            "--locations", type=str, default=None,
+            help="Comma-separated location suffixes to append to each search query.",
+        )
 
     def handle(self, *args, **options):
         run_id = options["run_id"]
         query_id = options.get("query_id")
+        raw_ids = options.get("query_ids")
+        query_ids = [int(x) for x in raw_ids.split(",") if x.strip()] if raw_ids else None
+        raw_locs = options.get("locations")
+        locations = [x.strip() for x in raw_locs.split(",") if x.strip()] if raw_locs else None
         try:
             run = ScraperRun.objects.get(id=run_id)
         except ScraperRun.DoesNotExist:
@@ -149,14 +161,28 @@ class Command(BaseCommand):
         original_level = root_logger.level
         root_logger.setLevel(logging.DEBUG)
         root_logger.addHandler(handler)
+        # The 'events' logger has propagate=False in settings.LOGGING so its records
+        # never reach the root logger. Attach the handler directly so scraper logs
+        # (events.scrapers.*) appear in the UI log terminal.
+        events_logger = logging.getLogger("events")
+        events_logger.addHandler(handler)
 
         try:
             scraper = SCRAPERS[key]()
-            result = scraper.run(query_id=query_id) if query_id else scraper.run()
+            result = (
+                scraper.run(query_ids=query_ids, locations=locations)
+                if query_ids
+                else (
+                    scraper.run(query_id=query_id, locations=locations)
+                    if query_id
+                    else scraper.run(locations=locations)
+                )
+            )
         except Exception:
             tb = traceback.format_exc()
             handler.stop()
             root_logger.removeHandler(handler)
+            events_logger.removeHandler(handler)
             root_logger.setLevel(original_level)
             run.status = ScraperRun.Status.FAILED
             run.finished_at = timezone.now()
@@ -170,6 +196,7 @@ class Command(BaseCommand):
         # in the same poll tick as the SUCCESS status.
         handler.stop()
         root_logger.removeHandler(handler)
+        events_logger.removeHandler(handler)
         root_logger.setLevel(original_level)
 
         created, updated, extra_counts = _map_result(result)

@@ -31,6 +31,8 @@ from django.utils import timezone
 from .models import ScraperRun
 from .scrapers import SCRAPERS  # noqa: F401  (used by callers/tests via runner.SCRAPERS)
 
+AVAILABLE_LOCATIONS = ["philippines", "singapore"]
+
 
 def _map_result(result: dict) -> tuple[int, int, dict]:
     """Extract (created, updated, extra_counts) from a scraper run() result dict."""
@@ -44,7 +46,13 @@ def _map_result(result: dict) -> tuple[int, int, dict]:
     return created, updated, extra_counts
 
 
-def trigger_scraper_run(key: str, triggered_by=None, query_id: int | None = None):
+def trigger_scraper_run(
+    key: str,
+    triggered_by=None,
+    query_id: int | None = None,
+    query_ids: list[int] | None = None,
+    locations: list[str] | None = None,
+):
     """Create a ScraperRun and spawn its worker subprocess.
 
     Returns ``(run, already_active)``. If a queued/running run already exists
@@ -58,8 +66,19 @@ def trigger_scraper_run(key: str, triggered_by=None, query_id: int | None = None
     single SearchQuery is processed. The ScraperRun key becomes
     ``"{key}:q:{query_id}"`` to allow concurrent single-query runs without
     conflicting with a full-source run or other single-query runs.
+
+    ``query_ids``: when set (takes precedence over ``query_id``), the subprocess
+    is given ``--query-ids`` so a targeted subset of SearchQuery rows is
+    processed. The ScraperRun key stays plain ``key`` so this targeted-subset run
+    occupies the scraper's main concurrency slot — it is a partial run of the full
+    scraper, not an independent single-query run.
     """
-    run_key = f"{key}:q:{query_id}" if query_id else key
+    if query_ids:
+        run_key = key
+    elif query_id:
+        run_key = f"{key}:q:{query_id}"
+    else:
+        run_key = key
 
     active_exists = ScraperRun.objects.filter(
         scraper_key=run_key,
@@ -78,8 +97,12 @@ def trigger_scraper_run(key: str, triggered_by=None, query_id: int | None = None
     # BASE_DIR resolves to apps/backend/ (the dir containing manage.py).
     manage_py = settings.BASE_DIR / "manage.py"
     cmd = [sys.executable, str(manage_py), "run_scraper_job", "--run-id", str(run.id)]
-    if query_id:
+    if query_ids:
+        cmd += ["--query-ids", ",".join(str(i) for i in query_ids)]
+    elif query_id:
         cmd += ["--query-id", str(query_id)]
+    if locations:
+        cmd += ["--locations", ",".join(locations)]
 
     try:
         proc = subprocess.Popen(
