@@ -1080,9 +1080,14 @@ class FacebookEventsScraper(BaseScraper):
                         except Exception as exc:
                             if _kattempt < _KEYWORD_RETRIES:
                                 logger.warning(
-                                    "[%s] search '%s' failed (attempt %d/%d), retrying: %s",
+                                    "[%s] search '%s' failed (attempt %d/%d), retrying with new proxy: %s",
                                     self.source, effective_term, _kattempt, _KEYWORD_RETRIES, exc,
                                 )
+                                if using_free_proxy:
+                                    new_proxy = self._rotate_free_proxy()
+                                    if new_proxy:
+                                        proxy = new_proxy
+                                        failure_score = 0
                             else:
                                 logger.warning(
                                     "[%s] search '%s' failed after %d attempts, skipping: %s",
