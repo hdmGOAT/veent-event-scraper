@@ -745,6 +745,9 @@ class FacebookEventsScraper(BaseScraper):
         }
         if proxy:
             launch_kwargs["proxy"] = proxy
+            # Free proxies often perform SSL interception and present their own
+            # certificate. Chromium rejects these with ERR_CERT_AUTHORITY_INVALID.
+            launch_kwargs["args"].append("--ignore-certificate-errors")
 
         browser = pw.chromium.launch(**launch_kwargs)
         context = browser.new_context(
