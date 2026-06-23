@@ -39,6 +39,7 @@ from playwright_stealth import Stealth
 
 from .base import BaseScraper, ScrapedEvent, ScrapedOrganizer, ScrapedVenue, save_events, save_organizers
 from .social_proxy import social_proxy_configured
+from events.registration_patterns import find_registration_url
 
 logger = logging.getLogger(__name__)
 
@@ -441,6 +442,13 @@ _EXTRACT_DETAIL_JS = r"""
         }
     }
 
+    const linkRoot = eventPanel || document;
+    const links = [...new Set(
+        [...linkRoot.querySelectorAll('a[href]')]
+            .map(a => a.href)
+            .filter(h => h && /^https?:\/\//i.test(h) && !/facebook\.com/i.test(h))
+    )];
+
     return {
         events: [{
             event_url:          eventUrl,
@@ -453,6 +461,7 @@ _EXTRACT_DETAIL_JS = r"""
             organizer_url,
             description,
             image_url:          document.querySelector('meta[property="og:image"]')?.content || '',
+            links,
             respondent_count:   0,
             source_search_term: searchTerm,
         }],
@@ -543,6 +552,12 @@ _EXTRACT_ORGANIZER_JS = r"""
     return { name, email, phone, website, description, address };
 }
 """
+
+def _sanitize_url(url: str) -> str:
+    """Return scheme+host+path only, stripping query strings and fragments."""
+    p = urllib.parse.urlparse(url)
+    return urllib.parse.urlunparse((p.scheme, p.netloc, p.path, "", "", ""))
+
 
 # ── Humanization helpers ──────────────────────────────────────────────────────
 
@@ -755,6 +770,9 @@ class FacebookEventsScraper(BaseScraper):
             external_id    = d.get("event_id") or card.get("event_id", "")
             description    = d.get("description") or card.get("short_description") or ""
             image_url      = d.get("image_url") or ""
+            # Scan description text + all non-FB anchor hrefs for a registration link.
+            extra_links    = " ".join(d.get("links") or [])
+            registration_url = find_registration_url(description + " " + extra_links)
 
             venue = (
                 ScrapedVenue(
@@ -770,6 +788,7 @@ class FacebookEventsScraper(BaseScraper):
                 name=title,
                 description=description,
                 image_url=image_url,
+                registration_url=registration_url,
                 starts_at=_parse_fb_date(start_raw),
                 url=event_url,
                 external_id=external_id,
@@ -780,13 +799,14 @@ class FacebookEventsScraper(BaseScraper):
             )
             processed += 1
             logger.info(
-                "[%s] (%d/%d) %s | venue=%s | organizer=%s | img=%s | desc=%d chars",
+                "[%s] (%d/%d) %s | venue=%s | organizer=%s | img=%s | desc=%d chars | reg=%s",
                 self.source, processed, len(cards),
                 title,
                 venue_name or "—",
                 organizer or "—",
                 "yes" if image_url else "no",
                 len(description),
+                _sanitize_url(registration_url) if registration_url else "—",
             )
 
     # ── Organizer page scrape ─────────────────────────────────────────────────

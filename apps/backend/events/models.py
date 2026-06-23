@@ -95,6 +95,7 @@ class Event(models.Model):
     ends_at = models.DateTimeField(null=True, blank=True)
     url = models.URLField(blank=True, max_length=2000)
     image_url = models.URLField(blank=True, max_length=2000)
+    registration_url = models.URLField(blank=True, max_length=2000)
     price = models.CharField(max_length=120, blank=True)
     category = models.CharField(max_length=120, blank=True)
     # AI-assigned canonical categories (1-2 labels from CANONICAL_CATEGORIES).
