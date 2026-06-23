@@ -619,6 +619,7 @@ class FacebookEventsScraper(BaseScraper):
     """
 
     source = "facebook_events"
+    supports_keywords = True
 
     # ── Proxy ─────────────────────────────────────────────────────────────────
 
@@ -833,8 +834,19 @@ class FacebookEventsScraper(BaseScraper):
         # per-SearchQuery FK updates. Direct callers of fetch() get nothing.
         return iter([])
 
-    def run(self, query_id: int | None = None, max_events: int | None = None) -> dict:
-        """Run the scraper for all active SearchQuery rows (or just one if query_id set).
+    def run(
+        self,
+        query_id: int | None = None,
+        query_ids: list[int] | None = None,
+        locations: list[str] | None = None,
+        max_events: int | None = None,
+    ) -> dict:
+        """Run the scraper for active SearchQuery rows.
+
+        Loads all active SearchQuery rows by default (no source filter, since
+        keywords are scraper-agnostic). Pass ``query_ids`` to restrict to a
+        specific subset, or ``query_id`` for a single-query run (backwards
+        compat). ``query_ids`` takes precedence when both are supplied.
 
         Django ORM calls are deliberately kept OUTSIDE the sync_playwright() block.
         Playwright's sync API runs its own event loop internally; Django detects that
@@ -845,13 +857,22 @@ class FacebookEventsScraper(BaseScraper):
         from events.models import Event, SearchQuery
 
         # ── 1. Load queries (ORM outside playwright) ──────────────────────────
-        qs = SearchQuery.objects.filter(source=self.source, is_active=True)
-        if query_id:
+        qs = SearchQuery.objects.filter(is_active=True)
+        if query_ids:
+            qs = qs.filter(pk__in=query_ids)
+        elif query_id:
             qs = qs.filter(pk=query_id)
         queries = list(qs)
         if not queries:
             logger.info("[%s] no active search queries — nothing to do.", self.source)
             return {"source": self.source, "created": 0, "updated": 0}
+
+        # Fan out queries × locations. Without locations, behaviour is unchanged.
+        active_locs = locations or []
+        if active_locs:
+            work_items = [(sq, loc) for sq in queries for loc in active_locs]
+        else:
+            work_items = [(sq, "") for sq in queries]
 
         # ── 2. Scrape (inside playwright, no ORM) ─────────────────────────────
         # Phase 2a: scrape event cards + detail pages.
@@ -868,19 +889,22 @@ class FacebookEventsScraper(BaseScraper):
             self._block_heavy_resources(page)
             try:
                 # 2a — events
-                for sq in queries:
+                for sq, location_suffix in work_items:
+                    effective_term = f"{sq.query} {location_suffix}".strip()
                     try:
-                        scraped[sq.id] = list(self._fetch_for_query(page, sq.query, max_events=max_events))
-                        n = len(scraped[sq.id])
-                        with_img  = sum(1 for e in scraped[sq.id] if e.image_url)
-                        with_desc = sum(1 for e in scraped[sq.id] if e.description)
+                        cards = list(self._fetch_for_query(page, effective_term, max_events=max_events))
+                        bucket = scraped.setdefault(sq.id, [])
+                        bucket.extend(cards)
+                        n = len(cards)
+                        with_img  = sum(1 for e in cards if e.image_url)
+                        with_desc = sum(1 for e in cards if e.description)
                         logger.info(
-                            "[%s] query '%s' done: %d events, %d with image, %d with description",
-                            self.source, sq.query, n, with_img, with_desc,
+                            "[%s] search '%s' done: %d events, %d with image, %d with description",
+                            self.source, effective_term, n, with_img, with_desc,
                         )
                     except Exception as exc:
-                        logger.warning("[%s] query '%s' failed, skipping: %s", self.source, sq.query, exc)
-                        scraped[sq.id] = []
+                        logger.warning("[%s] search '%s' failed, skipping: %s", self.source, effective_term, exc)
+                        scraped.setdefault(sq.id, [])
                     _pause(3.0, 6.0)
 
                 # 2b — organizer pages (best-effort; failures must not abort the save)

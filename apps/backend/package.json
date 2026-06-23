@@ -2,7 +2,7 @@
   "name": "backend",
   "private": true,
   "scripts": {
-    "dev": "..\\..\\.venv\\Scripts\\python.exe manage.py runserver",
+    "dev": "node run-dev.js",
     "build": "echo \"no build step\"",
     "lint": "echo \"no lint step\""
   }
