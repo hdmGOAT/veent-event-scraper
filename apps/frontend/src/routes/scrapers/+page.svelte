@@ -84,10 +84,11 @@
 				next.set(run.scraper_key, run);
 			}
 			runningMap = next;
-			if (active.length === 0 && pollingInterval !== null) {
+			if (active.length === 0) {
 				stopPolling();
-				// Pick up runs that just finished: refresh both the history table
-				// and the per-card last_run line.
+				// Always refresh scrapers + history when no active runs are found.
+				// This covers both the interval case (run just finished) and the
+				// immediate post-trigger case (run failed before first poll observed it).
 				[recentRuns, scrapers] = await Promise.all([api.scraperRuns(), api.scrapers()]);
 			}
 		} catch (e) {

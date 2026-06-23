@@ -913,18 +913,20 @@ class FacebookEventsScraper(BaseScraper):
         else:
             work_items = [(sq, "") for sq in queries]
 
-        # ── 2. Scrape + persist per keyword (ORM calls happen inside the loop) ──
-        # Organizer pages are visited eagerly after each keyword's cards are
-        # fetched, then events are saved immediately — so a cancelled or crashed
-        # run still persists everything processed up to that point.
-        org_details: dict[str, dict] = {}   # url → enriched organizer data
-        seen_org_urls: set[str] = set()     # dedup organizer page visits globally
-        seen_org_keys: set[str] = set()     # dedup organizer upserts globally
-        total_created = total_updated = 0
-
         # Resolve proxy once per run — avoids a preflight HTTP request on every
         # keyword iteration and ensures consistent proxy config for all keywords.
         proxy = self._resolve_proxy()
+
+        # ── 2. Scrape phase — NO ORM inside the playwright block ──────────────
+        # Django raises SynchronousOnlyOperation when ORM queries run while an
+        # asyncio event loop is active. sync_playwright() keeps a loop alive for
+        # its entire duration, so all DB writes must happen AFTER the block exits.
+        # We collect (sq, cards, per-keyword organizer details) here and persist
+        # them in Phase 3 below.
+        org_details: dict[str, dict] = {}   # url → enriched organizer data (global dedup)
+        seen_org_urls: set[str] = set()     # dedup organizer page visits across keywords
+        # (sq, effective_term, cards scraped for this work item)
+        keyword_results: list[tuple] = []
 
         with sync_playwright() as pw:
             for i, (sq, location_suffix) in enumerate(work_items, 1):
@@ -964,58 +966,64 @@ class FacebookEventsScraper(BaseScraper):
                             details["name"] = se.organizer
                         org_details[url] = details
                         _pause(2.0, 4.0)
+
+                    keyword_results.append((sq, effective_term, cards))
                 finally:
                     context.close()
                     browser.close()
 
-                # Upsert organizers for these cards, then save events.
-                kw_orgs: list[ScrapedOrganizer] = []
-                for se in cards:
-                    name = (se.organizer or "").strip()
-                    url  = (se.organizer_url or "").rstrip("/")
-                    if not name:
-                        continue
-                    key = url or name.lower()
-                    if key in seen_org_keys:
-                        continue
-                    seen_org_keys.add(key)
-                    if "profile.php" in url:
-                        m = re.search(r'[?&]id=(\d+)', url)
-                        external_id = m.group(1) if m else ""
-                    else:
-                        external_id = url.rstrip("/").split("/")[-1] if url else ""
-                    d = org_details.get(url, {})
-                    kw_orgs.append(ScrapedOrganizer(
-                        name=d.get("name") or name,
-                        website=url,
-                        email=d.get("email") or "",
-                        phone=d.get("phone") or "",
-                        address=d.get("address") or "",
-                        description=d.get("description") or "",
-                        facebook_url=url,
-                        external_id=external_id,
-                        source_url=d.get("website") or "",
-                    ))
-                if kw_orgs:
-                    save_organizers(self.source, kw_orgs)
-
-                result = save_events(self.source, cards)
-                Event.objects.filter(
-                    pk__in=result.get("event_ids", []),
-                    search_query__isnull=True,
-                ).update(search_query=sq)
-                SearchQuery.objects.filter(pk=sq.pk).update(
-                    last_run_at=timezone.now(),
-                    events_found_count=models.F("events_found_count") + result["created"] + result["updated"],
-                    updated_at=timezone.now(),
-                )
-                total_created += result["created"]
-                total_updated += result["updated"]
-                logger.info(
-                    "[%s] saved query '%s': %d created, %d updated",
-                    self.source, effective_term, result["created"], result["updated"],
-                )
                 _pause(3.0, 6.0)
+
+        # ── 3. Persist phase — all ORM calls happen after playwright has exited ─
+        seen_org_keys: set[str] = set()
+        total_created = total_updated = 0
+        for sq, effective_term, cards in keyword_results:
+            kw_orgs: list[ScrapedOrganizer] = []
+            for se in cards:
+                name = (se.organizer or "").strip()
+                url  = (se.organizer_url or "").rstrip("/")
+                if not name:
+                    continue
+                key = url or name.lower()
+                if key in seen_org_keys:
+                    continue
+                seen_org_keys.add(key)
+                if "profile.php" in url:
+                    m = re.search(r'[?&]id=(\d+)', url)
+                    external_id = m.group(1) if m else ""
+                else:
+                    external_id = url.rstrip("/").split("/")[-1] if url else ""
+                d = org_details.get(url, {})
+                kw_orgs.append(ScrapedOrganizer(
+                    name=d.get("name") or name,
+                    website=url,
+                    email=d.get("email") or "",
+                    phone=d.get("phone") or "",
+                    address=d.get("address") or "",
+                    description=d.get("description") or "",
+                    facebook_url=url,
+                    external_id=external_id,
+                    source_url=d.get("website") or "",
+                ))
+            if kw_orgs:
+                save_organizers(self.source, kw_orgs)
+
+            result = save_events(self.source, cards)
+            Event.objects.filter(
+                pk__in=result.get("event_ids", []),
+                search_query__isnull=True,
+            ).update(search_query=sq)
+            SearchQuery.objects.filter(pk=sq.pk).update(
+                last_run_at=timezone.now(),
+                events_found_count=models.F("events_found_count") + result["created"] + result["updated"],
+                updated_at=timezone.now(),
+            )
+            total_created += result["created"]
+            total_updated += result["updated"]
+            logger.info(
+                "[%s] saved query '%s': %d created, %d updated",
+                self.source, effective_term, result["created"], result["updated"],
+            )
 
         logger.info(
             "[%s] run complete — %d queries, %d created, %d updated",
