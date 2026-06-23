@@ -243,10 +243,9 @@
 							<td class="px-5 py-3 text-muted">{e.venue || '—'}</td>
 							<td class="px-5 py-3 text-right">
 								<a
-									href="/events"
-									onclick={(ev) => ev.preventDefault()}
+									href="/tracker/organizers/{data.organizer.slug}"
 									class="inline-flex text-muted transition-colors hover:text-accent"
-									title="Open event"
+									title="Back to organizer"
 								>
 									<ExternalLink size={16} />
 								</a>

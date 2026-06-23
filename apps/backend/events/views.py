@@ -470,6 +470,9 @@ def api_organizer_detail(request, slug):
         organizer.save(update_fields=["status"])
         return JsonResponse({"slug": organizer.slug, "status": organizer.status})
 
+    if request.method != "GET":
+        return JsonResponse({"error": "Method not allowed"}, status=405)
+
     events = list(
         organizer.events.select_related("venue").order_by("-starts_at")[:50]
     )

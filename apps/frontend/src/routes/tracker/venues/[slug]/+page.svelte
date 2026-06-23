@@ -48,10 +48,10 @@
 					{#if websiteUrl}
 						<div>
 							<dt class="text-xs uppercase tracking-wider text-muted">Website</dt>
-							<dd class="mt-0.5"><a href={websiteUrl} target="_blank" rel="noopener" class="break-all text-accent hover:underline">{v.website}</a></dd>
+							<dd class="mt-0.5"><a href={websiteUrl} target="_blank" rel="noopener noreferrer" class="break-all text-accent hover:underline">{v.website}</a></dd>
 						</div>
 					{/if}
-					{#if v.rating}
+					{#if v.rating !== null && v.rating !== undefined}
 						<div>
 							<dt class="text-xs uppercase tracking-wider text-muted">Rating</dt>
 							<dd class="mt-0.5 text-text">{v.rating}</dd>
@@ -77,7 +77,7 @@
 
 				<div class="mt-5 border-t border-border pt-4 text-xs text-muted">
 					{#if sourceUrl}
-						<a href={sourceUrl} target="_blank" rel="noopener" class="break-all text-accent hover:underline">View source page</a>
+						<a href={sourceUrl} target="_blank" rel="noopener noreferrer" class="break-all text-accent hover:underline">View source page</a>
 					{/if}
 					<div class="mt-1">Last scraped: {formatDate(v.scraped_at)}</div>
 				</div>
