@@ -1898,6 +1898,22 @@ class ScraperTriggerQueryIdsTests(TestCase):
         )
         self.assertEqual(resp.status_code, 400)
 
+    def test_run_with_invalid_json_returns_400(self):
+        resp = self.client.post(
+            "/api/scrapers/facebook_events/run/",
+            data="not-json{{{",
+            content_type="application/json",
+        )
+        self.assertEqual(resp.status_code, 400)
+
+    def test_run_with_keywords_on_unsupported_scraper_returns_400(self):
+        resp = self.client.post(
+            "/api/scrapers/google_places/run/",
+            data=json.dumps({"query_ids": [1, 2]}),
+            content_type="application/json",
+        )
+        self.assertEqual(resp.status_code, 400)
+
 
 class ScrapersSupportsKeywordsTests(TestCase):
     """GET /api/scrapers/ exposes supports_keywords per scraper."""

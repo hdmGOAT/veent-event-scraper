@@ -99,7 +99,7 @@ def run(
 
 ### `run_scraper_job` CLI
 Adds `--locations` argument (comma-separated string). Example:
-```
+```bash
 manage.py run_scraper_job --run-id 71 --query-ids 33,32 --locations philippines,singapore
 ```
 

@@ -717,11 +717,12 @@ class FacebookEventsScraper(BaseScraper):
             port     = os.environ.get("DATAIMPULSE_PORT", "823")
             proxy_url = f"http://{user}:{password}@{host}:{port}"
             try:
-                _requests.get(
+                resp = _requests.get(
                     "https://httpbin.org/ip",
                     proxies={"http": proxy_url, "https": proxy_url},
                     timeout=10,
                 )
+                resp.raise_for_status()
                 logger.info("[%s] DataImpulse proxy OK — using residential proxy.", self.source)
                 # Embed credentials in the URL — Chromium headless does not reliably
                 # authenticate CONNECT tunnels when username/password are passed separately.

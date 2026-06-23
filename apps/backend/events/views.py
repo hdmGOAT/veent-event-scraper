@@ -675,22 +675,33 @@ def api_scraper_trigger(request, key):
         try:
             body = json.loads(request.body)
         except (json.JSONDecodeError, ValueError):
-            pass
-    query_ids = body.get("query_ids") or None
+            return JsonResponse({"error": "Invalid JSON"}, status=400)
+    query_ids = body.get("query_ids")
     if query_ids is not None and not (
         isinstance(query_ids, list) and all(isinstance(i, int) for i in query_ids)
     ):
         return JsonResponse(
             {"error": "query_ids must be a list of integers"}, status=400
         )
+    if isinstance(query_ids, list) and len(query_ids) == 0:
+        return JsonResponse({"error": "query_ids must not be empty"}, status=400)
 
-    locations = body.get("locations") or None
+    locations = body.get("locations")
     if locations is not None:
         if not isinstance(locations, list) or not all(isinstance(l, str) for l in locations):
             return JsonResponse({"error": "locations must be a list of strings"}, status=400)
+        if len(locations) == 0:
+            return JsonResponse({"error": "locations must not be empty"}, status=400)
         unknown = [l for l in locations if l not in ("philippines", "singapore")]
         if unknown:
             return JsonResponse({"error": f"Unknown location: '{unknown[0]}'"}, status=400)
+
+    scraper_cls = SCRAPERS[key]
+    if (query_ids or locations) and not getattr(scraper_cls, "supports_keywords", False):
+        return JsonResponse(
+            {"error": f"Scraper '{key}' does not support keyword/location targeting"},
+            status=400,
+        )
 
     triggered_by = request.user if request.user.is_authenticated else None
     run, already_active = trigger_scraper_run(

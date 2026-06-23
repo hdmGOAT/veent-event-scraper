@@ -108,9 +108,14 @@
 			try {
 				created.push(await api.createSearchQuery({ query: token }));
 				added += 1;
-			} catch {
-				// Most likely a 409 (already exists); count as skipped and continue.
-				skipped += 1;
+			} catch (e: unknown) {
+				// Only 409 (already exists) is a known expected failure; other errors propagate.
+				const status = e instanceof Error && 'status' in e ? (e as { status: number }).status : 0;
+				if (status === 409) {
+					skipped += 1;
+				} else {
+					throw e;
+				}
 			}
 		}
 
