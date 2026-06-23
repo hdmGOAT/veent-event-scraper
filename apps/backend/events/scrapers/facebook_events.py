@@ -39,6 +39,7 @@ from playwright_stealth import Stealth
 
 from .base import BaseScraper, ScrapedEvent, ScrapedOrganizer, ScrapedVenue, save_events, save_organizers
 from .social_proxy import social_proxy_configured
+from .proxy_manager import get_proxy_enabled, get_proxy_session
 from events.registration_patterns import find_registration_url
 
 logger = logging.getLogger(__name__)
@@ -623,24 +624,62 @@ class FacebookEventsScraper(BaseScraper):
 
     # ── Proxy ─────────────────────────────────────────────────────────────────
 
-    def _playwright_proxy(self) -> dict | None:
-        if not social_proxy_configured():
-            logger.warning(
-                "DATAIMPULSE_USER/PASS not set — running without proxy. "
-                "Facebook may rate-limit or block datacenter IPs."
-            )
-            return None
-        user     = os.environ["DATAIMPULSE_USER"]
-        password = os.environ["DATAIMPULSE_PASS"]
-        host     = os.environ.get("DATAIMPULSE_HOST", "gw.dataimpulse.com")
-        port     = os.environ.get("DATAIMPULSE_PORT", "823")
-        return {"server": f"http://{host}:{port}", "username": user, "password": password}
+    def _resolve_proxy(self) -> dict | None:
+        """Determine the best available proxy config for this run.
+
+        Called once per run (not per keyword) to avoid repeated preflight requests.
+        Priority: DataImpulse residential → free proxy list → no proxy.
+        """
+        import requests as _requests
+
+        # Priority 1: DataImpulse residential proxy — verify traffic isn't exhausted.
+        if social_proxy_configured():
+            user     = os.environ["DATAIMPULSE_USER"]
+            password = os.environ["DATAIMPULSE_PASS"]
+            host     = os.environ.get("DATAIMPULSE_HOST", "gw.dataimpulse.com")
+            port     = os.environ.get("DATAIMPULSE_PORT", "823")
+            proxy_url = f"http://{user}:{password}@{host}:{port}"
+            try:
+                _requests.get(
+                    "https://httpbin.org/ip",
+                    proxies={"http": proxy_url, "https": proxy_url},
+                    timeout=10,
+                )
+                logger.info("[%s] DataImpulse proxy OK — using residential proxy.", self.source)
+                # Embed credentials in the URL — Chromium headless does not reliably
+                # authenticate CONNECT tunnels when username/password are passed separately.
+                return {"server": proxy_url}
+            except Exception as exc:
+                if "TRAFFIC_EXHAUSTED" in str(exc) or "407" in str(exc):
+                    logger.warning(
+                        "[%s] DataImpulse traffic exhausted — falling back to free proxy.", self.source
+                    )
+                else:
+                    logger.warning(
+                        "[%s] DataImpulse preflight failed (%s) — falling back to free proxy.", self.source, exc
+                    )
+
+        # Priority 2: free proxy list (Scraper Center toggle).
+        if get_proxy_enabled():
+            try:
+                session = get_proxy_session()
+                proxy_url = session.proxies.get("https") or session.proxies.get("http")
+                if proxy_url:
+                    logger.info("[%s] using free proxy: %s", self.source, proxy_url)
+                    return {"server": proxy_url}
+            except Exception as exc:
+                logger.warning("[%s] free proxy election failed: %s — running without proxy.", self.source, exc)
+
+        logger.warning(
+            "[%s] no proxy available — Facebook may rate-limit or block datacenter IPs.",
+            self.source,
+        )
+        return None
 
     # ── Browser context ───────────────────────────────────────────────────────
 
-    def _browser_context(self, pw):
+    def _browser_context(self, pw, proxy: dict | None = None):
         headless = os.environ.get("FB_HEADLESS", "true").lower() != "false"
-        proxy    = self._playwright_proxy()
 
         launch_kwargs: dict = {
             "headless": headless,
@@ -682,7 +721,7 @@ class FacebookEventsScraper(BaseScraper):
     def _goto(self, page, url: str, retries: int = 3) -> None:
         for attempt in range(retries):
             try:
-                page.goto(url, wait_until="domcontentloaded", timeout=60_000)
+                page.goto(url, wait_until="domcontentloaded", timeout=120_000)
                 return
             except Exception as exc:
                 if attempt == retries - 1:
@@ -874,27 +913,33 @@ class FacebookEventsScraper(BaseScraper):
         else:
             work_items = [(sq, "") for sq in queries]
 
-        # ── 2. Scrape (inside playwright, no ORM) ─────────────────────────────
-        # Phase 2a: scrape event cards + detail pages.
-        # Phase 2b: visit each unique organizer FB page for enriched contact data.
-        # No Django ORM calls inside this block.
-        scraped: dict[int, list] = {}
-        # url -> {name, email, phone, website, description, address}
-        org_details: dict[str, dict] = {}
+        # ── 2. Scrape + persist per keyword (ORM calls happen inside the loop) ──
+        # Organizer pages are visited eagerly after each keyword's cards are
+        # fetched, then events are saved immediately — so a cancelled or crashed
+        # run still persists everything processed up to that point.
+        org_details: dict[str, dict] = {}   # url → enriched organizer data
+        seen_org_urls: set[str] = set()     # dedup organizer page visits globally
+        seen_org_keys: set[str] = set()     # dedup organizer upserts globally
+        total_created = total_updated = 0
+
+        # Resolve proxy once per run — avoids a preflight HTTP request on every
+        # keyword iteration and ensures consistent proxy config for all keywords.
+        proxy = self._resolve_proxy()
 
         with sync_playwright() as pw:
-            browser, context = self._browser_context(pw)
-            page = context.new_page()
-            Stealth().use_sync(page)
-            self._block_heavy_resources(page)
-            try:
-                # 2a — events
-                for sq, location_suffix in work_items:
-                    effective_term = f"{sq.query} {location_suffix}".strip()
+            for i, (sq, location_suffix) in enumerate(work_items, 1):
+                effective_term = f"{sq.query} {location_suffix}".strip()
+                logger.info("[%s] keyword %d/%d: '%s'", self.source, i, len(work_items), effective_term)
+
+                # Fresh browser context per keyword — forces a new TCP connection
+                # to the proxy so DataImpulse rotates to a new residential IP.
+                browser, context = self._browser_context(pw, proxy)
+                page = context.new_page()
+                Stealth().use_sync(page)
+                self._block_heavy_resources(page)
+                try:
                     try:
                         cards = list(self._fetch_for_query(page, effective_term, max_events=max_events))
-                        bucket = scraped.setdefault(sq.id, [])
-                        bucket.extend(cards)
                         n = len(cards)
                         with_img  = sum(1 for e in cards if e.image_url)
                         with_desc = sum(1 for e in cards if e.description)
@@ -904,93 +949,77 @@ class FacebookEventsScraper(BaseScraper):
                         )
                     except Exception as exc:
                         logger.warning("[%s] search '%s' failed, skipping: %s", self.source, effective_term, exc)
-                        scraped.setdefault(sq.id, [])
-                    _pause(3.0, 6.0)
-
-                # 2b — organizer pages
-                all_events_flat = [e for evts in scraped.values() for e in evts]
-                seen_org_urls: set[str] = set()
-                for se in all_events_flat:
-                    url = (se.organizer_url or "").rstrip("/")
-                    if not url or url in seen_org_urls:
+                        _pause(3.0, 6.0)
                         continue
-                    seen_org_urls.add(url)
-                    logger.info("[%s] visiting organizer page: %s", self.source, url)
-                    details = self._fetch_organizer_page(page, url)
-                    # Merge: use scraped organizer name if page didn't return one
-                    if not details.get("name"):
-                        details["name"] = se.organizer
-                    org_details[url] = details
-                    _pause(2.0, 4.0)
-            finally:
-                context.close()
-                browser.close()
 
-        # ── 3. Persist (ORM outside playwright) ───────────────────────────────
+                    # Visit organizer pages for new organizers in these cards.
+                    for se in cards:
+                        url = (se.organizer_url or "").rstrip("/")
+                        if not url or url in seen_org_urls:
+                            continue
+                        seen_org_urls.add(url)
+                        logger.info("[%s] visiting organizer page: %s", self.source, url)
+                        details = self._fetch_organizer_page(page, url)
+                        if not details.get("name"):
+                            details["name"] = se.organizer
+                        org_details[url] = details
+                        _pause(2.0, 4.0)
+                finally:
+                    context.close()
+                    browser.close()
 
-        # Upsert organizers first so save_events() can resolve organizer_ref FK.
-        all_events = [e for events in scraped.values() for e in events]
-        seen_org_keys: set[str] = set()
-        scraped_orgs: list[ScrapedOrganizer] = []
-        for se in all_events:
-            name = (se.organizer or "").strip()
-            url  = (se.organizer_url or "").rstrip("/")
-            if not name:
-                continue
-            key = url or name.lower()
-            if key in seen_org_keys:
-                continue
-            seen_org_keys.add(key)
-            # external_id: slug from path, or numeric id for profile.php?id= URLs
-            if "profile.php" in url:
-                m = re.search(r'[?&]id=(\d+)', url)
-                external_id = m.group(1) if m else ""
-            else:
-                external_id = url.rstrip("/").split("/")[-1] if url else ""
-            # Enrich with data fetched from the organizer's FB page
-            d = org_details.get(url, {})
-            scraped_orgs.append(ScrapedOrganizer(
-                name=d.get("name") or name,
-                # website MUST be the FB URL so _resolve_organizer() can match it
-                # against Organizer.website when save_events() runs.
-                # The external website (if found) goes into source_url for reference.
-                website=url,
-                email=d.get("email") or "",
-                phone=d.get("phone") or "",
-                address=d.get("address") or "",
-                description=d.get("description") or "",
-                facebook_url=url,
-                external_id=external_id,
-                source_url=d.get("website") or "",
-            ))
-        if scraped_orgs:
-            save_organizers(self.source, scraped_orgs)
+                # Upsert organizers for these cards, then save events.
+                kw_orgs: list[ScrapedOrganizer] = []
+                for se in cards:
+                    name = (se.organizer or "").strip()
+                    url  = (se.organizer_url or "").rstrip("/")
+                    if not name:
+                        continue
+                    key = url or name.lower()
+                    if key in seen_org_keys:
+                        continue
+                    seen_org_keys.add(key)
+                    if "profile.php" in url:
+                        m = re.search(r'[?&]id=(\d+)', url)
+                        external_id = m.group(1) if m else ""
+                    else:
+                        external_id = url.rstrip("/").split("/")[-1] if url else ""
+                    d = org_details.get(url, {})
+                    kw_orgs.append(ScrapedOrganizer(
+                        name=d.get("name") or name,
+                        website=url,
+                        email=d.get("email") or "",
+                        phone=d.get("phone") or "",
+                        address=d.get("address") or "",
+                        description=d.get("description") or "",
+                        facebook_url=url,
+                        external_id=external_id,
+                        source_url=d.get("website") or "",
+                    ))
+                if kw_orgs:
+                    save_organizers(self.source, kw_orgs)
 
-        total_created = total_updated = 0
-        for sq in queries:
-            result = save_events(self.source, scraped.get(sq.id, []))
-
-            Event.objects.filter(
-                pk__in=result.get("event_ids", []),
-                search_query__isnull=True,
-            ).update(search_query=sq)
-
-            SearchQuery.objects.filter(pk=sq.pk).update(
-                last_run_at=timezone.now(),
-                events_found_count=models.F("events_found_count") + result["created"] + result["updated"],
-                updated_at=timezone.now(),
-            )
-
-            total_created += result["created"]
-            total_updated += result["updated"]
-            logger.info(
-                "[%s] saved query '%s': %d created, %d updated",
-                self.source, sq.query, result["created"], result["updated"],
-            )
+                result = save_events(self.source, cards)
+                Event.objects.filter(
+                    pk__in=result.get("event_ids", []),
+                    search_query__isnull=True,
+                ).update(search_query=sq)
+                SearchQuery.objects.filter(pk=sq.pk).update(
+                    last_run_at=timezone.now(),
+                    events_found_count=models.F("events_found_count") + result["created"] + result["updated"],
+                    updated_at=timezone.now(),
+                )
+                total_created += result["created"]
+                total_updated += result["updated"]
+                logger.info(
+                    "[%s] saved query '%s': %d created, %d updated",
+                    self.source, effective_term, result["created"], result["updated"],
+                )
+                _pause(3.0, 6.0)
 
         logger.info(
             "[%s] run complete — %d queries, %d created, %d updated",
-            self.source, len(queries), total_created, total_updated,
+            self.source, len(work_items), total_created, total_updated,
         )
         return {
             "source": self.source,
