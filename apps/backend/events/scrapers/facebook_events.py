@@ -705,7 +705,8 @@ class FacebookEventsScraper(BaseScraper):
         """Determine the best available proxy config for this run.
 
         Called once per run (not per keyword) to avoid repeated preflight requests.
-        Priority: DataImpulse residential → free proxy list → no proxy.
+        Priority: DataImpulse residential → free proxy list.
+        Raises RuntimeError if no proxy is available — never falls back to unproxied.
         """
         import requests as _requests
 
@@ -746,13 +747,12 @@ class FacebookEventsScraper(BaseScraper):
                     logger.info("[%s] using free proxy: %s", self.source, proxy_url)
                     return {"server": proxy_url}
             except Exception as exc:
-                logger.warning("[%s] free proxy election failed: %s — running without proxy.", self.source, exc)
+                logger.warning("[%s] free proxy election failed: %s", self.source, exc)
 
-        logger.warning(
-            "[%s] no proxy available — Facebook may rate-limit or block datacenter IPs.",
-            self.source,
+        raise RuntimeError(
+            f"[{self.source}] No proxy available — DataImpulse traffic exhausted and "
+            "free proxy list empty or disabled. Aborting to avoid unproxied scraping."
         )
-        return None
 
     def _is_free_proxy(self, proxy: dict | None) -> bool:
         """Return True if proxy came from the free list (not DataImpulse)."""
