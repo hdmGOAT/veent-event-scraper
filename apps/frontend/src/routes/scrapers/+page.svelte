@@ -280,7 +280,7 @@
 	$effect(() => {
 		// Kick off an initial poll on mount; only keep polling if something is active.
 		pollActive().then(() => {
-			if (runningMap.size > 0) startPolling();
+			if (runningMap.size > 0 || nodeRunningMap.size > 0) startPolling();
 		});
 		return () => stopPolling();
 	});

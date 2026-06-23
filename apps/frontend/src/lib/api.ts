@@ -128,7 +128,7 @@ async function nodePost<T>(path: string): Promise<T> {
 
 export const nodeApi = {
 	scrapers: () => nodeGet<Scraper[]>('/scrapers'),
-	runScraper: (key: string) => nodePost<{ id: number; status: ScraperRunStatus }>(`/scrapers/${key}/run`),
+	runScraper: (key: string) => nodePost<{ id: number; status: ScraperRunStatus }>(`/scrapers/${encodeURIComponent(key)}/run`),
 	runAll: () => nodePost<RunAllResult>('/scrapers/run-all'),
 	scraperRuns: (limit?: number) => nodeGet<ScraperRun[]>(`/scrapers/runs${limit ? `?limit=${limit}` : ''}`),
 	activeRuns: () => nodeGet<ScraperRun[]>('/scrapers/runs/active'),

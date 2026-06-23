@@ -12,20 +12,30 @@ const proxyRequest = async (targetUrl: string, request: Request): Promise<Respon
 
 	const body = ['GET', 'HEAD'].includes(request.method) ? undefined : await request.arrayBuffer();
 
-	const upstream = await fetch(targetUrl, {
-		method: request.method,
-		headers,
-		body: body ? body : undefined,
-	});
+	const controller = new AbortController();
+	const timeout = setTimeout(() => controller.abort(), 30_000);
 
-	const responseHeaders = new Headers(upstream.headers);
-	responseHeaders.delete('transfer-encoding');
+	try {
+		const upstream = await fetch(targetUrl, {
+			method: request.method,
+			headers,
+			body: body ? body : undefined,
+			signal: controller.signal,
+		});
 
-	return new Response(upstream.body, {
-		status: upstream.status,
-		statusText: upstream.statusText,
-		headers: responseHeaders,
-	});
+		const responseHeaders = new Headers(upstream.headers);
+		responseHeaders.delete('transfer-encoding');
+
+		return new Response(upstream.body, {
+			status: upstream.status,
+			statusText: upstream.statusText,
+			headers: responseHeaders,
+		});
+	} catch {
+		return new Response('Bad Gateway', { status: 502 });
+	} finally {
+		clearTimeout(timeout);
+	}
 };
 
 export const handle: Handle = async ({ event, resolve }) => {
