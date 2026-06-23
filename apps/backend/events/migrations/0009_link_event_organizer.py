@@ -68,10 +68,6 @@ def link_event_organizer(apps, schema_editor):
     if pass2_updates:
         Event.objects.bulk_update(pass2_updates, ["organizer_ref"], batch_size=500)
 
-    print(
-        f"link_event_organizer: URL-matched={url_matched}, "
-        f"name-matched={name_matched}, unmatched={unmatched}"
-    )
 
 
 def unlink_event_organizer(apps, schema_editor):

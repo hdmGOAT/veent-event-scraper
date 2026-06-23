@@ -1,6 +1,15 @@
+import inspect
+
 from django.core.management.base import BaseCommand, CommandError
 
 from events.scrapers import SCRAPERS
+
+
+def _positive_int(value):
+    ivalue = int(value)
+    if ivalue <= 0:
+        raise ValueError
+    return ivalue
 
 
 class Command(BaseCommand):
@@ -15,6 +24,14 @@ class Command(BaseCommand):
         parser.add_argument(
             "--list", action="store_true", help="List available scrapers and exit."
         )
+        parser.add_argument(
+            "--query-id", type=_positive_int, default=None, metavar="ID",
+            help="Run only the SearchQuery with this ID (facebook_events only).",
+        )
+        parser.add_argument(
+            "--max-events", type=_positive_int, default=None, metavar="N",
+            help="Stop after processing N events per query (useful for quick tests).",
+        )
 
     def handle(self, *args, **options):
         if options["list"]:
@@ -24,6 +41,10 @@ class Command(BaseCommand):
             return
 
         source = options["source"]
+        if not source and (options.get("query_id") is not None or options.get("max_events") is not None):
+            raise CommandError(
+                "--query-id and --max-events require a specific source to be specified."
+            )
         if source:
             if source not in SCRAPERS:
                 raise CommandError(
@@ -40,8 +61,16 @@ class Command(BaseCommand):
 
         for key in keys:
             self.stdout.write(f"Running scraper: {key} …")
+            run_kwargs = {}
+            if options["query_id"] is not None:
+                run_kwargs["query_id"] = options["query_id"]
+            if options["max_events"] is not None:
+                run_kwargs["max_events"] = options["max_events"]
             try:
-                result = SCRAPERS[key]().run()
+                scraper = SCRAPERS[key]()
+                accepted = inspect.signature(scraper.run).parameters
+                filtered_kwargs = {k: v for k, v in run_kwargs.items() if k in accepted}
+                result = scraper.run(**filtered_kwargs)
             except Exception as exc:  # keep one failing scraper from killing the rest
                 self.stderr.write(self.style.ERROR(f"  {key} failed: {exc}"))
                 continue

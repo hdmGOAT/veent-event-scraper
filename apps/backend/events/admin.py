@@ -1,6 +1,17 @@
-from django.contrib import admin
+from django.contrib import admin, messages
+from django.db.models import Count
 
-from .models import Event, Organizer, ScraperRun, Venue
+from .management.commands.deduplicate_organizers import merge_cluster, select_winner
+from .models import Event, Organizer, ScraperRun, SearchQuery, Venue
+
+
+@admin.register(SearchQuery)
+class SearchQueryAdmin(admin.ModelAdmin):
+    list_display = ("query", "source", "is_active", "last_run_at", "events_found_count", "updated_at")
+    list_filter = ("source", "is_active")
+    list_editable = ("is_active",)
+    search_fields = ("query",)
+    readonly_fields = ("last_run_at", "events_found_count", "created_at", "updated_at")
 
 
 @admin.register(Venue)
@@ -55,7 +66,7 @@ class OrganizerAdmin(admin.ModelAdmin):
     search_fields = ("name", "email", "website", "phone")
     prepopulated_fields = {"slug": ("name",)}
     readonly_fields = ("created_at", "updated_at", "scraped_at")
-    actions = ["confirm_organizers", "reject_organizers"]
+    actions = ["confirm_organizers", "reject_organizers", "merge_into_winner"]
 
     @admin.action(description="Mark selected organizers as Confirmed")
     def confirm_organizers(self, request, queryset):
@@ -64,6 +75,23 @@ class OrganizerAdmin(admin.ModelAdmin):
     @admin.action(description="Mark selected organizers as Rejected")
     def reject_organizers(self, request, queryset):
         queryset.update(status=Organizer.STATUS_REJECTED)
+
+    @admin.action(description="Merge selected organizers into one winner")
+    def merge_into_winner(self, request, queryset):
+        cluster = list(queryset.annotate(event_count=Count("events")))
+        if len(cluster) < 2:
+            self.message_user(
+                request,
+                "Select at least 2 organizers to merge.",
+                level=messages.WARNING,
+            )
+            return
+        winner, losers = select_winner(cluster)
+        merge_cluster(winner, losers, dry_run=False)
+        self.message_user(
+            request,
+            f"Merged {len(losers)} organizer(s) into '{winner.name}'.",
+        )
 
 
 @admin.register(ScraperRun)

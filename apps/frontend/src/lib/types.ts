@@ -67,6 +67,22 @@ export interface OrganizerDetail extends Organizer {
 	}[];
 }
 
+export interface VenueMapPin {
+	slug: string;
+	name: string;
+	address: string;
+	city: string;
+	country: string;
+	primary_type_display: string;
+	agents_primary_types: string[];
+	rating: number | null;
+	latitude: number;
+	longitude: number;
+	verification_status: VenueStatus;
+	website: string;
+	event_count: number;
+}
+
 export interface VenueRow {
 	slug: string;
 	name: string;
@@ -119,6 +135,7 @@ export interface ScraperRun {
 	triggered_by: string | null;
 	created_at: string;
 	duration_seconds: number | null;
+	log_output: string | null;
 }
 
 export interface ScraperLastRun {
@@ -158,4 +175,15 @@ export interface ScriptStartResult {
 	started: boolean;
 	script: string;
 	pid: number;
+}
+
+export interface SearchQuery {
+	id: number;
+	query: string;
+	source: string;
+	is_active: boolean;
+	last_run_at: string | null;
+	events_found_count: number;
+	created_at: string;
+	updated_at: string;
 }

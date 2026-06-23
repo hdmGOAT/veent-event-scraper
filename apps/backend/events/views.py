@@ -16,7 +16,7 @@ from django.views.decorators.http import require_POST
 logger = logging.getLogger(__name__)
 
 from .categories import normalize_category
-from .models import Event, Organizer, ScraperRun, Venue
+from .models import Event, Organizer, ScraperRun, SearchQuery, Venue
 from .runner import cancel_run, trigger_scraper_run
 
 
@@ -585,6 +585,20 @@ def api_venues(request):
     )
 
 
+def api_venues_map(request):
+    pins = (
+        Venue.objects.filter(latitude__isnull=False, longitude__isnull=False)
+        .annotate(event_count=Count("events"))
+        .values(
+            "slug", "name", "address", "city", "country",
+            "primary_type_display", "agents_primary_types",
+            "rating", "latitude", "longitude",
+            "verification_status", "website", "event_count",
+        )
+    )
+    return JsonResponse(list(pins), safe=False)
+
+
 # ---------------------------------------------------------------------------
 # Scraper run jobs — trigger runs from the UI and poll/list their status.
 # All endpoints are staff-only, mirroring the /review/ convention.
@@ -593,6 +607,10 @@ def api_venues(request):
 
 def _serialize_run(run):
     """Serialise a ScraperRun to the standard dict shape used by all run endpoints."""
+    include_log = run.status in ('queued', 'running') or (
+        run.finished_at is not None
+        and (timezone.now() - run.finished_at).total_seconds() < 300
+    )
     return {
         "id": run.id,
         "scraper_key": run.scraper_key,
@@ -606,7 +624,35 @@ def _serialize_run(run):
         "triggered_by": run.triggered_by.username if run.triggered_by_id else None,
         "created_at": run.created_at.isoformat(),
         "duration_seconds": run.duration_seconds,
+        "log_output": run.log_output if include_log else None,
     }
+
+
+@csrf_exempt
+def api_proxy_setting(request):
+    """GET current proxy-enabled state; POST to toggle it.
+
+    GET  → {"enabled": bool}
+    POST → {"enabled": bool}  (body)  → {"enabled": bool}
+    """
+    from .scrapers.proxy_manager import get_proxy_enabled, set_proxy_enabled
+
+    if request.method == "GET":
+        return JsonResponse({"enabled": get_proxy_enabled()})
+
+    if request.method == "POST":
+        try:
+            body = json.loads(request.body)
+        except (json.JSONDecodeError, ValueError):
+            return JsonResponse({"error": "Invalid JSON"}, status=400)
+        if "enabled" not in body:
+            return JsonResponse({"error": "Missing 'enabled' field"}, status=400)
+        if not isinstance(body["enabled"], bool):
+            return JsonResponse({"error": "'enabled' must be a JSON boolean"}, status=400)
+        set_proxy_enabled(body["enabled"])
+        return JsonResponse({"enabled": get_proxy_enabled()})
+
+    return JsonResponse({"error": "Method not allowed"}, status=405)
 
 
 @csrf_exempt
@@ -830,6 +876,112 @@ def api_scrapers(request):
         )
 
     return JsonResponse(results, safe=False)
+
+
+# ---------------------------------------------------------------------------
+# Search Queries API — CRUD for the SearchQuery table used by the
+# facebook_events scraper (and any future query-driven scrapers).
+# ---------------------------------------------------------------------------
+
+
+def _serialize_search_query(sq) -> dict:
+    return {
+        "id": sq.id,
+        "query": sq.query,
+        "source": sq.source,
+        "is_active": sq.is_active,
+        "last_run_at": sq.last_run_at.isoformat() if sq.last_run_at else None,
+        "events_found_count": sq.events_found_count,
+        "created_at": sq.created_at.isoformat(),
+        "updated_at": sq.updated_at.isoformat(),
+    }
+
+
+@csrf_exempt
+def api_search_queries(request):
+    """GET list / POST create search queries."""
+    if request.method == "GET":
+        source = request.GET.get("source", "").strip()
+        qs = SearchQuery.objects.all()
+        if source:
+            qs = qs.filter(source=source)
+        return JsonResponse([_serialize_search_query(sq) for sq in qs], safe=False)
+
+    if request.method == "POST":
+        try:
+            data = json.loads(request.body)
+        except (json.JSONDecodeError, ValueError):
+            return JsonResponse({"error": "Invalid JSON"}, status=400)
+
+        query = (data.get("query") or "").strip()
+        source = (data.get("source") or "").strip()
+        if not query or not source:
+            return JsonResponse({"error": "query and source are required"}, status=400)
+
+        sq, created = SearchQuery.objects.get_or_create(
+            query=query,
+            source=source,
+            defaults={"is_active": data.get("is_active", True)},
+        )
+        if not created:
+            return JsonResponse({"error": "Query already exists for this source"}, status=409)
+
+        return JsonResponse(_serialize_search_query(sq), status=201)
+
+    return JsonResponse({"error": "Method not allowed"}, status=405)
+
+
+@csrf_exempt
+@require_POST
+def api_search_query_run(request, pk):
+    """Trigger a single SearchQuery through its scraper.
+
+    Creates a ScraperRun with key ``"{source}:q:{pk}"`` so it can be tracked,
+    cancelled, and polled by the same run-history UI used for full scraper runs.
+    Returns 409 if a run for this query is already active.
+    """
+    sq = get_object_or_404(SearchQuery, pk=pk)
+    triggered_by = request.user if request.user.is_authenticated else None
+    run, already_active = trigger_scraper_run(
+        sq.source, triggered_by=triggered_by, query_id=sq.pk
+    )
+    if already_active:
+        return JsonResponse({"error": "This query is already running"}, status=409)
+    return JsonResponse({"id": run.id, "status": run.status, "scraper_key": run.scraper_key})
+
+
+@csrf_exempt
+def api_search_query_detail(request, pk):
+    """PATCH update / DELETE a single search query."""
+    sq = get_object_or_404(SearchQuery, pk=pk)
+
+    if request.method == "PATCH":
+        try:
+            data = json.loads(request.body)
+        except (json.JSONDecodeError, ValueError):
+            return JsonResponse({"error": "Invalid JSON"}, status=400)
+
+        changed = []
+        if "query" in data:
+            sq.query = (data["query"] or "").strip()
+            changed.append("query")
+        if "is_active" in data:
+            sq.is_active = bool(data["is_active"])
+            changed.append("is_active")
+        if "source" in data:
+            sq.source = (data["source"] or "").strip()
+            changed.append("source")
+
+        if changed:
+            sq.save(update_fields=[*changed, "updated_at"])
+
+        return JsonResponse(_serialize_search_query(sq))
+
+    if request.method == "DELETE":
+        sq.delete()
+        return JsonResponse({"deleted": True})
+
+    return JsonResponse({"error": "Method not allowed"}, status=405)
 
 
 # ---------------------------------------------------------------------------

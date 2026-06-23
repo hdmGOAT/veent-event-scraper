@@ -24,8 +24,10 @@ urlpatterns = [
     path("api/organizers/<slug:slug>/", views.api_organizer_detail, name="api_organizer_detail"),
     path("api/organizers/", views.api_organizers, name="api_organizers"),
     path("api/venues/types/", views.api_venue_types, name="api_venue_types"),
+    path("api/venues/map/", views.api_venues_map, name="api_venues_map"),
     path("api/venues/<slug:slug>/", views.api_venue_detail, name="api_venue_detail"),
     path("api/venues/", views.api_venues, name="api_venues"),
+    path("api/settings/proxy/", views.api_proxy_setting, name="api_proxy_setting"),
     # Scraper run jobs — more-specific paths before the api/scrapers/ catch-all.
     path("api/scrapers/<str:key>/run/", views.api_scraper_trigger, name="api_scraper_trigger"),
     path("api/scrapers/dedup/", views.api_dedup_trigger, name="api_dedup_trigger"),
@@ -36,6 +38,10 @@ urlpatterns = [
     path("api/scrapers/runs/<int:run_id>/", views.api_scraper_run_detail, name="api_scraper_run_detail"),
     path("api/scrapers/runs/", views.api_scraper_runs, name="api_scraper_runs"),
     path("api/scrapers/", views.api_scrapers, name="api_scrapers"),
+    # Search queries — managed via the SvelteKit UI
+    path("api/search-queries/<int:pk>/run/", views.api_search_query_run, name="api_search_query_run"),
+    path("api/search-queries/<int:pk>/", views.api_search_query_detail, name="api_search_query_detail"),
+    path("api/search-queries/", views.api_search_queries, name="api_search_queries"),
     # n8n automation webhooks
     path("webhooks/scrape/", views.scraper_webhook, name="scraper_webhook"),
     path("webhooks/ingest-events/", views.ingest_events_webhook, name="ingest_events_webhook"),

@@ -4,6 +4,7 @@ Each scraper subclasses ``BaseScraper`` and is registered here under a
 unique key. The ``scrape`` management command looks scrapers up by key.
 """
 from .allevents import AllEventsCDOScraper
+from .facebook_events import FacebookEventsScraper
 from .clickthecity import ClickTheCityScraper
 from .allevents_api import AllEventsAPIScraper
 from .allevents_ph import AllEventsPHScraper
@@ -29,6 +30,7 @@ from .eventalways import EventAlwaysScraper
 
 # key -> scraper class. Add new scrapers here.
 SCRAPERS = {
+    "facebook_events": FacebookEventsScraper,
     "google_places": GooglePlacesVenueScraper,
     "allevents_cdo": AllEventsCDOScraper,
     "allevents_in": AllEventsPHScraper,

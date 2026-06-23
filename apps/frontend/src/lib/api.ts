@@ -16,9 +16,11 @@ import type {
 	ScraperRun,
 	ScraperRunStatus,
 	ScriptStartResult,
+	SearchQuery,
 	SourceCount,
 	Stats,
 	VenueDetail,
+	VenueMapPin,
 	VenueRow
 } from './types';
 
@@ -56,6 +58,45 @@ async function post<T>(path: string): Promise<T> {
 	return res.json() as Promise<T>;
 }
 
+async function postJson<T>(path: string, body: unknown): Promise<T> {
+	const res = await fetch(`/api${path}`, {
+		method: 'POST',
+		headers: { 'X-CSRFToken': getCsrfToken(), 'Content-Type': 'application/json' },
+		credentials: 'include',
+		body: JSON.stringify(body)
+	});
+	if (!res.ok) {
+		const err = await res.json().catch(() => ({}));
+		throw new Error((err as { error?: string }).error ?? `API ${path} failed: ${res.status}`);
+	}
+	return res.json() as Promise<T>;
+}
+
+async function patch<T>(path: string, body: unknown): Promise<T> {
+	const res = await fetch(`/api${path}`, {
+		method: 'PATCH',
+		headers: { 'X-CSRFToken': getCsrfToken(), 'Content-Type': 'application/json' },
+		credentials: 'include',
+		body: JSON.stringify(body)
+	});
+	if (!res.ok) {
+		const err = await res.json().catch(() => ({}));
+		throw new Error((err as { error?: string }).error ?? `API ${path} failed: ${res.status}`);
+	}
+	return res.json() as Promise<T>;
+}
+
+async function del(path: string): Promise<void> {
+	const res = await fetch(`/api${path}`, {
+		method: 'DELETE',
+		headers: { 'X-CSRFToken': getCsrfToken() },
+		credentials: 'include'
+	});
+	if (!res.ok) {
+		throw new Error(`API ${path} failed: ${res.status} ${res.statusText}`);
+	}
+}
+
 function qs(params: Record<string, string | number | undefined>): string {
 	const sp = new URLSearchParams();
 	for (const [k, v] of Object.entries(params)) {
@@ -64,6 +105,35 @@ function qs(params: Record<string, string | number | undefined>): string {
 	const s = sp.toString();
 	return s ? `?${s}` : '';
 }
+
+// ---------------------------------------------------------------------------
+// Node scraper API — hits /node-api/* (proxied to node-scraper on :8001).
+// No Django CSRF needed; Hono has its own CORS allow-list.
+// ---------------------------------------------------------------------------
+
+async function nodeGet<T>(path: string): Promise<T> {
+	const res = await fetch(`/node-api${path}`);
+	if (!res.ok) throw new Error(`Node API ${path} failed: ${res.status} ${res.statusText}`);
+	return res.json() as Promise<T>;
+}
+
+async function nodePost<T>(path: string): Promise<T> {
+	const res = await fetch(`/node-api${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json' } });
+	if (!res.ok) {
+		const err = await res.json().catch(() => ({}));
+		throw new Error((err as { error?: string }).error ?? `Node API ${path} failed: ${res.status}`);
+	}
+	return res.json() as Promise<T>;
+}
+
+export const nodeApi = {
+	scrapers: () => nodeGet<Scraper[]>('/scrapers'),
+	runScraper: (key: string) => nodePost<{ id: number; status: ScraperRunStatus }>(`/scrapers/${encodeURIComponent(key)}/run`),
+	runAll: () => nodePost<RunAllResult>('/scrapers/run-all'),
+	scraperRuns: (limit?: number) => nodeGet<ScraperRun[]>(`/scrapers/runs${limit ? `?limit=${limit}` : ''}`),
+	activeRuns: () => nodeGet<ScraperRun[]>('/scrapers/runs/active'),
+	cancelRun: (id: number) => nodePost<ScraperRun>(`/scrapers/runs/${id}/cancel`)
+};
 
 export const api = {
 	stats: (f?: Fetch) => get<Stats>('/stats/', f),
@@ -79,6 +149,7 @@ export const api = {
 	venues: (params: { q?: string; status?: string; ordering?: string; type?: string; page?: number } = {}, f?: Fetch) =>
 		get<Paginated<VenueRow>>(`/venues/${qs(params)}`, f),
 	venueTypes: (f?: Fetch) => get<string[]>('/venues/types/', f),
+	venueMapPins: (f?: Fetch) => get<VenueMapPin[]>('/venues/map/', f),
 	venue: (slug: string, f?: Fetch) => get<VenueDetail>(`/venues/${slug}/`, f),
 	scrapers: (f?: Fetch) => get<Scraper[]>('/scrapers/', f),
 	runScraper: (key: string) => post<{ id: number; status: ScraperRunStatus }>(`/scrapers/${key}/run/`),
@@ -89,5 +160,16 @@ export const api = {
 		get<ScraperRun[]>(`/scrapers/runs/${limit ? `?limit=${limit}` : ''}`, f),
 	activeRuns: (f?: Fetch) => get<ScraperRun[]>('/scrapers/runs/active/', f),
 	scraperRun: (id: number, f?: Fetch) => get<ScraperRun>(`/scrapers/runs/${id}/`, f),
-	cancelRun: (id: number) => post<ScraperRun>(`/scrapers/runs/${id}/cancel/`)
+	cancelRun: (id: number) => post<ScraperRun>(`/scrapers/runs/${id}/cancel/`),
+	searchQueries: (params: { source?: string } = {}, f?: Fetch) =>
+		get<SearchQuery[]>(`/search-queries/${qs(params)}`, f),
+	createSearchQuery: (body: { query: string; source: string; is_active?: boolean }) =>
+		postJson<SearchQuery>('/search-queries/', body),
+	updateSearchQuery: (id: number, body: { query?: string; is_active?: boolean; source?: string }) =>
+		patch<SearchQuery>(`/search-queries/${id}/`, body),
+	deleteSearchQuery: (id: number) => del(`/search-queries/${id}/`),
+	runSearchQuery: (id: number) =>
+		post<{ id: number; status: ScraperRunStatus; scraper_key: string }>(`/search-queries/${id}/run/`),
+	getProxySetting: (f?: Fetch) => get<{ enabled: boolean }>('/settings/proxy/', f),
+	setProxySetting: (enabled: boolean) => postJson<{ enabled: boolean }>('/settings/proxy/', { enabled })
 };

@@ -1,12 +1,17 @@
 <script lang="ts">
 	import Badge from '$lib/components/Badge.svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
-	import { api } from '$lib/api';
+	import { api, nodeApi } from '$lib/api';
 	import { formatDateTime, titleize } from '$lib/format';
 	import type { Scraper, ScraperRun } from '$lib/types';
 	import type { PageData } from './$types';
 
 	let { data }: { data: PageData } = $props();
+
+	// svelte-ignore state_referenced_locally
+	let proxyEnabled = $state<boolean>(data.proxyEnabled);
+	let proxyToggling = $state(false);
+	let proxyError = $state<string | null>(null);
 
 	// Local copy of the scraper list so we can refresh each card's last_run
 	// after a run finishes, without a manual page reload. Seeded once from the
@@ -25,12 +30,22 @@
 	let errors = $state<Map<string, string>>(new Map());
 	// Keys whose failure traceback is expanded.
 	let expandedErrors = $state<Set<string>>(new Set());
+	// Keys whose log terminal is expanded (collapsed by default).
+	let expandedLogs = $state<Set<string>>(new Set());
 	let showAllRuns = $state(false);
 
 	// "Run All" in-flight flag.
 	let runningAll = $state(false);
 	// "Run All" error message, if any.
 	let runAllError = $state<string | null>(null);
+
+	// ── Node scraper state (mirrors python state above) ──────────────────────
+	let nodeRunningMap = $state<Map<string, ScraperRun>>(new Map());
+	let nodeTriggering = $state<Set<string>>(new Set());
+	let nodeCancelling = $state<Set<string>>(new Set());
+	let nodeErrors = $state<Map<string, string>>(new Map());
+	let nodeRunningAll = $state(false);
+	let nodeRunAllError = $state<string | null>(null);
 
 	// "Deduplicate" in-flight flag and result/error messages.
 	let deduplicating = $state(false);
@@ -59,17 +74,25 @@
 
 	async function pollActive() {
 		try {
-			const active = await api.activeRuns();
-			const next = new Map<string, ScraperRun>();
-			for (const run of active) {
-				next.set(run.scraper_key, run);
+			const [active, nodeActive] = await Promise.allSettled([
+				api.activeRuns(),
+				nodeApi.activeRuns()
+			]);
+
+			if (active.status === 'fulfilled') {
+				const next = new Map<string, ScraperRun>();
+				for (const run of active.value) next.set(run.scraper_key, run);
+				runningMap = next;
+				if (active.value.length === 0 && (nodeActive.status !== 'fulfilled' || nodeActive.value.length === 0) && pollingInterval !== null) {
+					stopPolling();
+					[recentRuns, scrapers] = await Promise.all([api.scraperRuns(), api.scrapers()]);
+				}
 			}
-			runningMap = next;
-			if (active.length === 0 && pollingInterval !== null) {
-				stopPolling();
-				// Pick up runs that just finished: refresh both the history table
-				// and the per-card last_run line.
-				[recentRuns, scrapers] = await Promise.all([api.scraperRuns(), api.scrapers()]);
+
+			if (nodeActive.status === 'fulfilled') {
+				const next = new Map<string, ScraperRun>();
+				for (const run of nodeActive.value) next.set(run.scraper_key, run);
+				nodeRunningMap = next;
 			}
 		} catch (e) {
 			// Transient poll failure — leave state untouched, try again next tick.
@@ -115,6 +138,13 @@
 		expandedErrors = next;
 	}
 
+	function toggleLog(key: string) {
+		const next = new Set(expandedLogs);
+		if (next.has(key)) next.delete(key);
+		else next.add(key);
+		expandedLogs = next;
+	}
+
 	// Last-run line for a card, sourced from the ScraperRun history (last_run),
 	// not the stale event-derived last_scraped. An active poll run takes
 	// precedence over this and is rendered separately above.
@@ -151,6 +181,52 @@
 		}
 	}
 
+	async function handleNodeRun(key: string) {
+		if (nodeTriggering.has(key) || nodeRunningMap.has(key)) return;
+		nodeTriggering = new Set([...nodeTriggering, key]);
+		nodeErrors = new Map([...nodeErrors].filter(([k]) => k !== key));
+		try {
+			await nodeApi.runScraper(key);
+			await pollActive();
+			startPolling();
+		} catch (e) {
+			const msg = e instanceof Error ? e.message : 'Failed to start node run';
+			nodeErrors = new Map([...nodeErrors, [key, msg]]);
+		} finally {
+			nodeTriggering = new Set([...nodeTriggering].filter((k) => k !== key));
+		}
+	}
+
+	async function handleNodeCancel(key: string, runId: number) {
+		if (nodeCancelling.has(key)) return;
+		nodeCancelling = new Set([...nodeCancelling, key]);
+		nodeErrors = new Map([...nodeErrors].filter(([k]) => k !== key));
+		try {
+			await nodeApi.cancelRun(runId);
+			await pollActive();
+		} catch (e) {
+			const msg = e instanceof Error ? e.message : 'Failed to cancel node run';
+			nodeErrors = new Map([...nodeErrors, [key, msg]]);
+		} finally {
+			nodeCancelling = new Set([...nodeCancelling].filter((k) => k !== key));
+		}
+	}
+
+	async function handleNodeRunAll() {
+		if (nodeRunningAll) return;
+		nodeRunningAll = true;
+		nodeRunAllError = null;
+		try {
+			await nodeApi.runAll();
+			await pollActive();
+			startPolling();
+		} catch (e) {
+			nodeRunAllError = e instanceof Error ? e.message : 'Failed to trigger all node scrapers';
+		} finally {
+			nodeRunningAll = false;
+		}
+	}
+
 	async function handleScript(scriptName: string) {
 		if (scriptRunning[scriptName]) return;
 		scriptRunning = { ...scriptRunning, [scriptName]: true };
@@ -172,6 +248,20 @@
 		}
 	}
 
+	async function handleProxyToggle() {
+		if (proxyToggling) return;
+		proxyToggling = true;
+		proxyError = null;
+		try {
+			const result = await api.setProxySetting(!proxyEnabled);
+			proxyEnabled = result.enabled;
+		} catch (e) {
+			proxyError = e instanceof Error ? e.message : 'Failed to toggle proxy';
+		} finally {
+			proxyToggling = false;
+		}
+	}
+
 	async function handleDedup() {
 		if (deduplicating) return;
 		deduplicating = true;
@@ -190,10 +280,24 @@
 	$effect(() => {
 		// Kick off an initial poll on mount; only keep polling if something is active.
 		pollActive().then(() => {
-			if (runningMap.size > 0) startPolling();
+			if (runningMap.size > 0 || nodeRunningMap.size > 0) startPolling();
 		});
 		return () => stopPolling();
 	});
+
+	// Auto-scroll action: keeps <pre> pinned to the bottom as log lines arrive.
+	function autoscroll(node: HTMLElement) {
+		const obs = new MutationObserver(() => { node.scrollTop = node.scrollHeight; });
+		obs.observe(node, { childList: true, subtree: true, characterData: true });
+		node.scrollTop = node.scrollHeight;
+		return { destroy() { obs.disconnect(); } };
+	}
+
+	// Show only the last 30 lines in the card to keep it compact.
+	function trimLog(raw: string | null): string {
+		if (!raw) return '';
+		return raw.split('\n').filter(Boolean).slice(-30).join('\n');
+	}
 </script>
 
 <svelte:head>
@@ -204,6 +308,25 @@
 	{#snippet action()}
 		<div class="flex flex-col items-end gap-1">
 			<div class="flex items-center gap-2">
+				<button
+					disabled={proxyToggling}
+					onclick={handleProxyToggle}
+					class="flex items-center gap-2 rounded-md border px-3 py-2 text-sm font-medium transition
+						{proxyEnabled
+							? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20'
+							: 'border-border bg-surface-2 text-muted hover:bg-surface'}"
+					title="Toggle rotating proxy for all scrapers"
+				>
+					<span class="relative flex h-4 w-4 shrink-0 items-center justify-center">
+						{#if proxyEnabled}
+							<span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-50"></span>
+							<span class="relative inline-flex h-2.5 w-2.5 rounded-full bg-emerald-400"></span>
+						{:else}
+							<span class="inline-flex h-2.5 w-2.5 rounded-full bg-muted/50"></span>
+						{/if}
+					</span>
+					{proxyToggling ? 'Updating…' : proxyEnabled ? 'Proxy On' : 'Proxy Off'}
+				</button>
 				<button
 					disabled={scriptRunning['categorize-events']}
 					onclick={() => handleScript('categorize-events')}
@@ -230,7 +353,14 @@
 					onclick={handleRunAll}
 					class="rounded-md bg-accent px-4 py-2 text-sm font-medium text-white transition hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-50"
 				>
-					{runningAll ? 'Running All…' : 'Run All'}
+					{runningAll ? 'Running…' : 'Run All Python'}
+				</button>
+				<button
+					disabled={nodeRunningAll}
+					onclick={handleNodeRunAll}
+					class="rounded-md bg-sky-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-sky-500 disabled:cursor-not-allowed disabled:opacity-50"
+				>
+					{nodeRunningAll ? 'Running…' : 'Run All Node'}
 				</button>
 			</div>
 			{#if scriptError['categorize-events']}
@@ -248,6 +378,12 @@
 			{#if runAllError}
 				<span class="text-xs text-danger">{runAllError}</span>
 			{/if}
+			{#if nodeRunAllError}
+				<span class="text-xs text-danger">{nodeRunAllError}</span>
+			{/if}
+			{#if proxyError}
+				<span class="text-xs text-danger">{proxyError}</span>
+			{/if}
 		</div>
 	{/snippet}
 </PageHeader>
@@ -258,6 +394,8 @@
 			{@const activeRun = runningMap.get(s.key) ?? null}
 			{@const isActive = activeRun?.status === 'queued' || activeRun?.status === 'running'}
 			{@const run = activeRun ?? recentRuns.find((r) => r.scraper_key === s.key) ?? null}
+			{@const nodeActiveRun = nodeRunningMap.get(s.key) ?? null}
+			{@const nodeIsActive = nodeActiveRun?.status === 'queued' || nodeActiveRun?.status === 'running'}
 			<div class="rounded-xl border border-border bg-surface p-5">
 				<div class="flex items-start justify-between">
 					<div class="flex items-center gap-2">
@@ -265,20 +403,21 @@
 							class="h-2.5 w-2.5 rounded-full {s.last_run ? 'bg-success' : 'bg-muted'}"
 						></span>
 						<h3 class="font-semibold text-heading">{titleize(s.key)}</h3>
-						{#if isActive}
+						{#if isActive || nodeIsActive}
 							<span
 								class="h-3.5 w-3.5 animate-spin rounded-full border-2 border-accent border-t-transparent"
 								aria-label="Running"
 							></span>
 						{/if}
 					</div>
-					<div class="flex gap-2">
+					<div class="flex flex-wrap gap-1.5">
+						<!-- Python run button -->
 						<button
 							disabled={isActive || triggering.has(s.key)}
 							onclick={() => handleRun(s.key)}
 							class="rounded-md border border-border px-2.5 py-1 text-xs text-text transition hover:bg-surface-2 disabled:cursor-not-allowed disabled:opacity-50"
 						>
-							{triggering.has(s.key) ? 'Starting…' : 'Run'}
+							{triggering.has(s.key) ? 'Starting…' : 'Run Python'}
 						</button>
 						{#if isActive && run}
 							<button
@@ -289,13 +428,48 @@
 								{cancelling.has(s.key) ? 'Cancelling…' : 'Cancel'}
 							</button>
 						{/if}
+						<!-- Node run button -->
+						<button
+							disabled={nodeIsActive || nodeTriggering.has(s.key)}
+							onclick={() => handleNodeRun(s.key)}
+							class="rounded-md border border-sky-500/40 bg-sky-500/10 px-2.5 py-1 text-xs text-sky-400 transition hover:bg-sky-500/20 disabled:cursor-not-allowed disabled:opacity-50"
+						>
+							{nodeTriggering.has(s.key) ? 'Starting…' : 'Run Node'}
+						</button>
+						{#if nodeIsActive && nodeActiveRun}
+							<button
+								disabled={nodeCancelling.has(s.key)}
+								onclick={() => handleNodeCancel(s.key, nodeActiveRun.id)}
+								class="rounded-md border border-danger/40 bg-danger-bg/40 px-2.5 py-1 text-xs text-danger transition hover:bg-danger-bg disabled:cursor-not-allowed disabled:opacity-50"
+							>
+								{nodeCancelling.has(s.key) ? 'Cancelling…' : 'Cancel'}
+							</button>
+						{/if}
 					</div>
 				</div>
 				<code class="mt-1 block text-xs text-muted">{s.key}</code>
 
 				{#if run}
-					<div class="mt-3">
+					<div class="mt-3 flex items-center gap-2">
 						<Badge status={run.status} />
+						{#if run.status === 'failed' && run.error_message}
+							<button
+								onclick={() => toggleError(s.key)}
+								class="text-xs text-danger/70 hover:text-danger transition"
+								title={expandedErrors.has(s.key) ? 'Hide error' : 'Show error'}
+							>
+								{expandedErrors.has(s.key) ? '− error' : '+ error'}
+							</button>
+						{/if}
+						{#if run.log_output && (isActive || run.status === 'success' || run.status === 'failed')}
+							<button
+								onclick={() => toggleLog(s.key)}
+								class="text-xs text-muted hover:text-text transition"
+								title={expandedLogs.has(s.key) ? 'Hide logs' : 'Show logs'}
+							>
+								{expandedLogs.has(s.key) ? '− logs' : '+ logs'}
+							</button>
+						{/if}
 					</div>
 				{/if}
 
@@ -306,27 +480,35 @@
 					</div>
 				{/if}
 
-				{#if run?.status === 'failed' && run.error_message}
+				{#if run?.status === 'failed' && run.error_message && expandedErrors.has(s.key)}
 					<div class="mt-2">
+						<pre class="h-36 overflow-y-auto whitespace-pre-wrap rounded-md bg-neutral-950 p-2 text-xs leading-relaxed text-danger font-mono">{run.error_message}</pre>
+					</div>
+				{/if}
+
+				{#if run?.log_output && expandedLogs.has(s.key) && (isActive || run.status === 'success' || run.status === 'failed')}
+					<div class="mt-3">
 						<pre
-							class="overflow-x-auto whitespace-pre-wrap rounded-md bg-danger-bg/40 p-2 text-xs text-danger">{expandedErrors.has(
-								s.key
-							)
-								? run.error_message
-								: run.error_message.slice(0, 300)}</pre>
-						{#if run.error_message.length > 300}
-							<button
-								class="mt-1 text-xs text-accent hover:underline"
-								onclick={() => toggleError(s.key)}
-							>
-								{expandedErrors.has(s.key) ? 'show less' : 'show full'}
-							</button>
-						{/if}
+							use:autoscroll
+							class="h-36 overflow-y-auto rounded-md bg-neutral-950 p-2 text-xs leading-relaxed text-green-400 font-mono whitespace-pre-wrap"
+						>{trimLog(run.log_output)}</pre>
 					</div>
 				{/if}
 
 				{#if errors.has(s.key)}
 					<div class="mt-2 text-xs text-danger">{errors.get(s.key)}</div>
+				{/if}
+
+				<!-- Node run status (compact) -->
+				{#if nodeActiveRun}
+					<div class="mt-2 flex items-center gap-1.5">
+						<span class="text-xs text-sky-400/70">Node</span>
+						<Badge status={nodeActiveRun.status} />
+					</div>
+				{/if}
+
+				{#if nodeErrors.has(s.key)}
+					<div class="mt-1 text-xs text-danger">{nodeErrors.get(s.key)}</div>
 				{/if}
 
 				<div class="mt-4 text-sm text-muted">

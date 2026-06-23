@@ -44,7 +44,7 @@ def _map_result(result: dict) -> tuple[int, int, dict]:
     return created, updated, extra_counts
 
 
-def trigger_scraper_run(key: str, triggered_by=None):
+def trigger_scraper_run(key: str, triggered_by=None, query_id: int | None = None):
     """Create a ScraperRun and spawn its worker subprocess.
 
     Returns ``(run, already_active)``. If a queued/running run already exists
@@ -53,16 +53,23 @@ def trigger_scraper_run(key: str, triggered_by=None):
 
     The worker runs as an independent process (``manage.py run_scraper_job``) in
     its own session/process group, so it can be killed wholesale by ``cancel_run``.
+
+    ``query_id``: when set, the subprocess is given ``--query-id`` so only that
+    single SearchQuery is processed. The ScraperRun key becomes
+    ``"{key}:q:{query_id}"`` to allow concurrent single-query runs without
+    conflicting with a full-source run or other single-query runs.
     """
+    run_key = f"{key}:q:{query_id}" if query_id else key
+
     active_exists = ScraperRun.objects.filter(
-        scraper_key=key,
+        scraper_key=run_key,
         status__in=[ScraperRun.Status.QUEUED, ScraperRun.Status.RUNNING],
     ).exists()
     if active_exists:
         return None, True
 
     try:
-        run = ScraperRun.objects.create(scraper_key=key, triggered_by=triggered_by)
+        run = ScraperRun.objects.create(scraper_key=run_key, triggered_by=triggered_by)
     except IntegrityError:
         # Two concurrent requests both passed the exists() check — the DB partial
         # unique constraint (unique_active_scraper_run) caught the duplicate.
@@ -70,13 +77,23 @@ def trigger_scraper_run(key: str, triggered_by=None):
 
     # BASE_DIR resolves to apps/backend/ (the dir containing manage.py).
     manage_py = settings.BASE_DIR / "manage.py"
-    proc = subprocess.Popen(
-        [sys.executable, str(manage_py), "run_scraper_job", "--run-id", str(run.id)],
-        # POSIX setsid: give the child its own session + process group so the whole
-        # tree (including Playwright's chromium) can be killed with os.killpg.
-        start_new_session=True,
-        cwd=str(settings.BASE_DIR),
-    )
+    cmd = [sys.executable, str(manage_py), "run_scraper_job", "--run-id", str(run.id)]
+    if query_id:
+        cmd += ["--query-id", str(query_id)]
+
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            # POSIX setsid: give the child its own session + process group so the whole
+            # tree (including Playwright's chromium) can be killed with os.killpg.
+            start_new_session=True,
+            cwd=str(settings.BASE_DIR),
+        )
+    except Exception:
+        run.status = ScraperRun.Status.FAILED
+        run.finished_at = timezone.now()
+        run.save(update_fields=["status", "finished_at", "updated_at"])
+        raise
 
     # Store the pid synchronously so cancel_run has a target even for QUEUED runs.
     run.pid = proc.pid
