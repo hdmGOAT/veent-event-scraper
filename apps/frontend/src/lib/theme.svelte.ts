@@ -11,7 +11,9 @@ export const themeStore = {
 	/** Call once from the root layout onMount to read saved preference. */
 	init(): void {
 		if (typeof window === 'undefined') return;
-		const saved = localStorage.getItem('veent-theme') as 'dark' | 'light' | null;
+		let raw: string | null = null;
+		try { raw = localStorage.getItem('veent-theme'); } catch (_) {}
+		const saved: 'dark' | 'light' | null = raw === 'dark' || raw === 'light' ? raw : null;
 		const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
 		const resolved: 'dark' | 'light' = saved ?? (prefersDark ? 'dark' : 'light');
 		_theme = resolved;

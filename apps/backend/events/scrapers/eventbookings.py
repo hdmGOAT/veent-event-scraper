@@ -339,7 +339,7 @@ class EventBookingsScraper(BaseScraper):
         events, _ = self._collect()
         yield from events
 
-    def run(self) -> dict:
+    def run(self, **_kwargs) -> dict:
         events, organizers = self._collect()
         events_result = save_events(self.source, events)
         organizers_result = save_organizers(self.source, organizers)

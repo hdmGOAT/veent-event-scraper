@@ -152,7 +152,7 @@ class PlanoutScraper(BaseScraper):
             if item.get("name"):
                 yield _build_event(item)
 
-    def run(self) -> dict:
+    def run(self, **_kwargs) -> dict:
         items = _fetch_all_events()
         events = [_build_event(i) for i in items if i.get("name")]
         organizers = _build_organizers(items)

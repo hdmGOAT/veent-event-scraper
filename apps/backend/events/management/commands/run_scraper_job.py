@@ -156,6 +156,16 @@ class Command(BaseCommand):
             return  # Already cancelled — exit without doing any work.
         run.refresh_from_db()
 
+        def flush_progress(data: dict) -> None:
+            """Write incremental progress keys into extra_counts without clobbering other keys."""
+            try:
+                run.refresh_from_db(fields=["extra_counts"])
+                merged = {**run.extra_counts, **data}
+                ScraperRun.objects.filter(pk=run.pk).update(extra_counts=merged)
+                run.extra_counts = merged  # keep in-memory copy in sync
+            except Exception:
+                traceback.print_exc()
+
         # Attach the DB log handler so all Python logging from this process
         # (including scrapers, HTTP libraries, Playwright, etc.) flows into
         # ScraperRun.log_output and becomes visible in the UI.
@@ -177,12 +187,12 @@ class Command(BaseCommand):
         try:
             scraper = SCRAPERS[key]()
             result = (
-                scraper.run(query_ids=query_ids, locations=locations)
+                scraper.run(query_ids=query_ids, locations=locations, on_progress=flush_progress)
                 if query_ids
                 else (
-                    scraper.run(query_id=query_id, locations=locations)
+                    scraper.run(query_id=query_id, locations=locations, on_progress=flush_progress)
                     if query_id
-                    else scraper.run(locations=locations)
+                    else scraper.run(on_progress=flush_progress)
                 )
             )
         except Exception:

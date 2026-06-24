@@ -701,11 +701,12 @@ class FacebookEventsScraper(BaseScraper):
 
     # ── Proxy ─────────────────────────────────────────────────────────────────
 
-    def _resolve_proxy(self) -> dict | None:
+    def _resolve_proxy(self) -> dict:
         """Determine the best available proxy config for this run.
 
         Called once per run (not per keyword) to avoid repeated preflight requests.
-        Priority: DataImpulse residential → free proxy list → no proxy.
+        Priority: DataImpulse residential → free proxy list.
+        Raises RuntimeError if no proxy is available — never falls back to unproxied.
         """
         import requests as _requests
 
@@ -746,13 +747,12 @@ class FacebookEventsScraper(BaseScraper):
                     logger.info("[%s] using free proxy: %s", self.source, proxy_url)
                     return {"server": proxy_url}
             except Exception as exc:
-                logger.warning("[%s] free proxy election failed: %s — running without proxy.", self.source, exc)
+                logger.warning("[%s] free proxy election failed: %s", self.source, exc)
 
-        logger.warning(
-            "[%s] no proxy available — Facebook may rate-limit or block datacenter IPs.",
-            self.source,
+        raise RuntimeError(
+            f"[{self.source}] No proxy available — DataImpulse traffic exhausted and "
+            "free proxy list empty or disabled. Aborting to avoid unproxied scraping."
         )
-        return None
 
     def _is_free_proxy(self, proxy: dict | None) -> bool:
         """Return True if proxy came from the free list (not DataImpulse)."""
@@ -777,7 +777,7 @@ class FacebookEventsScraper(BaseScraper):
 
     # ── Browser context ───────────────────────────────────────────────────────
 
-    def _browser_context(self, pw, proxy: dict | None = None):
+    def _browser_context(self, pw, proxy: dict | None = None, *, ignore_cert_errors: bool = False):
         headless = os.environ.get("FB_HEADLESS", "true").lower() != "false"
 
         launch_kwargs: dict = {
@@ -790,6 +790,7 @@ class FacebookEventsScraper(BaseScraper):
         }
         if proxy:
             launch_kwargs["proxy"] = proxy
+        if ignore_cert_errors:
             # Free proxies often perform SSL interception and present their own
             # certificate. Chromium rejects these with ERR_CERT_AUTHORITY_INVALID.
             launch_kwargs["args"].append("--ignore-certificate-errors")
@@ -981,6 +982,7 @@ class FacebookEventsScraper(BaseScraper):
         query_ids: list[int] | None = None,
         locations: list[str] | None = None,
         max_events: int | None = None,
+        on_progress=None,
     ) -> dict:
         """Run the scraper for active SearchQuery rows.
 
@@ -1008,6 +1010,12 @@ class FacebookEventsScraper(BaseScraper):
             logger.info("[%s] no active search queries — nothing to do.", self.source)
             return {"source": self.source, "created": 0, "updated": 0}
 
+        # Bandwidth accumulator: total response body bytes buffered by Playwright
+        # across all keywords this run. Initialized here (not __init__) so re-use
+        # of the instance would not leak state.
+        self._bytes_transferred: int = 0
+        keyword_bytes_before: int = 0
+
         # Fan out queries × locations. Without locations, behaviour is unchanged.
         active_locs = locations or []
         if active_locs:
@@ -1023,6 +1031,7 @@ class FacebookEventsScraper(BaseScraper):
         using_free_proxy = self._is_free_proxy(proxy)
         failure_score = 0   # accumulates across the run; all failures count when on free proxy
         _ROTATE_THRESHOLD = 4
+        _KEYWORD_RETRIES  = 3  # retry a keyword this many times before skipping it
 
         # ── 2. Scrape + save per keyword ──────────────────────────────────────
         # ORM calls inside sync_playwright() are safe: run_scraper_job sets
@@ -1037,55 +1046,90 @@ class FacebookEventsScraper(BaseScraper):
                 effective_term = f"{sq.query} {location_suffix}".strip()
                 logger.info("[%s] keyword %d/%d: '%s'", self.source, i, len(work_items), effective_term)
 
-                # Fresh browser context per keyword — forces a new TCP connection
-                # to the proxy so DataImpulse rotates to a new residential IP.
-                browser, context = self._browser_context(pw, proxy)
-                page = context.new_page()
-                Stealth().use_sync(page)
-                self._block_heavy_resources(page)
-                try:
-                    try:
-                        cards = list(self._fetch_for_query(page, effective_term, max_events=max_events))
-                        failure_score = max(0, failure_score - 1)  # ease off on success
-                        n = len(cards)
-                        with_img  = sum(1 for e in cards if e.image_url)
-                        with_desc = sum(1 for e in cards if e.description)
-                        logger.info(
-                            "[%s] search '%s' done: %d events, %d with image, %d with description",
-                            self.source, effective_term, n, with_img, with_desc,
-                        )
-                    except Exception as exc:
-                        logger.warning("[%s] search '%s' failed, skipping: %s", self.source, effective_term, exc)
-                        if using_free_proxy:
-                            failure_score += 1
-                            logger.warning(
-                                "[%s] free proxy failure score: %d/%d",
-                                self.source, failure_score, _ROTATE_THRESHOLD,
-                            )
-                            if failure_score >= _ROTATE_THRESHOLD:
-                                logger.warning("[%s] rotating free proxy (score %d)", self.source, failure_score)
-                                new_proxy = self._rotate_free_proxy()
-                                if new_proxy:
-                                    proxy = new_proxy
-                                failure_score = 0
-                        _pause(3.0, 6.0)
-                        continue
+                # Bytes before this keyword (shared across all retry attempts).
+                keyword_bytes_before = self._bytes_transferred
+                cards: list = []
+                _fetched = False
 
-                    # Visit organizer pages for new organizers in these cards.
-                    for se in cards:
-                        url = (se.organizer_url or "").rstrip("/")
-                        if not url or url in seen_org_urls:
-                            continue
-                        seen_org_urls.add(url)
-                        logger.info("[%s] visiting organizer page: %s", self.source, url)
-                        details = self._fetch_organizer_page(page, url)
-                        if not details.get("name"):
-                            details["name"] = se.organizer
-                        org_details[url] = details
-                        _pause(2.0, 4.0)
-                finally:
-                    context.close()
-                    browser.close()
+                for _kattempt in range(1, _KEYWORD_RETRIES + 1):
+                    # Fresh browser context per attempt — forces a new TCP connection
+                    # to the proxy so DataImpulse rotates to a new residential IP.
+                    browser, context = self._browser_context(pw, proxy, ignore_cert_errors=using_free_proxy)
+                    page = context.new_page()
+
+                    def _on_response(r, _self=self):
+                        try:
+                            _self._bytes_transferred += len(r.body())
+                        except Exception:
+                            pass
+
+                    page.on("response", _on_response)
+                    Stealth().use_sync(page)
+                    self._block_heavy_resources(page)
+                    try:
+                        try:
+                            cards = list(self._fetch_for_query(page, effective_term, max_events=max_events))
+                            _fetched = True
+                            failure_score = max(0, failure_score - 1)  # ease off on success
+                            n = len(cards)
+                            with_img  = sum(1 for e in cards if e.image_url)
+                            with_desc = sum(1 for e in cards if e.description)
+                            logger.info(
+                                "[%s] search '%s' done: %d events, %d with image, %d with description",
+                                self.source, effective_term, n, with_img, with_desc,
+                            )
+                        except Exception as exc:
+                            if _kattempt < _KEYWORD_RETRIES:
+                                logger.warning(
+                                    "[%s] search '%s' failed (attempt %d/%d), retrying: %s",
+                                    self.source, effective_term, _kattempt, _KEYWORD_RETRIES, exc,
+                                )
+                            else:
+                                logger.warning(
+                                    "[%s] search '%s' failed after %d attempts, skipping: %s",
+                                    self.source, effective_term, _KEYWORD_RETRIES, exc,
+                                )
+                                if using_free_proxy:
+                                    failure_score += 1
+                                    logger.warning(
+                                        "[%s] free proxy failure score: %d/%d",
+                                        self.source, failure_score, _ROTATE_THRESHOLD,
+                                    )
+                                    if failure_score >= _ROTATE_THRESHOLD:
+                                        logger.warning("[%s] rotating free proxy (score %d)", self.source, failure_score)
+                                        new_proxy = self._rotate_free_proxy()
+                                        if new_proxy:
+                                            proxy = new_proxy
+                                        failure_score = 0
+                            _pause(3.0, 6.0)
+                        else:
+                            # Visit organizer pages for new organizers in these cards.
+                            for se in cards:
+                                url = (se.organizer_url or "").rstrip("/")
+                                if not url or url in seen_org_urls:
+                                    continue
+                                seen_org_urls.add(url)
+                                logger.info("[%s] visiting organizer page: %s", self.source, url)
+                                details = self._fetch_organizer_page(page, url)
+                                if not details.get("name"):
+                                    details["name"] = se.organizer
+                                org_details[url] = details
+                                _pause(2.0, 4.0)
+                    finally:
+                        context.close()
+                        browser.close()
+                        delta = self._bytes_transferred - keyword_bytes_before
+                        logger.info(
+                            "[%s] keyword '%s': transferred %.1f MB (run total %.1f MB)",
+                            self.source, effective_term,
+                            delta / 1_048_576, self._bytes_transferred / 1_048_576,
+                        )
+
+                    if _fetched:
+                        break
+
+                if not _fetched:
+                    continue
 
                 # Save immediately — a crash or cancellation won't lose this keyword's data.
                 kw_orgs: list[ScrapedOrganizer] = []
@@ -1134,6 +1178,11 @@ class FacebookEventsScraper(BaseScraper):
                     "[%s] saved query '%s': %d created, %d updated",
                     self.source, effective_term, result["created"], result["updated"],
                 )
+                if on_progress is not None:
+                    try:
+                        on_progress({"total_bytes": self._bytes_transferred})
+                    except Exception:
+                        pass
                 _pause(3.0, 6.0)
 
         logger.info(
@@ -1144,4 +1193,5 @@ class FacebookEventsScraper(BaseScraper):
             "source": self.source,
             "created": total_created,
             "updated": total_updated,
+            "total_bytes": self._bytes_transferred,
         }

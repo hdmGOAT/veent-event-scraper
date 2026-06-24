@@ -172,7 +172,7 @@ class MyRuntimeScraper(BaseScraper):
                 venue=venue,
             )
 
-    def run(self) -> dict:
+    def run(self, **_kwargs) -> dict:
         data = self._fetch_data()
         logger.info("MyRuntime: received %d events", len(data))
 

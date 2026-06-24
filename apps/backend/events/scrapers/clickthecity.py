@@ -133,7 +133,7 @@ class ClickTheCityScraper(BaseScraper):
                     exc,
                 )
 
-    def run(self) -> dict:
+    def run(self, **_kwargs) -> dict:
         events = list(self.fetch())
         result = save_events(self.source, events)
         logger.info(

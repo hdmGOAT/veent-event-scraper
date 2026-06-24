@@ -7,7 +7,8 @@
 		<!-- Anti-flash: apply saved/system theme before first paint -->
 		<script>
 			(function () {
-				var t = localStorage.getItem('veent-theme');
+				var t;
+				try { t = localStorage.getItem('veent-theme'); } catch (_) {}
 				var prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
 				if (t === 'light' || (!t && !prefersDark)) {
 					document.documentElement.classList.add('light');

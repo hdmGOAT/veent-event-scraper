@@ -140,7 +140,7 @@ class RacemeisterEventsScraper(BaseScraper):
                     return value
         return []
 
-    def run(self) -> dict:
+    def run(self, **_kwargs) -> dict:
         items = self._fetch_events(_EVENTS_API) + self._fetch_events(_RECURRING_API)
         logger.info("Racemeister: received %d raw events", len(items))
 
