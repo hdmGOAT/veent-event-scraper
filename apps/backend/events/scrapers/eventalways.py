@@ -318,7 +318,7 @@ class EventAlwaysScraper(BaseScraper):
             if event:
                 yield event
 
-    def run(self) -> dict:
+    def run(self, **_kwargs) -> dict:
         cards = _collect_all_cards()
         events: list[ScrapedEvent] = []
         organizers: dict[str, ScrapedOrganizer] = {}

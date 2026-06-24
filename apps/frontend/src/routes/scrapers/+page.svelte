@@ -231,7 +231,7 @@
 	}
 
 	function formatBytes(bytes: number | undefined | null): string {
-		if (!bytes) return '—';
+		if (bytes == null) return '—';
 		return (bytes / 1_048_576).toFixed(1) + ' MB';
 	}
 
@@ -552,7 +552,7 @@
 					</div>
 				{/if}
 
-				{#if run?.extra_counts?.total_bytes}
+				{#if run?.extra_counts?.total_bytes != null}
 					<div class="mt-1 text-xs text-muted">
 						{formatBytes(run.extra_counts.total_bytes)} transferred
 					</div>

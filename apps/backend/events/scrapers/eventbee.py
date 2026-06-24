@@ -143,7 +143,7 @@ class EventbeeScraper(BaseScraper):
                     venue=venue,
                 )
 
-    def run(self) -> dict:
+    def run(self, **_kwargs) -> dict:
         events = list(self.fetch())
         logger.info("Eventbee: %d PH events", len(events))
         return save_events(self.source, events)

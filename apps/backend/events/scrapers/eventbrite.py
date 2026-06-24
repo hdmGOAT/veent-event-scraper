@@ -214,7 +214,7 @@ class EventbriteScraper(BaseScraper):
             venue=_build_venue(ev),
         )
 
-    def run(self) -> dict:
+    def run(self, **_kwargs) -> dict:
         raw = self._collect_all()
         events = [e for ev in raw if (e := self._to_scraped_event(ev))]
         seen_orgs: set[str] = set()

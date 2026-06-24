@@ -701,7 +701,7 @@ class FacebookEventsScraper(BaseScraper):
 
     # ── Proxy ─────────────────────────────────────────────────────────────────
 
-    def _resolve_proxy(self) -> dict | None:
+    def _resolve_proxy(self) -> dict:
         """Determine the best available proxy config for this run.
 
         Called once per run (not per keyword) to avoid repeated preflight requests.
@@ -1030,7 +1030,7 @@ class FacebookEventsScraper(BaseScraper):
         using_free_proxy = self._is_free_proxy(proxy)
         failure_score = 0   # accumulates across the run; all failures count when on free proxy
         _ROTATE_THRESHOLD = 4
-        _KEYWORD_RETRIES  = 2  # retry a keyword this many times before skipping it
+        _KEYWORD_RETRIES  = 3  # retry a keyword this many times before skipping it
 
         # ── 2. Scrape + save per keyword ──────────────────────────────────────
         # ORM calls inside sync_playwright() are safe: run_scraper_job sets

@@ -207,7 +207,7 @@ class TicketmelonScraper(BaseScraper):
             if scraped:
                 yield scraped
 
-    def run(self) -> dict:
+    def run(self, **_kwargs) -> dict:
         events = list(self.fetch())
         logger.info("Ticketmelon: saving %d PH events", len(events))
         return save_events(self.source, events)

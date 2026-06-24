@@ -412,7 +412,7 @@ class MeetupScraper(BaseScraper):
             if ev:
                 yield ev
 
-    def run(self) -> dict:
+    def run(self, **_kwargs) -> dict:
         event_nodes, group_nodes = self._collect_raw()
 
         events = [ev for node in event_nodes if (ev := _build_event(node))]
