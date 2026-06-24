@@ -108,22 +108,26 @@ that have a `time[datetime]` element, NULL for posts where FB omits the timestam
 ---
 
 ### RFC-003: API Expansion
-**What happens:** `api_events()` in `views.py` is updated to expose all 11 Google Sheets columns
-in the JSON response. A new `scraped_after` query param (`?scraped_after=<ISO 8601>`) filters
-results to only rows scraped after that timestamp. `search_query__query` is added via
-`select_related` on `search_query`.
+**What happens:** `api_events()` in `views.py` exposes the following fields per event:
+`db_id`, `scraped_at`, `search_term`, `event`, `organizer_name`, `category`, `location`,
+`post_link`, `fb_post_id`, `post_date`, `event_date`, `summary`, `slug`, `name`, `starts_at`,
+`ends_at`, `agent_categories`, `source`, `price`, `venue`, `venue_slug`, `organizer`,
+`organizer_slug`, `url`. A `scraped_after` query param (`?scraped_after=<ISO 8601>`) filters
+results to rows scraped after that timestamp — returns 400 on invalid input. `search_query__query`
+is added via `select_related` on `search_query`.
 
 **Integration points:** `views.py` → frontend (no breaking changes — new fields are additive) → n8n
 HTTP Request node.
 
 **Test:**
-```
+```http
 GET /api/events/?source=facebook_posts&ordering=-scraped_at&limit=5
 GET /api/events/?source=facebook_posts&scraped_after=2026-06-24T00:00:00Z
 ```
 
-**Verify:** Response includes `id`, `scraped_at`, `search_term`, `organizer_name`, `category`,
-`location`, `post_link`, `fb_post_id`, `post_date`, `summary`, `raw_text` for every item.
+**Verify:** Response includes `db_id`, `scraped_at`, `search_term`, `organizer_name`, `category`,
+`location`, `post_link`, `fb_post_id`, `post_date`, `event_date`, `summary` for every item.
+Malformed `scraped_after` returns HTTP 400.
 
 **Done when:** curl returns all 11 fields and `scraped_after` correctly filters rows.
 
@@ -635,7 +639,7 @@ Once all three RFCs are ✅ VERIFIED, configure the n8n workflow as follows.
 
 ### Nodes
 
-```
+```text
 1. [Schedule Trigger]           — cron or manual
         ↓
 2. [HTTP Request] Trigger run
@@ -659,7 +663,7 @@ Once all three RFCs are ✅ VERIFIED, configure the n8n workflow as follows.
    URL:     http://<your-server>:8000/api/events/
    Params:
      source        = facebook_posts
-     scraped_after = {{ $('Trigger run').item.json._startTs }}
+     scraped_after = {{ $('Trigger run').item.json.startTs }}
      ordering      = -scraped_at
      limit         = 500
         ↓
@@ -684,7 +688,7 @@ Once all three RFCs are ✅ VERIFIED, configure the n8n workflow as follows.
    Spreadsheet: <your sheet>
    Sheet:       FB Posts
    Columns:     db_id, scraped_at, search_term, organizer_name, category,
-                location, post_link, fb_post_id, post_date, summary, raw_text
+                location, post_link, fb_post_id, post_date, summary
 ```
 
 ### Storing the start timestamp

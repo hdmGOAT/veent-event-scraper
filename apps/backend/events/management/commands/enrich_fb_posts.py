@@ -23,6 +23,9 @@ class Command(BaseCommand):
         limit = options["limit"]
         dry_run = options["dry_run"]
 
+        if limit <= 0:
+            raise ValueError("--limit must be a positive integer")
+
         qs = list(
             Event.objects.filter(source="facebook_posts", enriched_at__isnull=True)
             .order_by("-scraped_at")[:limit]
@@ -48,8 +51,8 @@ class Command(BaseCommand):
 
                 author_name = event.organizer or ""
                 timestamp = (
-                    event.scraped_at.isoformat() if event.scraped_at
-                    else event.post_date.isoformat() if event.post_date
+                    event.post_date.isoformat() if event.post_date
+                    else event.scraped_at.isoformat() if event.scraped_at
                     else timezone.now().isoformat()
                 )
 
@@ -61,7 +64,7 @@ class Command(BaseCommand):
 
                 updates = {"enriched_at": timezone.now()}
 
-                if structured.get("title"):
+                if not event.name and structured.get("title"):
                     updates["name"] = structured["title"][:300]
 
                 if not event.description and structured.get("short_description"):

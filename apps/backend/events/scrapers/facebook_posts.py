@@ -182,12 +182,11 @@ _COUNT_FRESH_ANCHORS_JS = r"""
         const href = a.getAttribute('href') || '';
         if (!isPostHref(href)) continue;
         // Normalise to _post_external_id() form: drop everything up to and
-        // including 'facebook.com/', strip trailing slash, strip query/fragment,
-        // then replace remaining '/' with '_'.
+        // including 'facebook.com/', strip leading/trailing slashes (preserving
+        // query params for story.php URLs), then replace remaining '/' with '_'.
         const externalId = href
             .split('facebook.com/').pop()
-            .replace(/\/$/, '')
-            .replace(/[?#].*$/, '')
+            .replace(/^\/+|\/+$/g, '')
             .replace(/\//g, '_');
         if (!externalId || counted.has(externalId)) continue;
         counted.add(externalId);
@@ -499,16 +498,10 @@ def _call_llm_structure(
         if result is not None:
             all_text = raw_caption + " " + " ".join(raw_links or [])
             if result.get("organizer_phone") and not _phone_found_in_text(result["organizer_phone"], all_text):
-                logger.warning(
-                    "[facebook_posts] fabricated phone rejected: %s",
-                    result["organizer_phone"],
-                )
+                logger.warning("[facebook_posts] fabricated phone rejected: [REDACTED]")
                 result["organizer_phone"] = None
             if result.get("organizer_email") and not _email_found_in_text(result["organizer_email"], all_text):
-                logger.warning(
-                    "[facebook_posts] fabricated email rejected: %s",
-                    result["organizer_email"],
-                )
+                logger.warning("[facebook_posts] fabricated email rejected: [REDACTED]")
                 result["organizer_email"] = None
         if result is None:
             logger.warning(

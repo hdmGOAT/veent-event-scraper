@@ -138,8 +138,7 @@ Before listing changes, here are the exact current signatures and line reference
 ### `models.py` — `Event`
 
 Confirmed fields present: `name`, `description`, `url`, `external_id`, `raw_text`, `post_date`,
-`source`, `search_query`. No `enriched_at` field exists. Confirmed: `Organizer` has an
-`enriched_at` field (line 200) — use same pattern for `Event`.
+`source`, `search_query`, `enriched_at` (mirrors `Organizer.enriched_at` at line 200).
 
 ### `base.py` — `save_events`
 
@@ -173,7 +172,7 @@ File: `apps/backend/events/models.py`
 Location: after the `post_date` field (~line 130), before the `search_query` FK.
 
 Add:
-```
+```python
 enriched_at = models.DateTimeField(
     null=True, blank=True,
     help_text="Set when the Ollama LLM successfully structured this FB post.",

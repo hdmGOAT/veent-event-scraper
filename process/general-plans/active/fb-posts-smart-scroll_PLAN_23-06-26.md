@@ -238,7 +238,7 @@ passes them in.
    - Replace `_human_scroll(page)` call with `_smart_scroll(page, known_urls)`.
    - All other lines remain unchanged.
    - Exact new sequence:
-     ```
+     ```text
      navigate → _pause(3.0, 5.0)
      → _DISMISS_MODAL_JS → _pause(1.0, 2.0)
      → wait_for_selector('[role="article"] div[dir="auto"]', 12s)

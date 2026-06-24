@@ -322,13 +322,14 @@ def api_events(request):
     if upcoming == "1":
         events = events.filter(starts_at__gte=timezone.now())
     if scraped_after:
+        from django.utils.dateparse import parse_datetime
         try:
-            from django.utils.dateparse import parse_datetime
             ts = parse_datetime(scraped_after)
-            if ts:
-                events = events.filter(scraped_at__gt=ts)
         except (ValueError, TypeError):
-            pass  # Ignore malformed timestamp — return unfiltered
+            ts = None
+        if ts is None:
+            return JsonResponse({"error": "Invalid scraped_after timestamp"}, status=400)
+        events = events.filter(scraped_at__gt=ts)
 
     _order_map = {
         "name": ["name"],
@@ -355,10 +356,7 @@ def api_events(request):
             "fb_post_id":     e.external_id or None,
             "post_date":       e.post_date.isoformat() if e.post_date else None,
             "event_date":      e.starts_at.isoformat() if e.starts_at else None,
-            "organizer_email": e.organizer_ref.email if e.organizer_ref_id and e.organizer_ref.email else None,
-            "organizer_phone": e.organizer_ref.phone if e.organizer_ref_id and e.organizer_ref.phone else None,
             "summary":         e.description or None,
-            "raw_text":        e.raw_text or None,
             # Legacy fields — preserved for backward compat with SvelteKit frontend
             "slug":           e.slug,
             "name":           e.name,
