@@ -61,7 +61,7 @@ class HappeningNextCDOScraper(BaseScraper):
 
         yield from collected
 
-    def run(self) -> dict:
+    def run(self, **_kwargs) -> dict:
         result = super().run()
         org_result = save_organizers(self.source, self._scraped_organizers)
         result["organizers_created"] = org_result["created"]

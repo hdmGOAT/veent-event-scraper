@@ -219,7 +219,7 @@ class Ticket2MeScraper(BaseScraper):
         events, _ = self._collect()
         yield from events
 
-    def run(self) -> dict:
+    def run(self, **_kwargs) -> dict:
         events, organizers = self._collect()
         logger.info("ticket2me: %d events, %d organizers", len(events), len(organizers))
 
