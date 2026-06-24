@@ -84,12 +84,15 @@ class BaseScraper:
     """
 
     source: str = ""
+    # Opt-in flag: when True, the Scraper Center shows a keyword picker for
+    # this scraper and its ``run()`` accepts ``query_ids``. Default off.
+    supports_keywords: bool = False
 
     def fetch(self) -> Iterable[ScrapedEvent]:
         """Yield ScrapedEvent instances. Implemented by subclasses."""
         raise NotImplementedError
 
-    def run(self) -> dict:
+    def run(self, on_progress=None, **_kwargs) -> dict:
         if not self.source:
             raise ValueError(f"{type(self).__name__}.source must be set")
         events = list(self.fetch())

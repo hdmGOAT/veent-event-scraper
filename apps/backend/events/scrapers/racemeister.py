@@ -149,6 +149,6 @@ class RacemeisterPartnersScraper(BaseScraper):
 
             yield organizer
 
-    def run(self) -> dict:
+    def run(self, **_kwargs) -> dict:
         organizers = list(self.fetch())
         return save_organizers(self.source, organizers)

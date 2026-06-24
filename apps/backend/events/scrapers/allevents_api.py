@@ -222,7 +222,7 @@ class AllEventsAPIScraper(BaseScraper):
             if ev:
                 yield ev
 
-    def run(self) -> dict:
+    def run(self, **_kwargs) -> dict:
         api_key = self._get_api_key()
         raw = self._collect_all(api_key)
 

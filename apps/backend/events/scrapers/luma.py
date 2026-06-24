@@ -165,7 +165,7 @@ class LumaScraper(BaseScraper):
             venue=_build_venue(ev),
         )
 
-    def run(self) -> dict:
+    def run(self, **_kwargs) -> dict:
         items = self._collect_all()
         events = [e for entry in items if (e := self._entry_to_event(entry))]
         organizers = _build_organizers(items)

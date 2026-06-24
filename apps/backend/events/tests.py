@@ -16,7 +16,7 @@ from django.core.management import call_command
 from events import runner
 from events import ai_categories
 from events.categories import normalize_category
-from events.models import Event, Organizer, ScraperRun, Venue
+from events.models import Event, Organizer, ScraperRun, SearchQuery, Venue
 from events.runner import cancel_run, trigger_scraper_run
 from events.scrapers.base import ScrapedVenue, save_venues
 from events.scrapers.places import GooglePlacesVenueScraper
@@ -1812,3 +1812,115 @@ class DeduplicateOrganizersCommandTests(TestCase):
         names = {row[2] for row in rows[1:]}
         self.assertIn("Awesome Events PH", names)
         self.assertIn("Awesome Events PHL", names)
+
+
+class SearchQueryDecoupledSourceTests(TestCase):
+    """POST /api/search-queries/ no longer requires a source (decoupled keywords)."""
+
+    def test_create_without_source_succeeds(self):
+        resp = self.client.post(
+            "/api/search-queries/",
+            data=json.dumps({"query": "test keyword"}),
+            content_type="application/json",
+        )
+        self.assertEqual(resp.status_code, 201)
+        body = resp.json()
+        self.assertEqual(body["query"], "test keyword")
+        self.assertEqual(body["source"], "")
+
+    def test_create_missing_query_returns_400(self):
+        resp = self.client.post(
+            "/api/search-queries/",
+            data=json.dumps({"source": "facebook_events"}),
+            content_type="application/json",
+        )
+        self.assertEqual(resp.status_code, 400)
+
+    def test_duplicate_query_returns_409(self):
+        first = self.client.post(
+            "/api/search-queries/",
+            data=json.dumps({"query": "dup keyword"}),
+            content_type="application/json",
+        )
+        self.assertEqual(first.status_code, 201)
+        second = self.client.post(
+            "/api/search-queries/",
+            data=json.dumps({"query": "dup keyword"}),
+            content_type="application/json",
+        )
+        self.assertEqual(second.status_code, 409)
+
+    def test_unique_query_constraint_ignores_source(self):
+        SearchQuery.objects.create(query="kw", source="facebook_events")
+        from django.db import IntegrityError
+
+        with self.assertRaises(IntegrityError):
+            SearchQuery.objects.create(query="kw", source="other_source")
+
+
+class ScraperTriggerQueryIdsTests(TestCase):
+    """POST /api/scrapers/<key>/run/ accepts an optional query_ids list."""
+
+    def test_run_with_query_ids_creates_plain_keyed_run(self):
+        mock_run = mock.Mock(id=7, status="queued")
+        with mock.patch(
+            "events.views.trigger_scraper_run", return_value=(mock_run, False)
+        ) as mock_trigger:
+            resp = self.client.post(
+                "/api/scrapers/facebook_events/run/",
+                data=json.dumps({"query_ids": [1, 2]}),
+                content_type="application/json",
+            )
+        self.assertEqual(resp.status_code, 200)
+        _, kwargs = mock_trigger.call_args
+        self.assertEqual(kwargs["query_ids"], [1, 2])
+
+    def test_run_with_query_ids_real_run_uses_plain_scraper_key(self):
+        fake_cls = mock.Mock()
+        fake_cls.return_value.run.return_value = {
+            "source": "facebook_events", "created": 0, "updated": 0,
+        }
+        with mock.patch.dict(runner.SCRAPERS, {"facebook_events": fake_cls}):
+            resp = self.client.post(
+                "/api/scrapers/facebook_events/run/",
+                data=json.dumps({"query_ids": [1, 2]}),
+                content_type="application/json",
+            )
+        self.assertEqual(resp.status_code, 200)
+        run = ScraperRun.objects.get(id=resp.json()["id"])
+        self.assertEqual(run.scraper_key, "facebook_events")
+
+    def test_run_with_bad_query_ids_returns_400(self):
+        resp = self.client.post(
+            "/api/scrapers/facebook_events/run/",
+            data=json.dumps({"query_ids": "bad"}),
+            content_type="application/json",
+        )
+        self.assertEqual(resp.status_code, 400)
+
+    def test_run_with_invalid_json_returns_400(self):
+        resp = self.client.post(
+            "/api/scrapers/facebook_events/run/",
+            data="not-json{{{",
+            content_type="application/json",
+        )
+        self.assertEqual(resp.status_code, 400)
+
+    def test_run_with_keywords_on_unsupported_scraper_returns_400(self):
+        resp = self.client.post(
+            "/api/scrapers/google_places/run/",
+            data=json.dumps({"query_ids": [1, 2]}),
+            content_type="application/json",
+        )
+        self.assertEqual(resp.status_code, 400)
+
+
+class ScrapersSupportsKeywordsTests(TestCase):
+    """GET /api/scrapers/ exposes supports_keywords per scraper."""
+
+    def test_facebook_events_supports_keywords_true(self):
+        resp = self.client.get("/api/scrapers/")
+        self.assertEqual(resp.status_code, 200)
+        by_key = {s["key"]: s for s in resp.json()}
+        self.assertTrue(by_key["facebook_events"]["supports_keywords"])
+        self.assertFalse(by_key["google_places"]["supports_keywords"])

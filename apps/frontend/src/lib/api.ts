@@ -19,6 +19,7 @@ import type {
 	SearchQuery,
 	SourceCount,
 	Stats,
+	TrackerNote,
 	VenueDetail,
 	VenueMapPin,
 	VenueRow
@@ -146,13 +147,18 @@ export const api = {
 	organizers: (params: { q?: string; status?: string; page?: number } = {}, f?: Fetch) =>
 		get<Paginated<Organizer>>(`/organizers/${qs(params)}`, f),
 	organizer: (slug: string, f?: Fetch) => get<OrganizerDetail>(`/organizers/${slug}/`, f),
+	updateOrganizerStatus: (slug: string, status: string) =>
+		patch<{ slug: string; status: string }>(`/organizers/${slug}/`, { status }),
 	venues: (params: { q?: string; status?: string; ordering?: string; type?: string; page?: number } = {}, f?: Fetch) =>
 		get<Paginated<VenueRow>>(`/venues/${qs(params)}`, f),
 	venueTypes: (f?: Fetch) => get<string[]>('/venues/types/', f),
 	venueMapPins: (f?: Fetch) => get<VenueMapPin[]>('/venues/map/', f),
 	venue: (slug: string, f?: Fetch) => get<VenueDetail>(`/venues/${slug}/`, f),
 	scrapers: (f?: Fetch) => get<Scraper[]>('/scrapers/', f),
-	runScraper: (key: string) => post<{ id: number; status: ScraperRunStatus }>(`/scrapers/${key}/run/`),
+	runScraper: (key: string, body?: { query_ids?: number[]; locations?: string[] }) =>
+		body && Object.keys(body).length > 0
+			? postJson<{ id: number; status: ScraperRunStatus }>(`/scrapers/${key}/run/`, body)
+			: post<{ id: number; status: ScraperRunStatus }>(`/scrapers/${key}/run/`),
 	runAll: () => post<RunAllResult>('/scrapers/run-all/'),
 	deduplicate: () => post<DedupResult>('/scrapers/dedup/'),
 	runScript: (scriptName: string) => post<ScriptStartResult>(`/scripts/${scriptName}/run/`),
@@ -163,7 +169,7 @@ export const api = {
 	cancelRun: (id: number) => post<ScraperRun>(`/scrapers/runs/${id}/cancel/`),
 	searchQueries: (params: { source?: string } = {}, f?: Fetch) =>
 		get<SearchQuery[]>(`/search-queries/${qs(params)}`, f),
-	createSearchQuery: (body: { query: string; source: string; is_active?: boolean }) =>
+	createSearchQuery: (body: { query: string; source?: string; is_active?: boolean }) =>
 		postJson<SearchQuery>('/search-queries/', body),
 	updateSearchQuery: (id: number, body: { query?: string; is_active?: boolean; source?: string }) =>
 		patch<SearchQuery>(`/search-queries/${id}/`, body),
@@ -171,5 +177,9 @@ export const api = {
 	runSearchQuery: (id: number) =>
 		post<{ id: number; status: ScraperRunStatus; scraper_key: string }>(`/search-queries/${id}/run/`),
 	getProxySetting: (f?: Fetch) => get<{ enabled: boolean }>('/settings/proxy/', f),
-	setProxySetting: (enabled: boolean) => postJson<{ enabled: boolean }>('/settings/proxy/', { enabled })
+	setProxySetting: (enabled: boolean) => postJson<{ enabled: boolean }>('/settings/proxy/', { enabled }),
+	trackerNotes: (f?: Fetch) => get<TrackerNote[]>('/tracker-notes/', f),
+	upsertNote: (entity_type: 'event' | 'organizer', entity_slug: string, content: string) =>
+		postJson<TrackerNote>('/tracker-notes/', { entity_type, entity_slug, content }),
+	deleteNote: (id: number) => del(`/tracker-notes/${id}/`)
 };

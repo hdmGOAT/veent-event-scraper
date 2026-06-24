@@ -12,9 +12,9 @@
 	let sourceFilter = $state('');
 	let showAddForm = $state(false);
 	let newQuery = $state('');
-	let newSource = $state('facebook_events');
 	let adding = $state(false);
 	let addError = $state('');
+	let addSummary = $state('');
 
 	// Per-row run state: query id → partial run shape (only scraper_key is needed for polling)
 	let runningRows = $state<Map<number, { id: number; status: ScraperRunStatus; scraper_key: string } | null>>(new Map());
@@ -91,16 +91,49 @@
 	}
 
 	async function handleAdd() {
-		if (!newQuery.trim() || !newSource.trim()) return;
+		if (!newQuery.trim()) return;
+		const tokens = newQuery
+			.split(',')
+			.map((t) => t.trim())
+			.filter((t) => t.length > 0);
+		if (tokens.length === 0) return;
+
 		adding = true;
 		addError = '';
+		addSummary = '';
 		try {
-			const created = await api.createSearchQuery({ query: newQuery.trim(), source: newSource.trim() });
-			queries = [...queries, created];
-			newQuery = '';
-			showAddForm = false;
-		} catch (e) {
-			addError = e instanceof Error ? e.message : 'Failed to create query';
+			let added = 0;
+			let skipped = 0;
+			const created: SearchQuery[] = [];
+			for (const token of tokens) {
+				try {
+					created.push(await api.createSearchQuery({ query: token }));
+					added += 1;
+				} catch (e: unknown) {
+					// Only 409 (already exists) is a known expected failure; other errors propagate.
+					const status = e instanceof Error && 'status' in e ? (e as { status: number }).status : 0;
+					if (status === 409) {
+						skipped += 1;
+					} else {
+						throw e;
+					}
+				}
+			}
+
+			if (created.length > 0) {
+				queries = [...queries, ...created];
+			}
+
+			if (tokens.length > 1) {
+				addSummary = `${added} added, ${skipped} already existed`;
+			} else if (skipped > 0) {
+				addError = 'Query already exists';
+			}
+
+			if (added > 0) {
+				newQuery = '';
+				if (tokens.length === 1) showAddForm = false;
+			}
 		} finally {
 			adding = false;
 		}
@@ -223,32 +256,22 @@
 					<input
 						id="new-query"
 						type="text"
-						placeholder="e.g. events in CDO"
+						placeholder="e.g. events in CDO, tech events, startup"
 						bind:value={newQuery}
 						onkeydown={(e) => e.key === 'Enter' && handleAdd()}
-						class="w-full rounded-md border border-border bg-surface-2 px-3 py-2 text-sm text-text placeholder:text-muted focus:border-accent focus:outline-none"
-					/>
-				</div>
-				<div class="sm:w-48">
-					<label for="new-source" class="mb-1 block text-xs text-muted">Scraper source</label>
-					<input
-						id="new-source"
-						type="text"
-						placeholder="facebook_events"
-						bind:value={newSource}
 						class="w-full rounded-md border border-border bg-surface-2 px-3 py-2 text-sm text-text placeholder:text-muted focus:border-accent focus:outline-none"
 					/>
 				</div>
 				<div class="flex gap-2">
 					<button
 						onclick={handleAdd}
-						disabled={adding || !newQuery.trim() || !newSource.trim()}
+						disabled={adding || !newQuery.trim()}
 						class="rounded-md bg-accent px-4 py-2 text-sm font-medium text-bg transition hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-50"
 					>
 						{adding ? 'Adding…' : 'Add'}
 					</button>
 					<button
-						onclick={() => { showAddForm = false; addError = ''; newQuery = ''; }}
+						onclick={() => { showAddForm = false; addError = ''; addSummary = ''; newQuery = ''; }}
 						class="rounded-md border border-border px-4 py-2 text-sm text-muted transition hover:bg-surface-2 hover:text-text"
 					>
 						Cancel
@@ -257,6 +280,9 @@
 			</div>
 			{#if addError}
 				<p class="mt-2 text-xs text-danger">{addError}</p>
+			{/if}
+			{#if addSummary}
+				<p class="mt-2 text-xs text-success">{addSummary}</p>
 			{/if}
 		</div>
 	{/if}
@@ -312,7 +338,6 @@
 				<thead>
 					<tr class="border-b border-border text-left">
 						<th class="px-4 py-3 text-xs font-medium text-muted">Query</th>
-						<th class="px-4 py-3 text-xs font-medium text-muted">Source</th>
 						<th class="px-4 py-3 text-xs font-medium text-muted">Events found</th>
 						<th class="px-4 py-3 text-xs font-medium text-muted">Last run</th>
 						<th class="px-4 py-3 text-xs font-medium text-muted">Active</th>
@@ -324,11 +349,6 @@
 						{@const running = isRowRunning(sq)}
 						<tr class="group transition {running ? 'bg-accent/5' : 'hover:bg-surface-2'}">
 							<td class="px-4 py-3 font-medium text-text">{sq.query}</td>
-							<td class="px-4 py-3">
-								<span class="rounded-full bg-accent/10 px-2 py-0.5 text-xs font-medium text-accent">
-									{sq.source}
-								</span>
-							</td>
 							<td class="px-4 py-3 tabular-nums text-text">{sq.events_found_count.toLocaleString()}</td>
 							<td class="px-4 py-3 text-muted">{formatDate(sq.last_run_at)}</td>
 							<td class="px-4 py-3">

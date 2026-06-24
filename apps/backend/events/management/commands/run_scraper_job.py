@@ -103,10 +103,29 @@ class Command(BaseCommand):
             "--query-id", type=int, default=None,
             help="When set, only this SearchQuery.pk is processed (single-query run).",
         )
+        parser.add_argument(
+            "--query-ids", type=str, default=None,
+            help="Comma-separated SearchQuery PKs to restrict this run.",
+        )
+        parser.add_argument(
+            "--locations", type=str, default=None,
+            help="Comma-separated location suffixes to append to each search query.",
+        )
 
     def handle(self, *args, **options):
+        # This worker is a dedicated OS subprocess — no actual async code runs here.
+        # Playwright's sync API leaves a stopped (not running) event loop in the thread,
+        # which trips Django's async-context guard when ORM calls are made afterwards.
+        # The env var is Django's official escape hatch for this pattern.
+        import os as _os
+        _os.environ["DJANGO_ALLOW_ASYNC_UNSAFE"] = "true"
+
         run_id = options["run_id"]
         query_id = options.get("query_id")
+        raw_ids = options.get("query_ids")
+        query_ids = [int(x) for x in raw_ids.split(",") if x.strip()] if raw_ids else None
+        raw_locs = options.get("locations")
+        locations = [x.strip() for x in raw_locs.split(",") if x.strip()] if raw_locs else None
         try:
             run = ScraperRun.objects.get(id=run_id)
         except ScraperRun.DoesNotExist:
@@ -137,6 +156,16 @@ class Command(BaseCommand):
             return  # Already cancelled — exit without doing any work.
         run.refresh_from_db()
 
+        def flush_progress(data: dict) -> None:
+            """Write incremental progress keys into extra_counts without clobbering other keys."""
+            try:
+                run.refresh_from_db(fields=["extra_counts"])
+                merged = {**run.extra_counts, **data}
+                ScraperRun.objects.filter(pk=run.pk).update(extra_counts=merged)
+                run.extra_counts = merged  # keep in-memory copy in sync
+            except Exception:
+                traceback.print_exc()
+
         # Attach the DB log handler so all Python logging from this process
         # (including scrapers, HTTP libraries, Playwright, etc.) flows into
         # ScraperRun.log_output and becomes visible in the UI.
@@ -149,14 +178,28 @@ class Command(BaseCommand):
         original_level = root_logger.level
         root_logger.setLevel(logging.DEBUG)
         root_logger.addHandler(handler)
+        # The 'events' logger has propagate=False in settings.LOGGING so its records
+        # never reach the root logger. Attach the handler directly so scraper logs
+        # (events.scrapers.*) appear in the UI log terminal.
+        events_logger = logging.getLogger("events")
+        events_logger.addHandler(handler)
 
         try:
             scraper = SCRAPERS[key]()
-            result = scraper.run(query_id=query_id) if query_id else scraper.run()
+            result = (
+                scraper.run(query_ids=query_ids, locations=locations, on_progress=flush_progress)
+                if query_ids
+                else (
+                    scraper.run(query_id=query_id, locations=locations, on_progress=flush_progress)
+                    if query_id
+                    else scraper.run(on_progress=flush_progress)
+                )
+            )
         except Exception:
             tb = traceback.format_exc()
             handler.stop()
             root_logger.removeHandler(handler)
+            events_logger.removeHandler(handler)
             root_logger.setLevel(original_level)
             run.status = ScraperRun.Status.FAILED
             run.finished_at = timezone.now()
@@ -170,6 +213,7 @@ class Command(BaseCommand):
         # in the same poll tick as the SUCCESS status.
         handler.stop()
         root_logger.removeHandler(handler)
+        events_logger.removeHandler(handler)
         root_logger.setLevel(original_level)
 
         created, updated, extra_counts = _map_result(result)

@@ -229,6 +229,38 @@ class Organizer(models.Model):
         return self.status != self.STATUS_REJECTED
 
 
+class TrackerNote(models.Model):
+    """A free-text note attached to a single Event or Organizer by the tracker UI."""
+
+    event = models.OneToOneField(
+        "Event", null=True, blank=True,
+        on_delete=models.CASCADE, related_name="tracker_note",
+    )
+    organizer = models.OneToOneField(
+        "Organizer", null=True, blank=True,
+        on_delete=models.CASCADE, related_name="tracker_note",
+    )
+    content = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    models.Q(event__isnull=False, organizer__isnull=True)
+                    | models.Q(event__isnull=True, organizer__isnull=False)
+                ),
+                name="tracker_note_exactly_one_entity",
+            )
+        ]
+
+    def __str__(self):
+        if self.event_id:
+            return f"Note for event {self.event_id}"
+        return f"Note for organizer {self.organizer_id}"
+
+
 class SearchQuery(models.Model):
     """A search term to run against a specific scraper source.
 
@@ -240,7 +272,9 @@ class SearchQuery(models.Model):
     query = models.CharField(max_length=500)
     source = models.CharField(
         max_length=120,
-        help_text="Scraper key this query belongs to, e.g. 'facebook_events'.",
+        blank=True,
+        default="",
+        help_text="Scraper key that found this query, if any. Legacy field.",
     )
     is_active = models.BooleanField(default=True, db_index=True)
     last_run_at = models.DateTimeField(null=True, blank=True)
@@ -250,15 +284,13 @@ class SearchQuery(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        ordering = ["source", "query"]
+        ordering = ["query"]
         constraints = [
-            models.UniqueConstraint(
-                fields=["source", "query"], name="unique_source_query"
-            )
+            models.UniqueConstraint(fields=["query"], name="unique_query")
         ]
 
     def __str__(self):
-        return f"[{self.source}] {self.query}"
+        return self.query
 
 
 class ScraperRun(models.Model):

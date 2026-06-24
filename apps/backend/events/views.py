@@ -16,8 +16,8 @@ from django.views.decorators.http import require_POST
 logger = logging.getLogger(__name__)
 
 from .categories import normalize_category
-from .models import Event, Organizer, ScraperRun, SearchQuery, Venue
-from .runner import cancel_run, trigger_scraper_run
+from .models import Event, Organizer, ScraperRun, SearchQuery, TrackerNote, Venue
+from .runner import AVAILABLE_LOCATIONS, cancel_run, trigger_scraper_run
 
 
 def event_list(request):
@@ -452,8 +452,27 @@ def api_organizers_export(request):
     return response
 
 
+@csrf_exempt
 def api_organizer_detail(request, slug):
+    import json as _json
     organizer = get_object_or_404(Organizer, slug=slug)
+
+    if request.method == "PATCH":
+        try:
+            body = _json.loads(request.body)
+        except ValueError:
+            return JsonResponse({"error": "Invalid JSON"}, status=400)
+        new_status = body.get("status", "").strip()
+        valid = {Organizer.STATUS_PENDING, Organizer.STATUS_CONFIRMED, Organizer.STATUS_REJECTED}
+        if new_status not in valid:
+            return JsonResponse({"error": "Invalid status"}, status=400)
+        organizer.status = new_status
+        organizer.save(update_fields=["status"])
+        return JsonResponse({"slug": organizer.slug, "status": organizer.status})
+
+    if request.method != "GET":
+        return JsonResponse({"error": "Method not allowed"}, status=405)
+
     events = list(
         organizer.events.select_related("venue").order_by("-starts_at")[:50]
     )
@@ -670,8 +689,43 @@ def api_scraper_trigger(request, key):
     if key not in SCRAPERS:
         return JsonResponse({"error": "Unknown scraper key"}, status=404)
 
+    body = {}
+    if request.body and "application/json" in request.content_type:
+        try:
+            body = json.loads(request.body)
+        except (json.JSONDecodeError, ValueError):
+            return JsonResponse({"error": "Invalid JSON"}, status=400)
+    query_ids = body.get("query_ids")
+    if query_ids is not None and not (
+        isinstance(query_ids, list) and all(isinstance(i, int) for i in query_ids)
+    ):
+        return JsonResponse(
+            {"error": "query_ids must be a list of integers"}, status=400
+        )
+    if isinstance(query_ids, list) and len(query_ids) == 0:
+        return JsonResponse({"error": "query_ids must not be empty"}, status=400)
+
+    locations = body.get("locations")
+    if locations is not None:
+        if not isinstance(locations, list) or not all(isinstance(l, str) for l in locations):
+            return JsonResponse({"error": "locations must be a list of strings"}, status=400)
+        if len(locations) == 0:
+            return JsonResponse({"error": "locations must not be empty"}, status=400)
+        unknown = [l for l in locations if l not in AVAILABLE_LOCATIONS]
+        if unknown:
+            return JsonResponse({"error": f"Unknown location: '{unknown[0]}'"}, status=400)
+
+    scraper_cls = SCRAPERS[key]
+    if (query_ids or locations) and not getattr(scraper_cls, "supports_keywords", False):
+        return JsonResponse(
+            {"error": f"Scraper '{key}' does not support keyword/location targeting"},
+            status=400,
+        )
+
     triggered_by = request.user if request.user.is_authenticated else None
-    run, already_active = trigger_scraper_run(key, triggered_by=triggered_by)
+    run, already_active = trigger_scraper_run(
+        key, triggered_by=triggered_by, query_ids=query_ids, locations=locations
+    )
     if already_active:
         return JsonResponse({"error": "Scraper already running"}, status=409)
 
@@ -708,7 +762,7 @@ def api_dedup_trigger(request):
     import sys
     from pathlib import Path
 
-    scripts_dir = Path(__file__).resolve().parent.parent.parent / "scripts"
+    scripts_dir = Path(__file__).resolve().parent.parent / "scripts"
     python = sys.executable
 
     entity = request.POST.get("entity") or "all"  # default: all
@@ -765,15 +819,18 @@ def api_script_trigger(request, script_name: str):
     if script_name not in _ALLOWED_SCRIPTS:
         return JsonResponse({"error": f"Unknown script: {script_name}"}, status=400)
 
-    scripts_dir = Path(__file__).resolve().parent.parent.parent / "scripts"
+    scripts_dir = Path(__file__).resolve().parent.parent / "scripts"
     python = sys.executable
     script_file = scripts_dir / _ALLOWED_SCRIPTS[script_name]
 
     try:
+        env = os.environ.copy()
+        env["PYTHONIOENCODING"] = "utf-8"
         process = subprocess.Popen(
             [python, str(script_file)],
             cwd=str(scripts_dir.parent),
             start_new_session=True,
+            env=env,
         )
         return JsonResponse({"started": True, "script": script_name, "pid": process.pid})
     except Exception as exc:  # noqa: BLE001
@@ -872,6 +929,9 @@ def api_scrapers(request):
                 "key": key,
                 "last_scraped": last_scraped.isoformat() if last_scraped else None,
                 "last_run": last_run,
+                "supports_keywords": getattr(
+                    SCRAPERS[key], "supports_keywords", False
+                ),
             }
         )
 
@@ -915,16 +975,15 @@ def api_search_queries(request):
 
         query = (data.get("query") or "").strip()
         source = (data.get("source") or "").strip()
-        if not query or not source:
-            return JsonResponse({"error": "query and source are required"}, status=400)
+        if not query:
+            return JsonResponse({"error": "query is required"}, status=400)
 
         sq, created = SearchQuery.objects.get_or_create(
             query=query,
-            source=source,
-            defaults={"is_active": data.get("is_active", True)},
+            defaults={"is_active": data.get("is_active", True), "source": source},
         )
         if not created:
-            return JsonResponse({"error": "Query already exists for this source"}, status=409)
+            return JsonResponse({"error": "Query already exists"}, status=409)
 
         return JsonResponse(_serialize_search_query(sq), status=201)
 
@@ -942,8 +1001,12 @@ def api_search_query_run(request, pk):
     """
     sq = get_object_or_404(SearchQuery, pk=pk)
     triggered_by = request.user if request.user.is_authenticated else None
+    # Rows created without a source default to the only query-capable scraper
+    # today (facebook_events). When other scrapers opt in, they will set source
+    # on creation or a richer lookup will be added.
+    scraper_key = sq.source or "facebook_events"
     run, already_active = trigger_scraper_run(
-        sq.source, triggered_by=triggered_by, query_id=sq.pk
+        scraper_key, triggered_by=triggered_by, query_id=sq.pk
     )
     if already_active:
         return JsonResponse({"error": "This query is already running"}, status=409)
@@ -1095,3 +1158,75 @@ def ingest_events_webhook(request):
 
     result = save_events(source, scraped_events)
     return JsonResponse({"success": True, **result})
+
+
+# ---------------------------------------------------------------------------
+# Tracker notes — lightweight note attached to one event or organizer.
+# ---------------------------------------------------------------------------
+
+def _serialize_note(note):
+    return {
+        "id": note.id,
+        "content": note.content,
+        "updated_at": note.updated_at.isoformat(),
+        "event_slug": note.event.slug if note.event_id else None,
+        "organizer_slug": note.organizer.slug if note.organizer_id else None,
+    }
+
+
+@csrf_exempt
+def api_tracker_notes(request):
+    if request.method == "GET":
+        notes = TrackerNote.objects.select_related("event", "organizer").all()
+        return JsonResponse([_serialize_note(n) for n in notes], safe=False)
+
+    if request.method == "POST":
+        try:
+            data = json.loads(request.body)
+        except (json.JSONDecodeError, ValueError):
+            return JsonResponse({"error": "Invalid JSON"}, status=400)
+
+        entity_type = (data.get("entity_type") or "").strip()
+        entity_slug = (data.get("entity_slug") or "").strip()
+        content = (data.get("content") or "").strip()
+
+        if entity_type not in ("event", "organizer") or not entity_slug:
+            return JsonResponse({"error": "entity_type and entity_slug required"}, status=400)
+
+        if entity_type == "event":
+            entity = get_object_or_404(Event, slug=entity_slug)
+            note, created = TrackerNote.objects.update_or_create(
+                event=entity,
+                defaults={"content": content, "organizer": None},
+            )
+        else:
+            entity = get_object_or_404(Organizer, slug=entity_slug)
+            note, created = TrackerNote.objects.update_or_create(
+                organizer=entity,
+                defaults={"content": content, "event": None},
+            )
+
+        note.refresh_from_db()
+        return JsonResponse(_serialize_note(note), status=201 if created else 200)
+
+    return JsonResponse({"error": "Method not allowed"}, status=405)
+
+
+@csrf_exempt
+def api_tracker_note_detail(request, pk):
+    note = get_object_or_404(TrackerNote.objects.select_related("event", "organizer"), pk=pk)
+
+    if request.method == "PATCH":
+        try:
+            data = json.loads(request.body)
+        except (json.JSONDecodeError, ValueError):
+            return JsonResponse({"error": "Invalid JSON"}, status=400)
+        note.content = (data.get("content") or "").strip()
+        note.save(update_fields=["content", "updated_at"])
+        return JsonResponse(_serialize_note(note))
+
+    if request.method == "DELETE":
+        note.delete()
+        return JsonResponse({}, status=204)
+
+    return JsonResponse({"error": "Method not allowed"}, status=405)
