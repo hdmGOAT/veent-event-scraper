@@ -288,12 +288,28 @@ _EXTRACT_DETAIL_JS = r"""
     if (!title) return { events: [], debug: { error: 'no title' } };
 
     let start_datetime = null;
-    for (const el of document.querySelectorAll('span, div, h2, strong')) {
-        if (isInSidebarNav(el)) continue;
-        const t = leafText(el);
-        if (!t || t.length < 8 || t.length > 100) continue;
-        if (FULL_MONTH_RE.test(t) && /\bat\b/i.test(t)) { start_datetime = t; break; }
-        if (FULL_MONTH_RE.test(t) && /\d{4}/.test(t))   { start_datetime = t; break; }
+    // FB injects a <time datetime="..."> with a clean ISO or locale string —
+    // prefer it over free-text scanning to avoid picking up concatenated blobs.
+    const timeEl = document.querySelector('time[datetime]');
+    if (timeEl) {
+        start_datetime = timeEl.getAttribute('datetime') || timeEl.textContent.trim();
+    }
+    if (!start_datetime) {
+        // Fallback text scan. Cap at 70 chars: real date strings fit; the
+        // concatenated title+date+venue blobs from nested elements don't.
+        // Month must appear adjacent to a day number — prevents titles with a year
+        // (e.g. 'Conference 2026 August') from being mistaken for date strings.
+        const MONTH_DAY_RE = /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|january|february|march|april|june|july|august|september|october|november|december)\s+\d{1,2}\b|\b\d{1,2}\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|january|february|march|april|june|july|august|september|october|november|december)\b/i;
+        for (const el of document.querySelectorAll('span, div, h2, strong')) {
+            if (isInSidebarNav(el)) continue;
+            if (el.children.length > 0) continue;
+            const t = (el.textContent || '').trim().replace(/ /g, ' ');
+            if (!t || t.length < 8 || t.length > 70) continue;
+            if (!MONTH_DAY_RE.test(t)) continue;
+            if (/\b(?:at|from)\s+\d{1,2}[: ]\d{0,2}/i.test(t)) { start_datetime = t; break; }
+            if (/\d{4}/.test(t)) { start_datetime = t; break; }
+            if (/^\w{3},\s/.test(t)) { start_datetime = t; break; }
+        }
     }
 
     // ── Organizer: "Event by [linked NAME]" ─────────────────────────────────
@@ -657,33 +673,224 @@ def _human_scroll(page, rounds: int | None = None) -> None:
 
 # ── Date parsing ──────────────────────────────────────────────────────────────
 
+# Minutes-from-UTC for common timezone abbreviations. Used instead of
+# defaulting everything to PHT when we can identify the suffix.
+# CST is mapped to US Central (-360); China Standard (+480) loses this race
+# because FB English events that show CST are predominantly US-based.
+_TZ_OFFSETS: dict[str, int] = {
+    "NST": -210, "NDT": -150,
+    "AST": -240, "ADT": -180,
+    "EST": -300, "EDT": -240,
+    "CST": -360, "CDT": -300,
+    "MST": -420, "MDT": -360,
+    "PST": -480, "PDT": -420,
+    "AKST": -540, "AKDT": -480,
+    "HST": -600,
+    "GMT": 0, "UTC": 0, "WET": 0,
+    "WEST": 60, "BST": 60, "CET": 60,
+    "CEST": 120, "EET": 120, "CAT": 120, "SAST": 120,
+    "EEST": 180, "MSK": 180, "EAT": 180,
+    "GST": 240,
+    "PKT": 300, "IST": 330,
+    "WIB": 420,
+    "SGT": 480, "HKT": 480, "PHT": 480, "MYT": 480, "AWST": 480,
+    "JST": 540, "KST": 540, "WIT": 540,
+    "AEST": 600,
+    "AEDT": 660,
+    "NZST": 720,
+    "NZDT": 780,
+}
+
 _DATE_FMTS = (
-    "%A, %B %d, %Y at %I %p",
-    "%A, %B %d, %Y at %I:%M %p",
-    "%B %d, %Y at %I %p",
-    "%B %d, %Y at %I:%M %p",
-    "%A, %B %d at %I %p",
-    "%B %d at %I %p",
+    # Abbreviated weekday + day-first (from card <time> elements)
+    "%a, %d %b at %H:%M",          # "Fri, 24 Jul at 00:00"
+    "%a, %d %b at %I:%M %p",       # "Fri, 24 Jul at 8:00 PM"
+    "%a, %d %b at %I %p",          # "Fri, 24 Jul at 8 PM"
+    "%a, %d %b",                   # "Mon, 17 Aug"
+    # Abbreviated weekday + month-first (FB also uses this locale)
+    "%a, %b %d at %H:%M",          # "Fri, Jul 24 at 00:00"
+    "%a, %b %d at %I:%M %p",       # "Fri, Jul 24 at 12:00 AM"
+    "%a, %b %d at %I %p",          # "Fri, Jul 24 at 12 AM"
+    "%a, %b %d",                   # "Mon, Aug 17"
+    # Abbreviated month, no weekday (e.g. detail page range start after splitting)
+    "%b %d at %I:%M %p",           # "Jun 26 at 8:00 AM"
+    "%b %d at %I %p",              # "Jun 26 at 8 AM"
+    "%b %d at %H:%M",              # "Jun 26 at 08:00"
+    "%d %b at %I:%M %p",           # "26 Jun at 8:00 AM"
+    "%d %b at %I %p",              # "26 Jun at 8 AM"
+    "%d %b at %H:%M",              # "26 Jun at 08:00"
+    "%d %b %Y at %H:%M",           # "23 Apr 2027 at 19:00"
+    "%d %b %Y at %I:%M %p",        # "23 Apr 2027 at 8:00 PM"
+    "%d %b %Y at %I %p",           # "23 Apr 2027 at 8 PM"
+    "%d %b %Y",                    # "23 Apr 2027"
+    "%b %d, %Y at %I:%M %p",       # "Jun 26, 2026 at 8:00 AM"
+    "%b %d, %Y at %I %p",          # "Jun 26, 2026 at 8 AM"
+    "%b %d, %Y",                   # "Jun 26, 2026"
+    "%b %d",                       # "Jun 26"
+    # Day-first, full month name, 24h time (EU/PH locale)
+    "%A %d %B %Y at %H:%M",        # "Sunday 28 June 2026 at 10:00"
+    "%A, %d %B %Y at %H:%M",       # "Sunday, 28 June 2026 at 10:00"
+    "%A %d %B %Y",                 # "Sunday 28 June 2026"
+    # Full month name, month-first, with year
+    "%A, %B %d, %Y at %I:%M %p",   # "Saturday, June 28, 2025 at 8:30 PM"
+    "%A, %B %d, %Y at %I %p",      # "Saturday, June 28, 2025 at 8 PM"
+    "%B %d, %Y at %I:%M %p",       # "June 28, 2025 at 8:30 PM"
+    "%B %d, %Y at %I %p",          # "June 28, 2025 at 8 PM"
+    # Full month name, month-first, no year
+    "%A, %B %d at %I:%M %p",       # "Saturday, June 28 at 8:30 PM"
+    "%A, %B %d at %I %p",          # "Saturday, June 28 at 8 PM"
+    "%B %d at %I:%M %p",           # "June 28 at 8:30 PM"
+    "%B %d at %I %p",              # "June 28 at 8 PM"
+    # Date-only (no time) — year present or absent
+    "%B %d, %Y",                   # "June 28, 2026"
+    "%B %d",                       # "April 9"  (year inferred as current)
 )
 
+# Time-only formats used when the end portion of a range is just a clock time.
+_TIME_ONLY_FMTS = ("%I:%M %p", "%I %p", "%H:%M")
 
-def _parse_fb_date(raw: str | None) -> datetime | None:
-    if not raw:
-        return None
-    raw = raw.strip()
-    # Strip end-time suffix: "Saturday, June 28, 2025 at 8 PM – 11 PM" → "…at 8 PM"
-    # FB always shows "start – end" in the same text element.
-    raw = re.sub(r'\s*[–\-]\s*\d.*$', '', raw).strip()
+# Date-only formats used when the end portion is just a month+day (multi-day range).
+_DATE_ONLY_FMTS = ("%d %b", "%b %d")
+
+
+def _normalize_raw(raw: str) -> str:
+    raw = re.sub(r'[\u200b\u200c\u200d\ufeff]', '', raw).strip()
+    raw = re.sub(r'^[A-Za-z]+:\s*', '', raw)
+    raw = raw.replace('\u202f', ' ')
+    return raw
+
+
+def _extract_tz(raw: str) -> tuple[str, dt_timezone | None]:
+    """Pull a timezone indicator off the end of raw.
+
+    Handles:
+    - Named abbreviations: PST, CEST, PHT, \u2026
+    - Numeric offsets:  +08, +10, -05, +05:30
+    Returns (raw_without_tz, tz_or_None).
+    """
+    # Named abbreviation (e.g. " PST", " CEST")
+    m = re.search(r'\s+([A-Z]{2,5})((?:\s*[\-\u2013]\s*\S.*)?)$', raw)
+    if m:
+        abbr = m.group(1)
+        if abbr not in ('AM', 'PM') and abbr in _TZ_OFFSETS:
+            tz = dt_timezone(timedelta(minutes=_TZ_OFFSETS[abbr]))
+            raw = (raw[:m.start()] + m.group(2)).strip()
+            return raw, tz
+
+    # Numeric UTC offset (e.g. " +08", " -05", " +05:30")
+    m = re.search(r'\s+([+-]\d{2})(?::(\d{2}))?$', raw)
+    if m:
+        hours = int(m.group(1))
+        mins = int(m.group(2) or 0)
+        tz = dt_timezone(timedelta(hours=hours, minutes=mins if hours >= 0 else -mins))
+        raw = raw[:m.start()].strip()
+        return raw, tz
+
+    return raw, None
+
+
+def _strptime_dt(s: str, tz: dt_timezone | None) -> datetime | None:
+    s = re.sub(r'\bfrom\b', 'at', s, flags=re.IGNORECASE)
     for fmt in _DATE_FMTS:
         try:
-            dt = datetime.strptime(raw, fmt)
+            dt = datetime.strptime(s, fmt)
             if dt.year == 1900:
                 dt = dt.replace(year=datetime.now().year)
-            return dt.replace(tzinfo=_PHT).astimezone(dt_timezone.utc)
+            return dt.replace(tzinfo=tz or _PHT).astimezone(dt_timezone.utc)
         except ValueError:
             continue
     return None
 
+
+def _parse_end_time(end_raw: str, start_dt: datetime, tz: dt_timezone | None) -> datetime | None:
+    end_raw = end_raw.strip().replace('\u202f', ' ')
+    end_raw = re.sub(r'\s+(?!AM|PM)[A-Z]{2,5}$', '', end_raw).strip()
+
+    # Time-only end ("11 PM", "22:00") — apply to start date
+    for fmt in _TIME_ONLY_FMTS:
+        try:
+            t = datetime.strptime(end_raw, fmt)
+            end_dt = start_dt.replace(hour=t.hour, minute=t.minute, second=0, microsecond=0)
+            if end_dt <= start_dt:
+                end_dt += timedelta(days=1)
+            return end_dt
+        except ValueError:
+            continue
+
+    # Date-only end ("5 Jul", "Aug 23") — same time as start, different day
+    for fmt in _DATE_ONLY_FMTS:
+        try:
+            t = datetime.strptime(end_raw, fmt)
+            return start_dt.replace(month=t.month, day=t.day)
+        except ValueError:
+            continue
+
+    return _strptime_dt(end_raw, tz)
+
+
+def _parse_fb_date(raw: str | None) -> tuple[datetime | None, datetime | None]:
+    """Parse a raw FB date string into (start_dt, end_dt), both UTC.
+
+    Handles timezone abbreviations (mapped to real offsets, not defaulted to PHT),
+    time ranges ("8 PM \u2013 11 PM", "10:00-22:00", "Aug 17 - Aug 23"),
+    "from" instead of "at", zero-width spaces, and WHEN: prefixes.
+    Falls back to PHT only when no timezone can be identified.
+    """
+    if not raw:
+        return None, None
+    raw = raw.strip()
+
+    # ISO 8601 from <time datetime="..."> — clean path
+    try:
+        dt = datetime.fromisoformat(raw.rstrip("Z"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=_PHT)
+        return dt.astimezone(dt_timezone.utc), None
+    except ValueError:
+        pass
+
+    raw = _normalize_raw(raw)
+    raw, tz = _extract_tz(raw)
+
+    # ── Split range into start / end portions ───────────────────────────────
+
+    end_raw: str | None = None
+
+    if '\u2013' in raw:
+        # En-dash is FB's canonical range separator: "8 PM \u2013 11 PM"
+        start_part, end_part = raw.split('\u2013', 1)
+        raw, end_raw = start_part.strip(), end_part.strip()
+
+    elif re.search(r'\d{1,2}:\d{2}-\d{1,2}:\d{2}', raw):
+        # 24h time range: "10:00-22:00"
+        m = re.search(r'(\d{1,2}:\d{2})-(\d{1,2}:\d{2})', raw)
+        end_raw = m.group(2)
+        raw = raw[:m.start()] + m.group(1) + raw[m.end():]
+
+    elif re.search(r'\d{1,2}\s+[A-Za-z]{3}-\d{1,2}', raw):
+        # Compact multi-day range: "17 Aug-23 Aug", "3 Jul-5 Jul"
+        m = re.search(r'(\d{1,2}\s+[A-Za-z]{3,})-(\d{1,2}\s+[A-Za-z]{3,})', raw)
+        if m:
+            end_raw = m.group(2).strip()
+            raw = raw[:m.start()] + m.group(1) + raw[m.end():]
+
+    else:
+        # Spaced hyphen: "Aug 17 - Aug 23"
+        m = re.search(r'\s+-\s+(\S.*)$', raw)
+        if m:
+            end_raw = m.group(1).strip()
+            raw = raw[:m.start()].strip()
+
+    # Strip any remaining timezone suffix after range split
+    raw = re.sub(r'\s+(?!AM|PM)[A-Z]{2,5}$', '', raw).strip()
+
+    start_dt = _strptime_dt(raw, tz)
+    if start_dt is None:
+        logger.info("[facebook_events] _parse_fb_date: no format matched raw=%r", raw)
+        return None, None
+
+    end_dt = _parse_end_time(end_raw, start_dt, tz) if end_raw else None
+    return start_dt, end_dt
 
 # ── Scraper ───────────────────────────────────────────────────────────────────
 
@@ -865,6 +1072,7 @@ class FacebookEventsScraper(BaseScraper):
         )
 
         processed = 0
+        _consec_proxy_failures = 0
         for card in cards:
             if max_events is not None and processed >= max_events:
                 break
@@ -875,7 +1083,15 @@ class FacebookEventsScraper(BaseScraper):
             _pause(1.5, 3.5)
             try:
                 self._goto(page, event_url)
+                _consec_proxy_failures = 0
             except Exception as exc:
+                exc_str = str(exc)
+                if any(e in exc_str for e in ("ERR_PROXY_CONNECTION_FAILED", "ERR_TUNNEL_CONNECTION_FAILED", "ERR_SOCKS_CONNECTION_FAILED")):
+                    _consec_proxy_failures += 1
+                    if _consec_proxy_failures >= 2:
+                        raise RuntimeError(
+                            f"proxy dead: {_consec_proxy_failures} consecutive detail page connection failures"
+                        ) from exc
                 logger.warning("detail page failed for %s: %s", event_url, exc)
                 continue
             _pause(1.5, 3.5)
@@ -917,7 +1133,17 @@ class FacebookEventsScraper(BaseScraper):
             country        = loc_parts[-1] if len(loc_parts) >= 2 else ""
             organizer      = d.get("organizer_name") or card.get("organizer_name") or ""
             organizer_url  = d.get("organizer_url") or ""
-            start_raw      = d.get("start_datetime") or card.get("start_datetime")
+            detail_raw = d.get("start_datetime")
+            card_raw   = card.get("start_datetime")
+            starts_at, ends_at = _parse_fb_date(detail_raw)
+            if starts_at is None and card_raw:
+                # Detail page date failed to parse — fall back to card value.
+                starts_at, ends_at = _parse_fb_date(card_raw)
+            start_raw = detail_raw or card_raw
+            logger.info(
+                "[facebook_events] start_raw: detail=%r card=%r → starts_at=%s",
+                detail_raw, card_raw, starts_at,
+            )
             external_id    = d.get("event_id") or card.get("event_id", "")
             description    = d.get("description") or card.get("short_description") or ""
             image_url      = d.get("image_url") or ""
@@ -940,7 +1166,8 @@ class FacebookEventsScraper(BaseScraper):
                 description=description,
                 image_url=image_url,
                 registration_url=registration_url,
-                starts_at=_parse_fb_date(start_raw),
+                starts_at=starts_at,
+                ends_at=ends_at,
                 url=event_url,
                 external_id=external_id,
                 source_url=search_url,
