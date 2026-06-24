@@ -807,13 +807,17 @@ def _parse_end_time(end_raw: str, start_dt: datetime, tz: dt_timezone | None) ->
     end_raw = re.sub(r'\s+(?!AM|PM)[A-Z]{2,5}$', '', end_raw).strip()
 
     # Time-only end ("11 PM", "22:00") — apply to start date
+    # Work in local time so time-only and date-only overrides land on the right wall-clock value.
+    local_tz = tz or _PHT
+    start_local = start_dt.astimezone(local_tz)
+
     for fmt in _TIME_ONLY_FMTS:
         try:
             t = datetime.strptime(end_raw, fmt)
-            end_dt = start_dt.replace(hour=t.hour, minute=t.minute, second=0, microsecond=0)
-            if end_dt <= start_dt:
+            end_dt = start_local.replace(hour=t.hour, minute=t.minute, second=0, microsecond=0)
+            if end_dt <= start_local:
                 end_dt += timedelta(days=1)
-            return end_dt
+            return end_dt.astimezone(dt_timezone.utc)
         except ValueError:
             continue
 
@@ -821,7 +825,7 @@ def _parse_end_time(end_raw: str, start_dt: datetime, tz: dt_timezone | None) ->
     for fmt in _DATE_ONLY_FMTS:
         try:
             t = datetime.strptime(end_raw, fmt)
-            return start_dt.replace(month=t.month, day=t.day)
+            return start_local.replace(month=t.month, day=t.day).astimezone(dt_timezone.utc)
         except ValueError:
             continue
 
@@ -841,8 +845,9 @@ def _parse_fb_date(raw: str | None) -> tuple[datetime | None, datetime | None]:
     raw = raw.strip()
 
     # ISO 8601 from <time datetime="..."> — clean path
+    # Replace trailing Z with +00:00 so fromisoformat treats it as UTC, not naive.
     try:
-        dt = datetime.fromisoformat(raw.rstrip("Z"))
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=_PHT)
         return dt.astimezone(dt_timezone.utc), None
@@ -1277,7 +1282,8 @@ class FacebookEventsScraper(BaseScraper):
         # pages for organizers whose contact details we've already scraped.
         from events.models import Organizer
         seen_org_urls: set[str] = set(
-            Organizer.objects.exclude(facebook_url="").values_list("facebook_url", flat=True)
+            url.rstrip("/")
+            for url in Organizer.objects.exclude(facebook_url="").values_list("facebook_url", flat=True)
         )
         seen_org_keys: set[str] = set()     # dedup organizer upserts globally
         total_created = total_updated = 0
@@ -1333,7 +1339,7 @@ class FacebookEventsScraper(BaseScraper):
                         try:
                             cards = list(self._fetch_for_query(page, effective_term, max_events=max_events))
                             attempt_delta = self._bytes_transferred - attempt_bytes_before
-                            if not cards and attempt_delta < 2_000_000 and using_free_proxy and _kattempt < _KEYWORD_RETRIES:
+                            if not cards and attempt_delta < 2_000_000 and using_free_proxy:
                                 # Near-zero bytes + 0 cards means the proxy swallowed the
                                 # connection silently. A real "no results" page still loads
                                 # FB's full shell (hundreds of KB). Rotate and retry.
@@ -1342,12 +1348,12 @@ class FacebookEventsScraper(BaseScraper):
                                     "[%s] search '%s': 0 cards + %.2f MB on attempt %d/%d — likely blocked proxy, retrying",
                                     self.source, effective_term, attempt_delta / 1_048_576, _kattempt, _KEYWORD_RETRIES,
                                 )
-                                if using_free_proxy:
+                                if _kattempt < _KEYWORD_RETRIES:
                                     new_proxy = self._rotate_free_proxy()
                                     if new_proxy:
                                         proxy = new_proxy
                                         failure_score = 0
-                                _pause(3.0, 6.0)
+                                    _pause(3.0, 6.0)
                             else:
                                 _fetched = True
                                 failure_score = max(0, failure_score - 1)  # ease off on success

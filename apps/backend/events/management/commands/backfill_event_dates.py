@@ -104,7 +104,7 @@ class Command(BaseCommand):
                         try:
                             scraper._goto(page, event.url, retries=1)
                             _pause(*_PAUSE_BETWEEN)
-                            self.stdout.write(f"     loaded, extracting date...")
+                            self.stdout.write("     loaded, extracting date...")
                             page.evaluate(_DISMISS_MODAL_JS)
                             _pause(0.5, 1.0)
                             detail = page.evaluate(_EXTRACT_DETAIL_JS, event.name or "")
@@ -163,7 +163,7 @@ class Command(BaseCommand):
                         continue
 
                     if not dry_run:
-                        Event.objects.filter(pk=event.pk).update(
+                        Event.objects.filter(pk=event.pk, starts_at__isnull=True).update(
                             starts_at=starts_at,
                             ends_at=ends_at,
                         )

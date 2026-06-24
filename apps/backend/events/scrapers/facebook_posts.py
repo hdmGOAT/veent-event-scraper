@@ -435,10 +435,10 @@ def _parse_post_date(raw: str | None) -> datetime | None:
         return dt
     except ValueError:
         pass
-    dt = _parse_fb_date(raw)
-    if dt is not None and dt.tzinfo is None:
-        dt = dt.replace(tzinfo=dt_timezone.utc)
-    return dt
+    start_dt, _ = _parse_fb_date(raw)
+    if start_dt is not None and start_dt.tzinfo is None:
+        start_dt = start_dt.replace(tzinfo=dt_timezone.utc)
+    return start_dt
 
 
 def _post_external_id(post_url: str) -> str:
