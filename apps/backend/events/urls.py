@@ -19,6 +19,7 @@ urlpatterns = [
     path("api/stats/", views.api_stats, name="api_stats"),
     path("api/events/by-source/", views.api_events_by_source, name="api_events_by_source"),
     path("api/events/by-category/", views.api_events_by_category, name="api_events_by_category"),
+    path("api/events/agent-categories/", views.api_agent_categories, name="api_agent_categories"),
     path("api/events/", views.api_events, name="api_events"),
     path("api/organizers/export/", views.api_organizers_export, name="api_organizers_export"),
     path("api/organizers/<slug:slug>/", views.api_organizer_detail, name="api_organizer_detail"),
