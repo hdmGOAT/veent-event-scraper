@@ -11,7 +11,7 @@ Usage in scrapers:
     resp = session.get("https://example.com", timeout=20)
 
 When proxy mode is active the first call downloads the public proxy list,
-shuffles it, and tests candidates until one passes an HTTPS connectivity check.
+shuffles it, and tests candidates until one passes a Facebook connectivity check.
 The working proxy is cached in a module-level Session so all subsequent
 ``get_session()`` calls reuse the same proxy without re-testing.
 
@@ -40,13 +40,15 @@ _PROXY_LIST_URLS = [
     "https://raw.githubusercontent.com/mmpx12/proxy-list/master/http.txt",
     "https://raw.githubusercontent.com/roosterkid/openproxylist/main/HTTPS_RAW.txt",
 ]
-# Test HTTPS tunneling explicitly — we need proxies that support CONNECT, since
-# most scraped sites use HTTPS. Plain HTTP tests elect proxies that pass but
-# then fail on HTTPS targets.
-_TEST_URL = "https://httpbin.org/ip"
-_CONNECT_TIMEOUT = 5   # seconds to establish TCP connection
-_READ_TIMEOUT = 8      # seconds to receive first byte
-_TEST_WORKERS = 20     # concurrent proxy testers
+# Test against Facebook directly — proxies that pass a generic HTTPS check
+# (e.g. httpbin.org) still fail on Facebook due to IP blocks or missing CONNECT
+# support. Testing robots.txt is lightweight, requires no JS, and confirms the
+# proxy can actually tunnel to Facebook's servers.
+_TEST_URL = "https://www.facebook.com/robots.txt"
+_TEST_MARKER = "user-agent"   # robots.txt always contains this; block pages don't
+_CONNECT_TIMEOUT = 8    # seconds to establish TCP connection
+_READ_TIMEOUT = 15      # seconds to receive first byte (FB through proxy is slower)
+_TEST_WORKERS = 15      # concurrent proxy testers (lower to avoid triggering FB rate limits)
 
 _cached_session: requests.Session | None = None
 
@@ -134,8 +136,10 @@ def _test_proxy(host_port: str) -> bool:
             _TEST_URL,
             proxies=_make_proxies(host_port),
             timeout=(_CONNECT_TIMEOUT, _READ_TIMEOUT),
+            headers={"User-Agent": "Mozilla/5.0"},
+            allow_redirects=True,
         )
-        return resp.status_code == 200
+        return resp.status_code == 200 and _TEST_MARKER in resp.text.lower()
     except Exception:
         return False
 
