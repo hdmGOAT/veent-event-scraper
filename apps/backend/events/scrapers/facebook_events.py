@@ -462,7 +462,7 @@ _EXTRACT_DETAIL_JS = r"""
         if (UI_CHROME_SET.has(t.toLowerCase())) continue;
         // Skip platform/login UI text that leaks through as standalone leaf nodes
         if (/^(facebook|instagram|twitter|tiktok|youtube|privacy|terms|cookies?|see\s+more|see\s+less)$/i.test(t)) continue;
-        if (/^(log\s*in|sign\s*up|create\s*(new\s*)?account|forgot(?:ten)?\s*(account|password)\??|email\s*address|phone\s*number|password|new\s*to\s*facebook|advertising|sponsored|suggested\s+for\s+you|ad\s+choices?)$/i.test(t)) continue;
+        if (/^(log\s*in|sign\s*up|create\s*(new\s*)?account|forgot(?:ten)?\s*(account|password)\??|email\s*address|phone\s*number|password|new\s*to\s*facebook\??|advertising|sponsored|suggested\s+for\s+you|ad\s+choices?)$/i.test(t)) continue;
         if (/^[A-Z]/.test(t) && t.length >= 5) { venue_name = t; break; }
     }
 
@@ -989,7 +989,7 @@ class FacebookEventsScraper(BaseScraper):
 
     # ── Browser context ───────────────────────────────────────────────────────
 
-    def _browser_context(self, pw, proxy: dict | None = None):
+    def _browser_context(self, pw, proxy: dict | None = None, *, ignore_cert_errors: bool = False):
         headless = os.environ.get("FB_HEADLESS", "true").lower() != "false"
 
         launch_kwargs: dict = {
@@ -1002,6 +1002,7 @@ class FacebookEventsScraper(BaseScraper):
         }
         if proxy:
             launch_kwargs["proxy"] = proxy
+        if ignore_cert_errors:
             # Free proxies often perform SSL interception and present their own
             # certificate. Chromium rejects these with ERR_CERT_AUTHORITY_INVALID.
             launch_kwargs["args"].append("--ignore-certificate-errors")
@@ -1281,10 +1282,11 @@ class FacebookEventsScraper(BaseScraper):
         # Pre-seed with organizer FB URLs already in the DB so we skip re-visiting
         # pages for organizers whose contact details we've already scraped.
         from events.models import Organizer
-        seen_org_urls: set[str] = set(
-            url.rstrip("/")
-            for url in Organizer.objects.exclude(facebook_url="").values_list("facebook_url", flat=True)
-        )
+        seen_org_urls: set[str] = {
+            u.rstrip("/")
+            for u in Organizer.objects.exclude(facebook_url="").values_list("facebook_url", flat=True)
+            if u
+        }
         seen_org_keys: set[str] = set()     # dedup organizer upserts globally
         total_created = total_updated = 0
 
@@ -1301,7 +1303,7 @@ class FacebookEventsScraper(BaseScraper):
                 for _kattempt in range(1, _KEYWORD_RETRIES + 1):
                     # Fresh browser context per attempt — forces a new TCP connection
                     # to the proxy so DataImpulse rotates to a new residential IP.
-                    browser, context = self._browser_context(pw, proxy)
+                    browser, context = self._browser_context(pw, proxy, ignore_cert_errors=using_free_proxy)
                     page = context.new_page()
 
                     _resource_breakdown: dict[str, int] = {}
@@ -1317,7 +1319,7 @@ class FacebookEventsScraper(BaseScraper):
                             # Map request ID → type so loadingFinished can bucket it.
                             _bd[f"__req_{params['requestId']}"] = rtype
                         except Exception:
-                            pass
+                            logger.debug("CDP responseReceived handler error", exc_info=True)
 
                     def _on_loading_finished(params, _self=self, _bd=_resource_breakdown):
                         try:
@@ -1326,7 +1328,7 @@ class FacebookEventsScraper(BaseScraper):
                             rtype = _bd.pop(f"__req_{params['requestId']}", "other")
                             _bd[rtype] = _bd.get(rtype, 0) + size
                         except Exception:
-                            pass
+                            logger.debug("CDP loadingFinished handler error", exc_info=True)
 
                     _cdp.on("Network.responseReceived", _on_response_received)
                     _cdp.on("Network.loadingFinished", _on_loading_finished)

@@ -101,39 +101,42 @@
 		adding = true;
 		addError = '';
 		addSummary = '';
-		let added = 0;
-		let skipped = 0;
-		const created: SearchQuery[] = [];
-		for (const token of tokens) {
-			try {
-				created.push(await api.createSearchQuery({ query: token }));
-				added += 1;
-			} catch (e: unknown) {
-				// Only 409 (already exists) is a known expected failure; other errors propagate.
-				const status = e instanceof Error && 'status' in e ? (e as { status: number }).status : 0;
-				if (status === 409) {
-					skipped += 1;
-				} else {
-					throw e;
+		try {
+			let added = 0;
+			let skipped = 0;
+			const created: SearchQuery[] = [];
+			for (const token of tokens) {
+				try {
+					created.push(await api.createSearchQuery({ query: token }));
+					added += 1;
+				} catch (e: unknown) {
+					// Only 409 (already exists) is a known expected failure; other errors propagate.
+					const status = e instanceof Error && 'status' in e ? (e as { status: number }).status : 0;
+					if (status === 409) {
+						skipped += 1;
+					} else {
+						throw e;
+					}
 				}
 			}
-		}
 
-		if (created.length > 0) {
-			queries = [...queries, ...created];
-		}
+			if (created.length > 0) {
+				queries = [...queries, ...created];
+			}
 
-		if (tokens.length > 1) {
-			addSummary = `${added} added, ${skipped} already existed`;
-		} else if (skipped > 0) {
-			addError = 'Query already exists';
-		}
+			if (tokens.length > 1) {
+				addSummary = `${added} added, ${skipped} already existed`;
+			} else if (skipped > 0) {
+				addError = 'Query already exists';
+			}
 
-		if (added > 0) {
-			newQuery = '';
-			if (tokens.length === 1) showAddForm = false;
+			if (added > 0) {
+				newQuery = '';
+				if (tokens.length === 1) showAddForm = false;
+			}
+		} finally {
+			adding = false;
 		}
-		adding = false;
 	}
 
 	async function handleToggle(sq: SearchQuery) {

@@ -1,8 +1,9 @@
 <script lang="ts">
 	// Icon convention: use lucide-svelte components.
 	// Do not add inline <svg> strings. Size: 18px, strokeWidth: 2 for nav icons.
-	import { Calendar, ChevronDown, Icon, LayoutGrid, List, Map, MapPin, Menu, Radio, Search, User, Users, X, Zap } from 'lucide-svelte';
+	import { Calendar, ChevronDown, Icon, LayoutGrid, List, Map, MapPin, Menu, Moon, Radio, Search, Sun, User, Users, X, Zap } from 'lucide-svelte';
 	import { page } from '$app/state';
+	import { themeStore } from '$lib/theme.svelte';
 
 	type NavItem = { href: string; label: string; exact: boolean; icon: typeof Icon };
 	type NavGroup = { label: string; icon: typeof Icon; prefix: string; children: { href: string; label: string; icon: typeof Icon }[] };
@@ -63,6 +64,19 @@
 		<Menu size={22} />
 	</button>
 	<span class="text-base font-bold tracking-wide text-heading">VEENT <span class="text-accent">SCRAPER</span></span>
+	<button
+		type="button"
+		onclick={() => themeStore.toggle()}
+		aria-label={themeStore.current === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+		title={themeStore.current === 'dark' ? 'Light mode' : 'Dark mode'}
+		class="ml-auto flex h-8 w-8 items-center justify-center rounded-lg text-muted transition-colors hover:bg-surface-2 hover:text-heading"
+	>
+		{#if themeStore.current === 'dark'}
+			<Sun size={16} strokeWidth={2} />
+		{:else}
+			<Moon size={16} strokeWidth={2} />
+		{/if}
+	</button>
 </div>
 
 <!-- Backdrop (mobile only, when drawer open) -->
@@ -163,8 +177,21 @@
 		<span class="flex h-9 w-9 items-center justify-center rounded-full bg-surface-2 text-accent">
 			<User size={18} strokeWidth={2} />
 		</span>
-		<div class="leading-tight">
+		<div class="min-w-0 flex-1 leading-tight">
 			<div class="text-sm font-medium text-heading">Admin User</div>
 		</div>
+		<button
+			type="button"
+			onclick={() => themeStore.toggle()}
+			aria-label={themeStore.current === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+			title={themeStore.current === 'dark' ? 'Light mode' : 'Dark mode'}
+			class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-muted transition-colors hover:bg-surface-2 hover:text-heading"
+		>
+			{#if themeStore.current === 'dark'}
+				<Sun size={16} strokeWidth={2} />
+			{:else}
+				<Moon size={16} strokeWidth={2} />
+			{/if}
+		</button>
 	</div>
 </aside>

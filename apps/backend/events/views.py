@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 from .categories import normalize_category
 from .models import Event, Organizer, ScraperRun, SearchQuery, TrackerNote, Venue
-from .runner import cancel_run, trigger_scraper_run
+from .runner import AVAILABLE_LOCATIONS, cancel_run, trigger_scraper_run
 
 
 def event_list(request):
@@ -294,6 +294,16 @@ def api_events_by_category(request):
     return JsonResponse(data, safe=False)
 
 
+def api_agent_categories(request):
+    """Return all distinct agent_categories values sorted alphabetically."""
+    cats: set[str] = set()
+    for row in Event.objects.exclude(agent_categories=[]).values_list("agent_categories", flat=True):
+        for label in row:
+            if label:
+                cats.add(label)
+    return JsonResponse(sorted(cats), safe=False)
+
+
 def api_events(request):
     q = request.GET.get("q", "").strip()
     source = request.GET.get("source", "").strip()
@@ -304,6 +314,8 @@ def api_events(request):
         page = 1
     upcoming = request.GET.get("upcoming", "").strip()
     ordering = request.GET.get("ordering", "").strip()
+    date_from = request.GET.get("date_from", "").strip()
+    date_to = request.GET.get("date_to", "").strip()
 
     events = Event.objects.select_related("venue", "organizer_ref")
     if q:
@@ -313,9 +325,13 @@ def api_events(request):
     if source:
         events = events.filter(source=source)
     if category:
-        events = events.filter(category=category)
+        events = events.filter(agent_categories__contains=[category])
     if upcoming == "1":
         events = events.filter(starts_at__gte=timezone.now())
+    if date_from:
+        events = events.filter(starts_at__date__gte=date_from)
+    if date_to:
+        events = events.filter(starts_at__date__lte=date_to)
 
     _order_map = {
         "name": ["name"],
@@ -711,7 +727,7 @@ def api_scraper_trigger(request, key):
             return JsonResponse({"error": "locations must be a list of strings"}, status=400)
         if len(locations) == 0:
             return JsonResponse({"error": "locations must not be empty"}, status=400)
-        unknown = [l for l in locations if l not in ("philippines", "singapore")]
+        unknown = [l for l in locations if l not in AVAILABLE_LOCATIONS]
         if unknown:
             return JsonResponse({"error": f"Unknown location: '{unknown[0]}'"}, status=400)
 

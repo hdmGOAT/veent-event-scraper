@@ -1,5 +1,6 @@
 <script lang="ts">
-	import { Check, Inbox, NotebookPen, X } from 'lucide-svelte';
+	import { CalendarDays, Check, Inbox, NotebookPen, X } from 'lucide-svelte';
+	import CalendarRangePicker from '$lib/components/CalendarRangePicker.svelte';
 	import { api } from '$lib/api';
 	import Badge from '$lib/components/Badge.svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
@@ -69,10 +70,18 @@
 	let evDate = $state(''); // '' | 'upcoming' | 'past'
 	let evDone = $state(''); // '' | 'done' | 'notdone'
 	let evPage = $state(1);
+	let evDateFrom = $state('');
+	let evDateTo = $state('');
+	let calendarOpen = $state(false);
 
 	let evData = $state<Paginated<EventRow> | null>(data.events);
 	let evLoading = $state(false);
 	let evError = $state('');
+	let evAllCategories = $state<string[]>([]);
+
+	$effect.pre(() => {
+		api.agentCategories().then((r) => (evAllCategories = r)).catch(() => {});
+	});
 
 	let evSort = $state<SortState<EventRow>>({ key: null, direction: 'asc' });
 	function evSortBy(key: keyof EventRow) {
@@ -89,21 +98,35 @@
 		}, 300);
 	}
 
-	// Unique categories: combine `category` and flattened `agent_categories`.
-	const evCategories = $derived.by(() => {
-		const set = new Set<string>();
-		for (const e of evData?.results ?? []) {
-			if (e.category) set.add(e.category);
-			for (const c of e.agent_categories ?? []) {
-				if (c) set.add(c);
-			}
-		}
-		return [...set].sort((a, b) => a.localeCompare(b));
-	});
 
 	const evFiltersActive = $derived(
-		evQuery !== '' || evCategory !== '' || evDate !== '' || evDone !== ''
+		evQuery !== '' || evCategory !== '' || evDate !== '' || evDone !== '' || evDateFrom !== '' || evDateTo !== ''
 	);
+
+	const evDateLabel = $derived(
+		evDateFrom && evDateTo ? `${evDateFrom} – ${evDateTo}`
+		: evDateFrom ? `From ${evDateFrom}`
+		: evDateTo ? `Until ${evDateTo}`
+		: ''
+	);
+
+	function openCalendar() {
+		calendarOpen = true;
+	}
+
+	function applyCalendar(from: string, to: string) {
+		evDateFrom = from;
+		evDateTo = to;
+		evPage = 1;
+		calendarOpen = false;
+	}
+
+	function clearCalendar() {
+		evDateFrom = '';
+		evDateTo = '';
+		evPage = 1;
+		calendarOpen = false;
+	}
 
 	function clearEvFilters() {
 		evSearchInput = '';
@@ -111,20 +134,15 @@
 		evCategory = '';
 		evDate = '';
 		evDone = '';
+		evDateFrom = '';
+		evDateTo = '';
 		evPage = 1;
 	}
 
-	// Client-side category/done filtering layered on top of server results.
-	// (The API supports q/source/category/upcoming; agent_categories and the
-	// "done" state are client-only, so we filter the loaded page here.)
+	// Client-side filtering for things the server doesn't handle (past dates, done state).
+	// Category is handled server-side via agent_categories__contains.
 	const evFiltered = $derived.by(() => {
 		let rows = evData?.results ?? [];
-
-		if (evCategory) {
-			rows = rows.filter(
-				(e) => e.category === evCategory || (e.agent_categories ?? []).includes(evCategory)
-			);
-		}
 
 		if (evDate === 'past') {
 			const now = Date.now();
@@ -155,14 +173,20 @@
 	// 'past' is handled client-side (no API param), so we don't send it.
 	$effect(() => {
 		const _q = evQuery;
+		const _category = evCategory;
 		const _date = evDate;
+		const _dateFrom = evDateFrom;
+		const _dateTo = evDateTo;
 		const _page = evPage;
 		evLoading = true;
 		evError = '';
 		api
 			.events({
 				q: _q,
+				category: _category || undefined,
 				upcoming: _date === 'upcoming' ? 1 : undefined,
+				date_from: _dateFrom || undefined,
+				date_to: _dateTo || undefined,
 				page: _page
 			})
 			.then((r) => (evData = r))
@@ -352,10 +376,11 @@
 
 			<select
 				bind:value={evCategory}
+				onchange={onEvServerFilterChange}
 				class="rounded-lg border border-border bg-surface px-3 py-2 text-sm text-text focus:border-accent focus:outline-none"
 			>
 				<option value="">All Categories</option>
-				{#each evCategories as c (c)}
+				{#each evAllCategories as c (c)}
 					<option value={c}>{c}</option>
 				{/each}
 			</select>
@@ -369,6 +394,19 @@
 				<option value="upcoming">Upcoming</option>
 				<option value="past">Past</option>
 			</select>
+
+			<!-- Calendar date-range button -->
+			<button
+				type="button"
+				onclick={openCalendar}
+				class="flex items-center gap-2 rounded-lg border px-3 py-2 text-sm transition-colors
+					{evDateLabel
+						? 'border-accent bg-accent/10 text-accent'
+						: 'border-border bg-surface text-muted hover:text-text'}"
+			>
+				<CalendarDays size={15} />
+				{evDateLabel || 'Date Range'}
+			</button>
 
 			<select
 				bind:value={evDone}
@@ -390,6 +428,17 @@
 				</button>
 			{/if}
 		</div>
+
+		<!-- Calendar modal -->
+		{#if calendarOpen}
+			<CalendarRangePicker
+				dateFrom={evDateFrom}
+				dateTo={evDateTo}
+				onApply={applyCalendar}
+				onClear={clearCalendar}
+				onClose={() => (calendarOpen = false)}
+			/>
+		{/if}
 
 		<div class="overflow-hidden rounded-xl border border-border bg-surface">
 			<table class="w-full text-sm">

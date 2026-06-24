@@ -5,9 +5,13 @@ from django.db import migrations, models
 
 def _dedup_search_queries(apps, schema_editor):
     SearchQuery = apps.get_model("events", "SearchQuery")
+    Event = apps.get_model("events", "Event")
     seen = {}
     for sq in SearchQuery.objects.order_by("pk"):
         if sq.query in seen:
+            # Reassign any events pointing at this duplicate to the canonical row
+            # before deletion so FK integrity is preserved.
+            Event.objects.filter(search_query_id=sq.pk).update(search_query_id=seen[sq.query])
             sq.delete()
         else:
             seen[sq.query] = sq.pk

@@ -167,8 +167,6 @@
 									{#each e.agent_categories as cat}
 										<Badge category={cat} />
 									{/each}
-								{:else if e.category}
-									<Badge category={e.category} />
 								{:else}
 									<span class="text-muted">—</span>
 								{/if}
