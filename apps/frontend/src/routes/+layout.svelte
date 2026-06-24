@@ -1,9 +1,15 @@
 <script lang="ts">
 	import '../app.css';
+	import { onMount } from 'svelte';
 	import favicon from '$lib/assets/favicon.svg';
 	import Sidebar from '$lib/components/Sidebar.svelte';
+	import { themeStore } from '$lib/theme.svelte';
 
 	let { children } = $props();
+
+	onMount(() => {
+		themeStore.init();
+	});
 </script>
 
 <svelte:head>
