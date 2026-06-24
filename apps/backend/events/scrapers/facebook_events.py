@@ -48,8 +48,8 @@ _FB_BASE   = "https://www.facebook.com"
 _SEARCH_URL = _FB_BASE + "/events/search?q={query}"
 _PHT        = dt_timezone(timedelta(hours=8))
 
-# Block images only — everything else loads normally so FB renders correctly.
-_BLOCK_TYPES = {"image", "media"}
+# Block images, media, and fonts — JS/CSS must load so FB renders correctly.
+_BLOCK_TYPES = {"image", "media", "font"}
 
 # ── JS injected into the page — extracted from veent-fb-scraper content.js ──
 
@@ -446,7 +446,7 @@ _EXTRACT_DETAIL_JS = r"""
         if (UI_CHROME_SET.has(t.toLowerCase())) continue;
         // Skip platform/login UI text that leaks through as standalone leaf nodes
         if (/^(facebook|instagram|twitter|tiktok|youtube|privacy|terms|cookies?|see\s+more|see\s+less)$/i.test(t)) continue;
-        if (/^(log\s*in|sign\s*up|create\s*(new\s*)?account|forgot\s*(account|password)\??|email\s*address|phone\s*number|password|new\s*to\s*facebook|advertising|sponsored|suggested\s+for\s+you|ad\s+choices?)$/i.test(t)) continue;
+        if (/^(log\s*in|sign\s*up|create\s*(new\s*)?account|forgot(?:ten)?\s*(account|password)\??|email\s*address|phone\s*number|password|new\s*to\s*facebook\??|advertising|sponsored|suggested\s+for\s+you|ad\s+choices?)$/i.test(t)) continue;
         if (/^[A-Z]/.test(t) && t.length >= 5) { venue_name = t; break; }
     }
 
@@ -847,12 +847,21 @@ class FacebookEventsScraper(BaseScraper):
         page.evaluate(_DISMISS_MODAL_JS)
         _pause(1.0, 2.0)
 
+        page_title = page.title()
+        page_url   = page.url
+        logger.info(
+            "[%s] search '%s': page title=%r url=%s",
+            self.source, query, page_title, page_url,
+        )
+
         result = page.evaluate(_EXTRACT_SEARCH_JS, query)
         cards  = result.get("events", [])
         debug  = result.get("debug", {})
         logger.info(
-            "[%s] search '%s': %d cards (%d skipped low-count)",
-            self.source, query, len(cards), debug.get("skippedLowCount", 0),
+            "[%s] search '%s': %d cards (%d skipped low-count, %d anchor roots examined)",
+            self.source, query, len(cards),
+            debug.get("skippedLowCount", 0),
+            debug.get("cardRoots", 0),
         )
 
         processed = 0
@@ -1030,13 +1039,21 @@ class FacebookEventsScraper(BaseScraper):
         using_free_proxy = self._is_free_proxy(proxy)
         failure_score = 0   # accumulates across the run; all failures count when on free proxy
         _ROTATE_THRESHOLD = 4
-        _KEYWORD_RETRIES  = 3  # retry a keyword this many times before skipping it
+        _KEYWORD_RETRIES  = 5  # retry a keyword this many times before skipping it
 
         # ── 2. Scrape + save per keyword ──────────────────────────────────────
         # ORM calls inside sync_playwright() are safe: run_scraper_job sets
         # DJANGO_ALLOW_ASYNC_UNSAFE=true for this subprocess.
         org_details: dict[str, dict] = {}   # url → enriched organizer data (global dedup)
-        seen_org_urls: set[str] = set()     # dedup organizer page visits across keywords
+
+        # Pre-seed with organizer FB URLs already in the DB so we skip re-visiting
+        # pages for organizers whose contact details we've already scraped.
+        from events.models import Organizer
+        seen_org_urls: set[str] = {
+            u.rstrip("/")
+            for u in Organizer.objects.exclude(facebook_url="").values_list("facebook_url", flat=True)
+            if u
+        }
         seen_org_keys: set[str] = set()     # dedup organizer upserts globally
         total_created = total_updated = 0
 
@@ -1056,33 +1073,77 @@ class FacebookEventsScraper(BaseScraper):
                     browser, context = self._browser_context(pw, proxy)
                     page = context.new_page()
 
-                    def _on_response(r, _self=self):
-                        try:
-                            _self._bytes_transferred += len(r.body())
-                        except Exception:
-                            pass
+                    _resource_breakdown: dict[str, int] = {}
 
-                    page.on("response", _on_response)
+                    # CDP gives us encodedDataLength — actual compressed wire bytes,
+                    # unlike response.body() which is decompressed.
+                    _cdp = context.new_cdp_session(page)
+                    _cdp.send("Network.enable")
+
+                    def _on_response_received(params, _bd=_resource_breakdown):
+                        try:
+                            rtype = params.get("type", "other").lower()
+                            # Map request ID → type so loadingFinished can bucket it.
+                            _bd[f"__req_{params['requestId']}"] = rtype
+                        except Exception:
+                            logger.debug("CDP responseReceived handler error", exc_info=True)
+
+                    def _on_loading_finished(params, _self=self, _bd=_resource_breakdown):
+                        try:
+                            size  = int(params.get("encodedDataLength", 0))
+                            _self._bytes_transferred += size
+                            rtype = _bd.pop(f"__req_{params['requestId']}", "other")
+                            _bd[rtype] = _bd.get(rtype, 0) + size
+                        except Exception:
+                            logger.debug("CDP loadingFinished handler error", exc_info=True)
+
+                    _cdp.on("Network.responseReceived", _on_response_received)
+                    _cdp.on("Network.loadingFinished", _on_loading_finished)
+
                     Stealth().use_sync(page)
                     self._block_heavy_resources(page)
+                    attempt_bytes_before = self._bytes_transferred
+                    _proxy_blocked = False
                     try:
                         try:
                             cards = list(self._fetch_for_query(page, effective_term, max_events=max_events))
-                            _fetched = True
-                            failure_score = max(0, failure_score - 1)  # ease off on success
-                            n = len(cards)
-                            with_img  = sum(1 for e in cards if e.image_url)
-                            with_desc = sum(1 for e in cards if e.description)
-                            logger.info(
-                                "[%s] search '%s' done: %d events, %d with image, %d with description",
-                                self.source, effective_term, n, with_img, with_desc,
-                            )
+                            attempt_delta = self._bytes_transferred - attempt_bytes_before
+                            if not cards and attempt_delta < 2_000_000 and using_free_proxy and _kattempt < _KEYWORD_RETRIES:
+                                # Near-zero bytes + 0 cards means the proxy swallowed the
+                                # connection silently. A real "no results" page still loads
+                                # FB's full shell (hundreds of KB). Rotate and retry.
+                                _proxy_blocked = True
+                                logger.warning(
+                                    "[%s] search '%s': 0 cards + %.2f MB on attempt %d/%d — likely blocked proxy, retrying",
+                                    self.source, effective_term, attempt_delta / 1_048_576, _kattempt, _KEYWORD_RETRIES,
+                                )
+                                if using_free_proxy:
+                                    new_proxy = self._rotate_free_proxy()
+                                    if new_proxy:
+                                        proxy = new_proxy
+                                        failure_score = 0
+                                _pause(3.0, 6.0)
+                            else:
+                                _fetched = True
+                                failure_score = max(0, failure_score - 1)  # ease off on success
+                                n = len(cards)
+                                with_img  = sum(1 for e in cards if e.image_url)
+                                with_desc = sum(1 for e in cards if e.description)
+                                logger.info(
+                                    "[%s] search '%s' done: %d events, %d with image, %d with description",
+                                    self.source, effective_term, n, with_img, with_desc,
+                                )
                         except Exception as exc:
                             if _kattempt < _KEYWORD_RETRIES:
                                 logger.warning(
-                                    "[%s] search '%s' failed (attempt %d/%d), retrying: %s",
+                                    "[%s] search '%s' failed (attempt %d/%d), retrying with new proxy: %s",
                                     self.source, effective_term, _kattempt, _KEYWORD_RETRIES, exc,
                                 )
+                                if using_free_proxy:
+                                    new_proxy = self._rotate_free_proxy()
+                                    if new_proxy:
+                                        proxy = new_proxy
+                                        failure_score = 0
                             else:
                                 logger.warning(
                                     "[%s] search '%s' failed after %d attempts, skipping: %s",
@@ -1103,25 +1164,34 @@ class FacebookEventsScraper(BaseScraper):
                             _pause(3.0, 6.0)
                         else:
                             # Visit organizer pages for new organizers in these cards.
-                            for se in cards:
-                                url = (se.organizer_url or "").rstrip("/")
-                                if not url or url in seen_org_urls:
-                                    continue
-                                seen_org_urls.add(url)
-                                logger.info("[%s] visiting organizer page: %s", self.source, url)
-                                details = self._fetch_organizer_page(page, url)
-                                if not details.get("name"):
-                                    details["name"] = se.organizer
-                                org_details[url] = details
-                                _pause(2.0, 4.0)
+                            if not _proxy_blocked:
+                                for se in cards:
+                                    url = (se.organizer_url or "").rstrip("/")
+                                    if not url or url in seen_org_urls:
+                                        continue
+                                    seen_org_urls.add(url)
+                                    logger.info("[%s] visiting organizer page: %s", self.source, url)
+                                    details = self._fetch_organizer_page(page, url)
+                                    if not details.get("name"):
+                                        details["name"] = se.organizer
+                                    org_details[url] = details
+                                    _pause(2.0, 4.0)
                     finally:
                         context.close()
                         browser.close()
                         delta = self._bytes_transferred - keyword_bytes_before
+                        breakdown = ", ".join(
+                            f"{t}: {b/1_048_576:.1f}MB"
+                            for t, b in sorted(
+                                ((t, b) for t, b in _resource_breakdown.items() if not t.startswith("__req_")),
+                                key=lambda x: -x[1],
+                            )
+                        )
                         logger.info(
-                            "[%s] keyword '%s': transferred %.1f MB (run total %.1f MB)",
+                            "[%s] keyword '%s': transferred %.1f MB (run total %.1f MB) [%s]",
                             self.source, effective_term,
                             delta / 1_048_576, self._bytes_transferred / 1_048_576,
+                            breakdown,
                         )
 
                     if _fetched:
