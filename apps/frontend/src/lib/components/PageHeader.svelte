@@ -1,5 +1,7 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
+	import { Moon, Sun } from 'lucide-svelte';
+	import { themeStore } from '$lib/theme.svelte';
 
 	let {
 		title,
@@ -15,9 +17,21 @@
 			<p class="mt-0.5 text-sm text-muted">{subtitle}</p>
 		{/if}
 	</div>
-	{#if action}
-		<div class="flex items-center gap-4">
+	<div class="flex items-center gap-4">
+		{#if action}
 			{@render action()}
-		</div>
-	{/if}
+		{/if}
+		<button
+			type="button"
+			onclick={() => themeStore.toggle()}
+			title={themeStore.current === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+			class="rounded-lg p-1.5 text-muted transition-colors hover:text-accent"
+		>
+			{#if themeStore.current === 'dark'}
+				<Sun size={18} strokeWidth={2} />
+			{:else}
+				<Moon size={18} strokeWidth={2} />
+			{/if}
+		</button>
+	</div>
 </header>

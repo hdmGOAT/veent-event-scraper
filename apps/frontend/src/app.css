@@ -1,7 +1,7 @@
 @import 'tailwindcss';
 
 /* ------------------------------------------------------------------ */
-/* Veent admin dashboard — dark design system.                        */
+/* Veent admin dashboard — design system (dark default, light toggle) */
 /* Custom color tokens become Tailwind utilities (bg-surface, etc.).  */
 /* ------------------------------------------------------------------ */
 @theme {
@@ -25,6 +25,26 @@
 	--font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
 }
 
+/* Light mode overrides — applied when <html class="light"> is set */
+html.light {
+	--color-bg: #f8fafc;
+	--color-surface: #ffffff;
+	--color-surface-2: #f1f5f9;
+	--color-border: #e2e8f0;
+	--color-muted: #64748b;
+	--color-text: #334155;
+	--color-heading: #0f172a;
+	--color-accent: #0891b2;
+	--color-accent-dim: #cffafe;
+
+	--color-success: #059669;
+	--color-success-bg: #d1fae5;
+	--color-warning: #d97706;
+	--color-warning-bg: #fef3c7;
+	--color-danger: #dc2626;
+	--color-danger-bg: #fee2e2;
+}
+
 html,
 body {
 	background-color: var(--color-bg);
@@ -35,4 +55,50 @@ body {
 * {
 	scrollbar-width: thin;
 	scrollbar-color: var(--color-border) transparent;
+}
+
+/* Smooth color transitions during theme toggle only */
+html.theme-transitioning,
+html.theme-transitioning * {
+	transition-duration: 200ms !important;
+	transition-property: color, background-color, border-color, fill, stroke !important;
+	transition-timing-function: ease !important;
+}
+
+/* Leaflet popup — light mode */
+html.light .vm-popup-wrap .leaflet-popup-content-wrapper {
+	background: #ffffff !important;
+	border-color: #e2e8f0 !important;
+	color: #334155 !important;
+	box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1) !important;
+}
+
+html.light .vm-popup-wrap .leaflet-popup-tip {
+	background: #ffffff !important;
+}
+
+html.light .vm-type {
+	background: #f1f5f9 !important;
+	color: #475569 !important;
+}
+
+html.light .vm-loc {
+	color: #64748b !important;
+}
+
+html.light .vm-addr {
+	color: #94a3b8 !important;
+}
+
+html.light .vm-events {
+	background: #ede9fe !important;
+	color: #6d28d9 !important;
+}
+
+html.light .vm-website {
+	color: #0891b2 !important;
+}
+
+html.light .leaflet-container {
+	background: #f0f4f8 !important;
 }

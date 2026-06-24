@@ -4,6 +4,16 @@
 		<meta charset="utf-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
 		<title>Veent Admin</title>
+		<script>
+			(function () {
+				var t;
+				try { t = localStorage.getItem('veent-theme'); } catch (_) {}
+				var prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+				if (t === 'light' || (!t && !prefersDark)) {
+					document.documentElement.classList.add('light');
+				}
+			})();
+		</script>
 		%sveltekit.head%
 	</head>
 	<body data-sveltekit-preload-data="hover">

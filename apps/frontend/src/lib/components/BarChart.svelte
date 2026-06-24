@@ -7,6 +7,7 @@
 		LinearScale,
 		Tooltip
 	} from 'chart.js';
+	import { themeStore } from '$lib/theme.svelte';
 
 	Chart.register(BarController, BarElement, CategoryScale, LinearScale, Tooltip);
 
@@ -21,7 +22,8 @@
 	}
 
 	$effect(() => {
-		// Re-runs when labels/data change. Build, then tear down on cleanup.
+		// Re-runs when labels/data or theme changes. Build, then tear down on cleanup.
+		void themeStore.current;
 		const accent = token('--color-accent');
 		const surface2 = token('--color-surface-2');
 		const heading = token('--color-heading');

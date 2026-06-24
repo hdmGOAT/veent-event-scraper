@@ -2,15 +2,23 @@
 	import { onMount, onDestroy } from 'svelte';
 	import type * as LType from 'leaflet';
 	import type { VenueMapPin } from '$lib/types';
+	import { themeStore } from '$lib/theme.svelte';
 
 	let { pins, height = '420px' }: { pins: VenueMapPin[]; height?: string } = $props();
 
 	let mapEl: HTMLDivElement;
 	let mapInstance: LType.Map | null = null;
 	let markersLayer: LType.LayerGroup | null = null;
+	let tileLayer: LType.TileLayer | null = null;
 	let L_ref: typeof LType | null = null;
 	let mapReady = $state(false);
 	let initialFit = false;
+
+	function tileUrl(theme: 'dark' | 'light'): string {
+		return theme === 'light'
+			? 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png'
+			: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
+	}
 
 	const circleStyle = {
 		radius: 8,
@@ -97,14 +105,20 @@
 		L_ref = L;
 
 		mapInstance = L.map(mapEl, { zoomControl: true });
-		L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+		markersLayer = L.layerGroup().addTo(mapInstance);
+		mapReady = true;
+	});
+
+	// Swap tile layer when theme or mapReady changes
+	$effect(() => {
+		const theme = themeStore.current;
+		if (!mapReady || !mapInstance || !L_ref) return;
+		if (tileLayer) mapInstance.removeLayer(tileLayer);
+		tileLayer = L_ref.tileLayer(tileUrl(theme), {
 			attribution: '&copy; <a href="https://carto.com/">CARTO</a>',
 			subdomains: 'abcd',
 			maxZoom: 19
 		}).addTo(mapInstance);
-
-		markersLayer = L.layerGroup().addTo(mapInstance);
-		mapReady = true;
 	});
 
 	// Re-render markers whenever pins or mapReady changes

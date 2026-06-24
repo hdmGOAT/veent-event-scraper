@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { ArcElement, Chart, DoughnutController, Legend, Tooltip } from 'chart.js';
+	import { themeStore } from '$lib/theme.svelte';
 
 	Chart.register(ArcElement, DoughnutController, Legend, Tooltip);
 
@@ -12,6 +13,8 @@
 	}
 
 	$effect(() => {
+		// Re-runs when theme changes so colors update without stale tokens.
+		void themeStore.current;
 		// Palette mixes design-system tokens with a few fixed accent hues so
 		// arbitrary category counts still get distinct, on-brand colors.
 		const palette = [
