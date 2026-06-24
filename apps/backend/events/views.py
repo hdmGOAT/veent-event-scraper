@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 from .categories import normalize_category
 from .models import Event, Organizer, ScraperRun, SearchQuery, TrackerNote, Venue
-from .runner import cancel_run, trigger_scraper_run
+from .runner import AVAILABLE_LOCATIONS, cancel_run, trigger_scraper_run
 
 
 def event_list(request):
@@ -727,7 +727,7 @@ def api_scraper_trigger(request, key):
             return JsonResponse({"error": "locations must be a list of strings"}, status=400)
         if len(locations) == 0:
             return JsonResponse({"error": "locations must not be empty"}, status=400)
-        unknown = [l for l in locations if l not in ("philippines", "singapore")]
+        unknown = [l for l in locations if l not in AVAILABLE_LOCATIONS]
         if unknown:
             return JsonResponse({"error": f"Unknown location: '{unknown[0]}'"}, status=400)
 

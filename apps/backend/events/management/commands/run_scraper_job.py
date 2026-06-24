@@ -192,7 +192,7 @@ class Command(BaseCommand):
                 else (
                     scraper.run(query_id=query_id, locations=locations, on_progress=flush_progress)
                     if query_id
-                    else scraper.run(locations=locations, on_progress=flush_progress)
+                    else scraper.run(on_progress=flush_progress)
                 )
             )
         except Exception:

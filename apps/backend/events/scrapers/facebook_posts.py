@@ -745,13 +745,15 @@ class FacebookPostsScraper(FacebookEventsScraper):
             raw_posts = raw_posts[:max_posts]
         return raw_posts
 
+    supports_keywords = False
+
     def run(self, query_id: int | None = None, max_events: int | None = None) -> dict:
         from django.db import models as dj_models
         from django.utils import timezone
         from events.models import Event, SearchQuery
 
         # 1. Load queries (ORM outside Playwright block)
-        qs = SearchQuery.objects.filter(source=self.source, is_active=True)
+        qs = SearchQuery.objects.filter(is_active=True)
         if query_id:
             qs = qs.filter(pk=query_id)
         queries = list(qs)
@@ -769,7 +771,7 @@ class FacebookPostsScraper(FacebookEventsScraper):
             if profile_dir:
                 os.makedirs(profile_dir, exist_ok=True)
                 headless = os.environ.get("FB_HEADLESS", "true").lower() != "false"
-                proxy    = self._playwright_proxy()
+                proxy    = self._resolve_proxy()
                 ctx_kw   = dict(
                     user_agent=(
                         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "

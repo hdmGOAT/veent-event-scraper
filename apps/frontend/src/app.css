@@ -1,8 +1,10 @@
 @import 'tailwindcss';
 
 /* ------------------------------------------------------------------ */
-/* Veent admin dashboard — design system (dark default, light toggle) */
-/* Custom color tokens become Tailwind utilities (bg-surface, etc.).  */
+/* Veent admin dashboard — design token system.                        */
+/* Dark values live in @theme (Tailwind default). Light overrides are  */
+/* applied via html.light { … } so every utility (bg-surface, etc.)   */
+/* automatically reflects the active theme without duplication.        */
 /* ------------------------------------------------------------------ */
 @theme {
 	--color-bg: #0a0e14;
@@ -25,7 +27,11 @@
 	--font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
 }
 
-/* Light mode overrides — applied when <html class="light"> is set */
+/* ------------------------------------------------------------------ */
+/* Light mode token overrides                                          */
+/* All Tailwind utilities that reference var(--color-*) will pick     */
+/* these up automatically when the html.light class is present.       */
+/* ------------------------------------------------------------------ */
 html.light {
 	--color-bg: #f8fafc;
 	--color-surface: #ffffff;
@@ -34,7 +40,9 @@ html.light {
 	--color-muted: #64748b;
 	--color-text: #334155;
 	--color-heading: #0f172a;
+	/* Slightly darker cyan so text-accent is legible on white */
 	--color-accent: #0891b2;
+	/* Light teal tint used as badge/chip background in light mode */
 	--color-accent-dim: #cffafe;
 
 	--color-success: #059669;
@@ -57,48 +65,65 @@ body {
 	scrollbar-color: var(--color-border) transparent;
 }
 
-/* Smooth color transitions during theme toggle only */
+/* Smooth color transition only during the ~300 ms toggle window.    */
+/* Added/removed programmatically by themeStore.toggle() to avoid    */
+/* interfering with hover and animation transitions elsewhere.        */
 html.theme-transitioning,
-html.theme-transitioning * {
-	transition-duration: 200ms !important;
-	transition-property: color, background-color, border-color, fill, stroke !important;
+html.theme-transitioning *,
+html.theme-transitioning *::before,
+html.theme-transitioning *::after {
+	transition-duration: 0.2s !important;
+	transition-property: background-color, border-color, color, fill, stroke !important;
 	transition-timing-function: ease !important;
+	transition-delay: 0s !important;
 }
 
-/* Leaflet popup — light mode */
+/* ------------------------------------------------------------------ */
+/* Leaflet map popup — light mode overrides                           */
+/* Dark defaults live in VenueMap.svelte <style>. These rules only   */
+/* apply when html.light is active.                                   */
+/* ------------------------------------------------------------------ */
 html.light .vm-popup-wrap .leaflet-popup-content-wrapper {
-	background: #ffffff !important;
-	border-color: #e2e8f0 !important;
-	color: #334155 !important;
-	box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1) !important;
+	background: #ffffff;
+	border: 1px solid #e2e8f0;
+	box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+	color: #0f172a;
 }
 
 html.light .vm-popup-wrap .leaflet-popup-tip {
-	background: #ffffff !important;
+	background: #ffffff;
+}
+
+html.light .vm-name {
+	color: #7c3aed;
+}
+
+html.light .vm-name:hover {
+	color: #6d28d9;
 }
 
 html.light .vm-type {
-	background: #f1f5f9 !important;
-	color: #475569 !important;
+	color: #475569;
+	background: #f1f5f9;
 }
 
 html.light .vm-loc {
-	color: #64748b !important;
+	color: #64748b;
 }
 
 html.light .vm-addr {
-	color: #94a3b8 !important;
+	color: #94a3b8;
 }
 
 html.light .vm-events {
-	background: #ede9fe !important;
-	color: #6d28d9 !important;
+	color: #7c3aed;
+	background: #ede9fe;
 }
 
 html.light .vm-website {
-	color: #0891b2 !important;
+	color: #0891b2;
 }
 
 html.light .leaflet-container {
-	background: #f0f4f8 !important;
+	background: #f8fafc;
 }

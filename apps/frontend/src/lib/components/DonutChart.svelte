@@ -13,7 +13,7 @@
 	}
 
 	$effect(() => {
-		// Re-runs when theme changes so colors update without stale tokens.
+		// Re-runs when labels/data change OR when the theme toggles.
 		void themeStore.current;
 		// Palette mixes design-system tokens with a few fixed accent hues so
 		// arbitrary category counts still get distinct, on-brand colors.

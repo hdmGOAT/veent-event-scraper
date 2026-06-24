@@ -777,7 +777,7 @@ class FacebookEventsScraper(BaseScraper):
 
     # ── Browser context ───────────────────────────────────────────────────────
 
-    def _browser_context(self, pw, proxy: dict | None = None):
+    def _browser_context(self, pw, proxy: dict | None = None, *, ignore_cert_errors: bool = False):
         headless = os.environ.get("FB_HEADLESS", "true").lower() != "false"
 
         launch_kwargs: dict = {
@@ -790,6 +790,7 @@ class FacebookEventsScraper(BaseScraper):
         }
         if proxy:
             launch_kwargs["proxy"] = proxy
+        if ignore_cert_errors:
             # Free proxies often perform SSL interception and present their own
             # certificate. Chromium rejects these with ERR_CERT_AUTHORITY_INVALID.
             launch_kwargs["args"].append("--ignore-certificate-errors")
@@ -1070,7 +1071,7 @@ class FacebookEventsScraper(BaseScraper):
                 for _kattempt in range(1, _KEYWORD_RETRIES + 1):
                     # Fresh browser context per attempt — forces a new TCP connection
                     # to the proxy so DataImpulse rotates to a new residential IP.
-                    browser, context = self._browser_context(pw, proxy)
+                    browser, context = self._browser_context(pw, proxy, ignore_cert_errors=using_free_proxy)
                     page = context.new_page()
 
                     _resource_breakdown: dict[str, int] = {}

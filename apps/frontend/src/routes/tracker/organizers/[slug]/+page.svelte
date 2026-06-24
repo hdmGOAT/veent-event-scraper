@@ -1,10 +1,10 @@
 <script lang="ts">
+	import { Moon, Sun } from 'lucide-svelte';
 	import Badge from '$lib/components/Badge.svelte';
 	import { formatDate } from '$lib/format';
+	import { themeStore } from '$lib/theme.svelte';
 	import { safeUrl } from '$lib/utils/url';
 	import type { PageData } from './$types';
-	import { Moon, Sun } from 'lucide-svelte';
-	import { themeStore } from '$lib/theme.svelte';
 
 	let { data }: { data: PageData } = $props();
 	const o = $derived(data.organizer);
@@ -27,8 +27,8 @@
 		<button
 			type="button"
 			onclick={() => themeStore.toggle()}
-			title={themeStore.current === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
-			class="rounded-lg border border-border p-1.5 text-muted transition-colors hover:border-accent/50 hover:text-accent"
+			aria-label={themeStore.current === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+			class="flex h-8 w-8 items-center justify-center rounded-lg text-muted transition-colors hover:bg-surface-2 hover:text-heading"
 		>
 			{#if themeStore.current === 'dark'}
 				<Sun size={16} strokeWidth={2} />

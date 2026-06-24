@@ -14,10 +14,9 @@
 	let mapReady = $state(false);
 	let initialFit = false;
 
-	function tileUrl(theme: 'dark' | 'light'): string {
-		return theme === 'light'
-			? 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png'
-			: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
+	function tileUrl(theme: string): string {
+		const style = theme === 'light' ? 'light_all' : 'dark_all';
+		return `https://{s}.basemaps.cartocdn.com/${style}/{z}/{x}/{y}{r}.png`;
 	}
 
 	const circleStyle = {
@@ -105,20 +104,23 @@
 		L_ref = L;
 
 		mapInstance = L.map(mapEl, { zoomControl: true });
+		// Tile layer is added by the $effect below once mapReady becomes true.
 		markersLayer = L.layerGroup().addTo(mapInstance);
 		mapReady = true;
 	});
 
-	// Swap tile layer when theme or mapReady changes
+	// Switch tile layer whenever the theme changes or on initial map readiness.
 	$effect(() => {
 		const theme = themeStore.current;
 		if (!mapReady || !mapInstance || !L_ref) return;
-		if (tileLayer) mapInstance.removeLayer(tileLayer);
-		tileLayer = L_ref.tileLayer(tileUrl(theme), {
-			attribution: '&copy; <a href="https://carto.com/">CARTO</a>',
-			subdomains: 'abcd',
-			maxZoom: 19
-		}).addTo(mapInstance);
+		if (tileLayer) tileLayer.remove();
+		tileLayer = L_ref
+			.tileLayer(tileUrl(theme), {
+				attribution: '&copy; <a href="https://carto.com/">CARTO</a>',
+				subdomains: 'abcd',
+				maxZoom: 19
+			})
+			.addTo(mapInstance);
 	});
 
 	// Re-render markers whenever pins or mapReady changes
@@ -235,5 +237,10 @@
 	:global(.leaflet-container) {
 		background: #0f0f1a;
 		font-family: inherit;
+	}
+
+	/* Light mode: tile bg is white so the container flash matches */
+	:global(html.light .leaflet-container) {
+		background: #f8fafc;
 	}
 </style>

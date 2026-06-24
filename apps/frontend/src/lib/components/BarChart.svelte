@@ -22,7 +22,7 @@
 	}
 
 	$effect(() => {
-		// Re-runs when labels/data or theme changes. Build, then tear down on cleanup.
+		// Re-runs when labels/data change OR when the theme toggles.
 		void themeStore.current;
 		const accent = token('--color-accent');
 		const surface2 = token('--color-surface-2');

@@ -67,13 +67,14 @@
 	<button
 		type="button"
 		onclick={() => themeStore.toggle()}
-		title={themeStore.current === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
-		class="ml-auto rounded-lg p-1.5 text-muted transition-colors hover:text-accent"
+		aria-label={themeStore.current === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+		title={themeStore.current === 'dark' ? 'Light mode' : 'Dark mode'}
+		class="ml-auto flex h-8 w-8 items-center justify-center rounded-lg text-muted transition-colors hover:bg-surface-2 hover:text-heading"
 	>
 		{#if themeStore.current === 'dark'}
-			<Sun size={18} strokeWidth={2} />
+			<Sun size={16} strokeWidth={2} />
 		{:else}
-			<Moon size={18} strokeWidth={2} />
+			<Moon size={16} strokeWidth={2} />
 		{/if}
 	</button>
 </div>
@@ -176,14 +177,15 @@
 		<span class="flex h-9 w-9 items-center justify-center rounded-full bg-surface-2 text-accent">
 			<User size={18} strokeWidth={2} />
 		</span>
-		<div class="leading-tight">
+		<div class="min-w-0 flex-1 leading-tight">
 			<div class="text-sm font-medium text-heading">Admin User</div>
 		</div>
 		<button
 			type="button"
 			onclick={() => themeStore.toggle()}
-			title={themeStore.current === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
-			class="ml-auto rounded-lg p-1.5 text-muted transition-colors hover:text-accent"
+			aria-label={themeStore.current === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+			title={themeStore.current === 'dark' ? 'Light mode' : 'Dark mode'}
+			class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-muted transition-colors hover:bg-surface-2 hover:text-heading"
 		>
 			{#if themeStore.current === 'dark'}
 				<Sun size={16} strokeWidth={2} />
