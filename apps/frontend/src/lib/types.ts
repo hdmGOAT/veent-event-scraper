@@ -190,3 +190,11 @@ export interface SearchQuery {
 	created_at: string;
 	updated_at: string;
 }
+
+export interface TrackerNote {
+	id: number;
+	content: string;
+	updated_at: string;
+	event_slug: string | null;
+	organizer_slug: string | null;
+}

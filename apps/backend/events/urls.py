@@ -42,6 +42,9 @@ urlpatterns = [
     path("api/search-queries/<int:pk>/run/", views.api_search_query_run, name="api_search_query_run"),
     path("api/search-queries/<int:pk>/", views.api_search_query_detail, name="api_search_query_detail"),
     path("api/search-queries/", views.api_search_queries, name="api_search_queries"),
+    # Tracker notes
+    path("api/tracker-notes/", views.api_tracker_notes, name="api_tracker_notes"),
+    path("api/tracker-notes/<int:pk>/", views.api_tracker_note_detail, name="api_tracker_note_detail"),
     # n8n automation webhooks
     path("webhooks/scrape/", views.scraper_webhook, name="scraper_webhook"),
     path("webhooks/ingest-events/", views.ingest_events_webhook, name="ingest_events_webhook"),
