@@ -44,7 +44,6 @@ from playwright.sync_api import sync_playwright
 from playwright_stealth import Stealth
 
 from .base import BaseScraper, ScrapedEvent, ScrapedOrganizer, ScrapedVenue, save_events, save_organizers
-from .social_proxy import social_proxy_configured
 from .facebook_posts import (
     _call_llm_structure,
     _is_eligible,
@@ -306,38 +305,24 @@ class InstagramPostsScraper(BaseScraper):
     def _resolve_proxy(self) -> dict | None:
         """Return a Playwright proxy dict, or None to run without proxy.
 
-        Unlike the Facebook scraper, Instagram with valid session cookies is
-        less aggressive about IP-based blocking, so we warn rather than abort
-        when no proxy is available.
+        DataImpulse only — free public proxies are untrusted third parties that
+        could intercept session cookies via SSL MITM. Falls back to a direct
+        connection (acceptable because valid IG session cookies reduce IP-based
+        blocking risk).
         """
-        import requests as _requests
-
+        from .social_proxy import social_proxy_configured, dataimpulse_playwright_proxy
         if not social_proxy_configured():
             logger.info(
-                "[%s] No DataImpulse credentials — running without proxy. "
-                "Set DATAIMPULSE_USER / DATAIMPULSE_PASS for residential IPs.",
+                "[%s] No DataImpulse credentials — running without proxy.",
                 self.source,
             )
             return None
-
-        user     = os.environ["DATAIMPULSE_USER"]
-        password = os.environ["DATAIMPULSE_PASS"]
-        host     = os.environ.get("DATAIMPULSE_HOST", "gw.dataimpulse.com")
-        port     = os.environ.get("DATAIMPULSE_PORT", "823")
-        proxy_url = f"http://{user}:{password}@{host}:{port}"
         try:
-            resp = _requests.get(
-                "https://httpbin.org/ip",
-                proxies={"http": proxy_url, "https": proxy_url},
-                timeout=10,
-            )
-            resp.raise_for_status()
-            logger.info("[%s] DataImpulse proxy OK — using residential proxy.", self.source)
-            return {"server": proxy_url}
+            return dataimpulse_playwright_proxy(source=self.source)
         except Exception as exc:
             logger.warning(
-                "[%s] DataImpulse proxy check failed (%s) — falling back to direct connection.",
-                self.source, type(exc).__name__,
+                "[%s] DataImpulse unavailable (%s) — falling back to direct connection.",
+                self.source, exc,
             )
             return None
 

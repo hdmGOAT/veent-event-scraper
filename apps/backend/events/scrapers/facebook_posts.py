@@ -718,6 +718,16 @@ class FacebookPostsScraper(FacebookEventsScraper):
     source = "facebook_posts"
     MAX_POSTS_PER_QUERY = 15
 
+    def _resolve_proxy(self) -> dict:
+        """DataImpulse only — free proxies are untrusted and can steal session cookies via SSL MITM."""
+        from .social_proxy import social_proxy_configured, dataimpulse_playwright_proxy
+        if not social_proxy_configured():
+            raise RuntimeError(
+                "FacebookPostsScraper requires a proxy. "
+                "Set DATAIMPULSE_USER / DATAIMPULSE_PASS or disable with SCRAPER_USE_PROXY=false."
+            )
+        return dataimpulse_playwright_proxy(source=self.source)
+
     def fetch(self) -> Iterable[ScrapedEvent]:
         return iter([])
 
