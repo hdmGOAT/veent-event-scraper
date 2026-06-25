@@ -44,6 +44,43 @@ from events.registration_patterns import find_registration_url
 
 logger = logging.getLogger(__name__)
 
+DATAIMPULSE_QUOTA_BYTES = 2_684_354_560  # 2.5 GB
+
+
+def log_bandwidth(
+    source: str,
+    bytes_transferred: int,
+    proxy_type: str,
+    scraper_run=None,
+) -> None:
+    """Persist a bandwidth record and log cumulative DataImpulse quota usage."""
+    from events.models import BandwidthLog
+    from django.db.models import Sum
+    if bytes_transferred <= 0:
+        return
+    BandwidthLog.objects.create(
+        source=source,
+        proxy_type=proxy_type,
+        bytes_transferred=bytes_transferred,
+        scraper_run=scraper_run,
+    )
+    used = BandwidthLog.objects.filter(
+        proxy_type=BandwidthLog.PROXY_DATAIMPULSE,
+    ).aggregate(total=Sum("bytes_transferred"))["total"] or 0
+    pct = 100 * used / DATAIMPULSE_QUOTA_BYTES
+    logger.info(
+        "[bandwidth] +%.2f MB (%s). DataImpulse total: %.1f MB / 2500.0 MB (%.1f%%)",
+        bytes_transferred / 1_048_576,
+        source,
+        used / 1_048_576,
+        pct,
+    )
+    if pct >= 80:
+        logger.warning(
+            "[bandwidth] DataImpulse quota at %.1f%% — consider topping up!", pct
+        )
+
+
 _FB_BASE   = "https://www.facebook.com"
 _SEARCH_URL = _FB_BASE + "/events/search?q={query}"
 _PHT        = dt_timezone(timedelta(hours=8))
@@ -463,16 +500,94 @@ _EXTRACT_DETAIL_JS = r"""
         // Skip platform/login UI text that leaks through as standalone leaf nodes
         if (/^(facebook|instagram|twitter|tiktok|youtube|privacy|terms|cookies?|see\s+more|see\s+less)$/i.test(t)) continue;
         if (/^(log\s*in|sign\s*up|create\s*(new\s*)?account|forgot(?:ten)?\s*(account|password)\??|email\s*address|phone\s*number|password|new\s*to\s*facebook\??|advertising|sponsored|suggested\s+for\s+you|ad\s+choices?)$/i.test(t)) continue;
+        if (/^(details|overview|schedule|map|tickets?|share|more options)$/i.test(t)) continue;
+        if (/^consumer\s+health\s+privacy$/i.test(t)) continue;
+        if (/^duration:\s*\d+/i.test(t)) continue;
         if (/^[A-Z]/.test(t) && t.length >= 5) { venue_name = t; break; }
     }
 
-    let city_location = null;
-    for (const el of document.querySelectorAll('a, span, div')) {
-        if (isInSidebarNav(el)) continue;
-        const t = leafText(el);
-        if (!t || t.length > 60 || t.length < 5) continue;
-        if (CITY_RE.test(t) && !DATE_WORD_RE.test(t) && !NOISE_RE.test(t)) { city_location = t; break; }
+    // Detect location blocks that belong to sidebar related-event cards, not the main event.
+    // FB renders multiple event cards in a sidebar, each with their own location block.
+    // A location block inside a container that holds 2+ location blocks is a sidebar card;
+    // the main event's block is in its own isolated section with exactly one location block.
+    function isSidebarLocEl(el) {
+        // Heuristic 1: any close ancestor (within 8 levels) holds multiple location blocks
+        // → this element is inside an event-card list (sidebar).
+        let node = el.parentElement;
+        for (let i = 0; i < 8 && node && node !== document.body; i++) {
+            if (node.querySelectorAll('[aria-label="Location information for this event"]').length > 1) return true;
+            node = node.parentElement;
+        }
+        // Heuristic 2: ancestor's aria-label mentions related/more events.
+        node = el.parentElement;
+        while (node && node !== document.body) {
+            const lbl = (node.getAttribute('aria-label') || '').toLowerCase();
+            if (/more events|other events|related events|you may like|events you may also/i.test(lbl)) return true;
+            if (node.getAttribute('role') === 'complementary') return true;
+            node = node.parentElement;
+        }
+        return false;
     }
+
+    // Pick the first location block that is NOT in a sidebar related-events section.
+    const allLocEls = [...document.querySelectorAll('[aria-label="Location information for this event"]')];
+    const locEl = allLocEls.find(el => !isSidebarLocEl(el)) ?? null;
+
+    // mainScope: used by fallback scans when locEl is null. Anchor on h1's ancestor
+    // area to stay within the main event content rather than scanning the whole page.
+    let mainScope = document.body;
+    {
+        const h1 = document.querySelector('h1');
+        if (h1) {
+            let node = h1.parentElement;
+            for (let i = 0; i < 20 && node && node !== document.body; i++) {
+                mainScope = node;
+                node = node.parentElement;
+            }
+        }
+    }
+
+    // Street address regex — require keyword at word boundary AND not just a year + text.
+    const ADDR_RE = /^\d{1,5}\s+[\w\s.,'-]{5,80}(?:\b(?:st(?:reet)?|ave(?:nue)?|blvd|boulevard|road|rd|drive|dr|lane|ln|way|place|pl|court|ct|circle|cir|barangay|brgy|purok|highway|hwy|floor|fl|unit|suite|ste|bldg)\b)/i;
+    // GPS coordinate pattern — lat/lng pairs are not location names.
+    const GPS_RE = /^-?\d+\.\d+$/;
+
+    // Priority source: FB's "Location information for this event" aria-label block,
+    // using the non-sidebar locEl found above.
+    let city_location = null;
+    let address = null;
+    if (locEl) {
+        const lines = [];
+        for (const el of locEl.querySelectorAll('*')) {
+            if (el.children.length > 0) continue;
+            const t = (el.textContent || '').trim().replace(/\s+/g, ' ');
+            if (t && t.length > 3 && !lines.includes(t)) lines.push(t);
+        }
+        for (const line of lines) {
+            // Trusted location block — accept comma-separated strings even with leading digits.
+            // Skip GPS coordinate pairs (e.g. "1.3139, 103.8832").
+            if (!city_location && !DATE_WORD_RE.test(line) && line.includes(',') && line.split(',').length >= 2) {
+                const parts = line.split(',');
+                if (!parts.every(p => GPS_RE.test(p.trim()))) {
+                    city_location = line;
+                }
+            }
+            if (!address && ADDR_RE.test(line)) address = line;
+        }
+    }
+
+    // Fallback: scan leaf nodes within main scope for city/address patterns
+    if (!city_location) {
+        for (const el of mainScope.querySelectorAll('a, span, div')) {
+            if (isInSidebarNav(el)) continue;
+            const t = leafText(el);
+            if (!t || t.length > 60 || t.length < 5) continue;
+            if (CITY_RE.test(t) && !DATE_WORD_RE.test(t) && !NOISE_RE.test(t)) { city_location = t; break; }
+        }
+    }
+    // Address fallback scan removed: the mainScope scan was too broad and consistently
+    // picked up persistent sidebar/ad addresses (e.g. "217 Loudoun Street SE, Leesburg, VA")
+    // across unrelated events. Address is only trusted when it comes from the locEl block.
 
     let description = null;
     const DESC_SKIP_RE = /^(public|anyone|events?|about|going|interested|invited|discussion|tickets?|see\s+(more|less)|privacy|terms|log\s+in|sign\s+up)/i;
@@ -551,6 +666,7 @@ _EXTRACT_DETAIL_JS = r"""
             start_datetime,
             venue_name,
             city_location,
+            address,
             organizer_name,
             organizer_url,
             description,
@@ -700,6 +816,9 @@ _TZ_OFFSETS: dict[str, int] = {
     "NZST": 720,
     "NZDT": 780,
 }
+
+from .geo_normalize import normalize_country as _normalize_country, has_alias as _has_alias
+
 
 _DATE_FMTS = (
     # Abbreviated weekday + day-first (from card <time> elements)
@@ -920,58 +1039,15 @@ class FacebookEventsScraper(BaseScraper):
         Priority: DataImpulse residential → free proxy list.
         Raises RuntimeError if no proxy is available — never falls back to unproxied.
         """
-        import requests as _requests
-
-        # Priority 1: DataImpulse residential proxy — verify traffic isn't exhausted.
-        if social_proxy_configured():
-            user     = os.environ["DATAIMPULSE_USER"]
-            password = os.environ["DATAIMPULSE_PASS"]
-            host     = os.environ.get("DATAIMPULSE_HOST", "gw.dataimpulse.com")
-            port     = os.environ.get("DATAIMPULSE_PORT", "823")
-            proxy_url = f"http://{user}:{password}@{host}:{port}"
-            try:
-                resp = _requests.get(
-                    "https://httpbin.org/ip",
-                    proxies={"http": proxy_url, "https": proxy_url},
-                    timeout=10,
-                )
-                resp.raise_for_status()
-                logger.info("[%s] DataImpulse proxy OK — using residential proxy.", self.source)
-                # Embed credentials in the URL — Chromium headless does not reliably
-                # authenticate CONNECT tunnels when username/password are passed separately.
-                return {"server": proxy_url}
-            except Exception as exc:
-                if "TRAFFIC_EXHAUSTED" in str(exc) or "407" in str(exc):
-                    logger.warning(
-                        "[%s] DataImpulse traffic exhausted — falling back to free proxy.", self.source
-                    )
-                else:
-                    logger.warning(
-                        "[%s] DataImpulse preflight failed (%s) — falling back to free proxy.", self.source, exc
-                    )
-
-        # Priority 2: free proxy list (Scraper Center toggle).
-        if get_proxy_enabled():
-            try:
-                session = get_proxy_session()
-                proxy_url = session.proxies.get("https") or session.proxies.get("http")
-                if proxy_url:
-                    logger.info("[%s] using free proxy: %s", self.source, proxy_url)
-                    return {"server": proxy_url}
-            except Exception as exc:
-                logger.warning("[%s] free proxy election failed: %s", self.source, exc)
-
-        raise RuntimeError(
-            f"[{self.source}] No proxy available — DataImpulse traffic exhausted and "
-            "free proxy list empty or disabled. Aborting to avoid unproxied scraping."
-        )
+        from .proxy_manager import resolve_playwright_proxy
+        return resolve_playwright_proxy(self.source)
 
     def _is_free_proxy(self, proxy: dict | None) -> bool:
         """Return True if proxy came from the free list (not DataImpulse)."""
         if not proxy:
             return False
-        di_host = os.environ.get("DATAIMPULSE_HOST", "gw.dataimpulse.com")
-        return di_host not in proxy.get("server", "")
+        # DataImpulse proxy dicts have a "username" key; free proxy dicts only have "server".
+        return "username" not in proxy
 
     def _rotate_free_proxy(self) -> dict | None:
         """Force a new free-proxy election and return the updated Playwright proxy dict."""
@@ -1135,8 +1211,16 @@ class FacebookEventsScraper(BaseScraper):
             venue_name     = d.get("venue_name") or card.get("venue_name") or ""
             city_location  = d.get("city_location", "")
             loc_parts      = [p.strip() for p in city_location.split(",")] if city_location else []
-            city           = loc_parts[0] if loc_parts else ""
-            country        = loc_parts[-1] if len(loc_parts) >= 2 else ""
+            _last_seg      = loc_parts[-1] if len(loc_parts) >= 2 else ""
+            country        = _normalize_country(_last_seg) if _has_alias(_last_seg) else ""
+            # With 3+ parts (e.g. "Sub-venue, 2600 City, Country") take the second-to-last;
+            # for 2 parts where last isn't a country alias, last segment is the city.
+            if country and len(loc_parts) >= 2:
+                _city_raw = loc_parts[-2] if len(loc_parts) >= 3 else loc_parts[0]
+            else:
+                _city_raw = loc_parts[-1] if len(loc_parts) >= 2 else (loc_parts[0] if loc_parts else "")
+            city           = _city_raw.lstrip("0123456789 ").strip()
+            event_address  = d.get("address") or ""
             organizer      = d.get("organizer_name") or card.get("organizer_name") or ""
             organizer_url  = d.get("organizer_url") or ""
             detail_raw = d.get("start_datetime")
@@ -1180,6 +1264,9 @@ class FacebookEventsScraper(BaseScraper):
                 organizer=organizer,
                 organizer_url=organizer_url,
                 venue=venue,
+                address=event_address,
+                city=city,
+                country=country,
             )
             processed += 1
             logger.info(
@@ -1496,4 +1583,5 @@ class FacebookEventsScraper(BaseScraper):
             "created": total_created,
             "updated": total_updated,
             "total_bytes": self._bytes_transferred,
+            "using_free_proxy": using_free_proxy,
         }

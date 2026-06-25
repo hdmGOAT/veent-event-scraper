@@ -90,6 +90,43 @@ def get_social_session(force_refresh: bool = False) -> requests.Session:
     return session
 
 
+def dataimpulse_playwright_proxy(source: str = "") -> dict:
+    """Return a Playwright proxy dict for DataImpulse after a preflight connectivity check.
+
+    Raises RuntimeError if credentials are not configured, traffic is exhausted,
+    or the preflight check produces an unexpected response.
+    """
+    import requests as _requests
+
+    if not social_proxy_configured():
+        raise RuntimeError("DataImpulse credentials not configured.")
+
+    user     = os.environ["DATAIMPULSE_USER"]
+    password = os.environ["DATAIMPULSE_PASS"]
+    host     = os.environ.get("DATAIMPULSE_HOST", _DEFAULT_HOST)
+    port     = os.environ.get("DATAIMPULSE_PORT", _DEFAULT_PORT)
+    proxy_url = f"http://{user}:{password}@{host}:{port}"
+
+    resp = _requests.get(
+        "https://www.facebook.com/robots.txt",
+        proxies={"http": proxy_url, "https": proxy_url},
+        timeout=15,
+        headers={"User-Agent": "Mozilla/5.0"},
+    )
+    if resp.status_code == 407 or "TRAFFIC_EXHAUSTED" in resp.text:
+        raise RuntimeError(f"DataImpulse traffic exhausted (status={resp.status_code})")
+    if resp.status_code != 200 or "user-agent" not in resp.text.lower():
+        raise RuntimeError(f"DataImpulse preflight unexpected response {resp.status_code}")
+
+    tag = f"[{source}] " if source else ""
+    logger.info("%sDataImpulse proxy OK — using residential proxy.", tag)
+    return {
+        "server":   f"http://{host}:{port}",
+        "username": user,
+        "password": password,
+    }
+
+
 def reset_social_session() -> None:
     """Clear the cached session (e.g. after a ban or credential rotation)."""
     global _cached_session
