@@ -64,7 +64,7 @@ class Command(BaseCommand):
 
                 updates = {"enriched_at": timezone.now()}
 
-                if not event.name and structured.get("title"):
+                if structured.get("title"):
                     updates["name"] = structured["title"][:300]
 
                 if not event.description and structured.get("short_description"):

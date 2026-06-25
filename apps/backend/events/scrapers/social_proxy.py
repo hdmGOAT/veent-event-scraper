@@ -122,8 +122,8 @@ def dataimpulse_playwright_proxy(source: str = "") -> dict:
     logger.info("%sDataImpulse proxy OK — using residential proxy.", tag)
     return {
         "server":   f"http://{host}:{port}",
-        "username": user,
-        "password": password,
+        "username": os.environ["DATAIMPULSE_USER"],
+        "password": os.environ["DATAIMPULSE_PASS"],
     }
 
 

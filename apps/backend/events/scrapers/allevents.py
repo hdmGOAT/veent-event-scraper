@@ -17,7 +17,7 @@ from typing import Iterable
 from playwright.sync_api import sync_playwright
 from playwright_stealth import Stealth
 
-from .proxy_manager import get_proxy_enabled, get_proxy_session
+from .proxy_manager import get_proxy_enabled, resolve_playwright_proxy
 from .base import BaseScraper, ScrapedEvent, ScrapedVenue
 
 BASE_URL = "https://allevents.in/cagayan-de-oro/all"
@@ -35,13 +35,7 @@ class AllEventsCDOScraper(BaseScraper):
     def fetch(self) -> Iterable[ScrapedEvent]:
         _proxy_arg = None
         if get_proxy_enabled():
-            try:
-                _sess = get_proxy_session()
-                _purl = _sess.proxies.get("https") or _sess.proxies.get("http")
-                if _purl:
-                    _proxy_arg = {"server": _purl}
-            except Exception:
-                pass  # no proxy available — continue without
+            _proxy_arg = resolve_playwright_proxy(source=self.source)
 
         with sync_playwright() as pw:
             browser = pw.chromium.launch(

@@ -589,7 +589,7 @@ def _titles_are_near_duplicates(a: str, b: str, threshold: float = 0.75) -> bool
     Catches same-event posts where one title has extra words the other doesn't:
       'Brian McKnight performs live'
       'Brian McKnight performs live in Cebu on March 22 2026'
-    Both share 4/7 unique words → Jaccard ≈ 0.57; with threshold=0.6 that's a dup.
+    Both share 4/7 unique words → Jaccard ≈ 0.57; with the default threshold=0.75 that's not a dup.
     Minimum 4 shared words required so short generic titles don't false-positive.
     """
     words_a = set(a.split())
@@ -1192,7 +1192,7 @@ class FacebookPostsScraper(FacebookEventsScraper):
                 if len(norm_title) >= 3:
                     exact_dup = Event.objects.filter(
                         source=self.source,
-                    ).extra(
+                    ).exclude(external_id=external_id).extra(
                         where=["regexp_replace(lower(trim(name)), '[^a-z0-9 ]+', '', 'g') = %s"],
                         params=[norm_title],
                     ).exists()
@@ -1201,7 +1201,7 @@ class FacebookPostsScraper(FacebookEventsScraper):
                     elif len(norm_title) >= 10:
                         prefix_dup = Event.objects.filter(
                             source=self.source,
-                        ).extra(
+                        ).exclude(external_id=external_id).extra(
                             where=[
                                 "regexp_replace(lower(trim(name)), '[^a-z0-9 ]+', '', 'g') LIKE %s"
                                 " OR %s LIKE regexp_replace(lower(trim(name)), '[^a-z0-9 ]+', '', 'g') || ' %%'"
@@ -1218,7 +1218,7 @@ class FacebookPostsScraper(FacebookEventsScraper):
                                 candidates = Event.objects.filter(
                                     source=self.source,
                                     name__icontains=first_word,
-                                ).values_list("name", flat=True)[:50]
+                                ).exclude(external_id=external_id).values_list("name", flat=True)[:50]
                                 for cand in candidates:
                                     if _titles_are_near_duplicates(
                                         norm_title, _normalize_title_for_dedup(cand)

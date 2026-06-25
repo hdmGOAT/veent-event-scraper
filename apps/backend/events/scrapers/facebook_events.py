@@ -944,7 +944,10 @@ def _parse_end_time(end_raw: str, start_dt: datetime, tz: dt_timezone | None) ->
     for fmt in _DATE_ONLY_FMTS:
         try:
             t = datetime.strptime(end_raw, fmt)
-            return start_local.replace(month=t.month, day=t.day).astimezone(dt_timezone.utc)
+            candidate = start_local.replace(month=t.month, day=t.day)
+            if candidate < start_local:
+                candidate = candidate.replace(year=start_local.year + 1)
+            return candidate.astimezone(dt_timezone.utc)
         except ValueError:
             continue
 
