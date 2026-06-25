@@ -73,7 +73,7 @@ def trigger_scraper_run(
     occupies the scraper's main concurrency slot — it is a partial run of the full
     scraper, not an independent single-query run.
     """
-    if query_ids:
+    if query_ids is not None:
         run_key = key
     elif query_id:
         run_key = f"{key}:q:{query_id}"
@@ -97,7 +97,7 @@ def trigger_scraper_run(
     # BASE_DIR resolves to apps/backend/ (the dir containing manage.py).
     manage_py = settings.BASE_DIR / "manage.py"
     cmd = [sys.executable, str(manage_py), "run_scraper_job", "--run-id", str(run.id)]
-    if query_ids:
+    if query_ids is not None:
         cmd += ["--query-ids", ",".join(str(i) for i in query_ids)]
     elif query_id:
         cmd += ["--query-id", str(query_id)]

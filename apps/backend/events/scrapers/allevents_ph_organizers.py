@@ -138,7 +138,7 @@ class AllEventsPHOrganizersScraper(BaseScraper):
         # Not used — run() orchestrates the two-phase logic directly.
         return iter([])
 
-    def run(self) -> dict:  # type: ignore[override]
+    def run(self, **_kwargs) -> dict:  # type: ignore[override]
         from events.models import Event
 
         # ── Phase 1: collect org URLs from event detail pages ─────────────────

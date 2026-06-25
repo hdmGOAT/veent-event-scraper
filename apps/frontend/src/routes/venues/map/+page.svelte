@@ -94,7 +94,7 @@
 	</div>
 
 	<!-- Map area with filter overlay -->
-	<div bind:this={mapWrapEl} class="relative min-h-0 flex-1 bg-[#0f0f1a]">
+	<div bind:this={mapWrapEl} class="relative min-h-0 flex-1 bg-bg">
 		{#if loading}
 			<div class="flex h-full items-center justify-center">
 				<span class="text-sm text-muted">Loading map…</span>
@@ -116,7 +116,7 @@
 						placeholder="Search venues…"
 						aria-label="Search venues"
 						bind:value={q}
-						class="h-8 rounded-lg border border-white/10 bg-[#1a1a2e]/90 pl-7 pr-3 text-xs text-text placeholder:text-muted backdrop-blur focus:border-accent/60 focus:outline-none"
+						class="h-8 rounded-lg border border-border/60 bg-surface/90 pl-7 pr-3 text-xs text-text placeholder:text-muted backdrop-blur focus:border-accent/60 focus:outline-none"
 						style="width: 180px;"
 					/>
 				</div>
@@ -126,7 +126,7 @@
 					<select
 						bind:value={typeFilter}
 						aria-label="Filter by type"
-						class="h-8 rounded-lg border border-white/10 bg-[#1a1a2e]/90 px-2.5 text-xs text-text backdrop-blur focus:border-accent/60 focus:outline-none"
+						class="h-8 rounded-lg border border-border/60 bg-surface/90 px-2.5 text-xs text-text backdrop-blur focus:border-accent/60 focus:outline-none"
 					>
 						<option value="">All types</option>
 						{#each venueTypes as t (t)}
@@ -139,7 +139,7 @@
 				<select
 					bind:value={statusFilter}
 					aria-label="Filter by status"
-					class="h-8 rounded-lg border border-white/10 bg-[#1a1a2e]/90 px-2.5 text-xs text-text backdrop-blur focus:border-accent/60 focus:outline-none"
+					class="h-8 rounded-lg border border-border/60 bg-surface/90 px-2.5 text-xs text-text backdrop-blur focus:border-accent/60 focus:outline-none"
 				>
 					<option value="">All statuses</option>
 					<option value="pending">Pending</option>
@@ -152,7 +152,7 @@
 					onclick={toggleFullscreen}
 					title={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
 					aria-label={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
-					class="flex h-8 w-8 items-center justify-center rounded-lg border border-white/10 bg-[#1a1a2e]/90 text-muted backdrop-blur transition-colors hover:border-accent/60 hover:text-accent"
+					class="flex h-8 w-8 items-center justify-center rounded-lg border border-border/60 bg-surface/90 text-muted backdrop-blur transition-colors hover:border-accent/60 hover:text-accent"
 				>
 					{#if isFullscreen}
 						<Minimize2 size={14} strokeWidth={2} />

@@ -238,6 +238,38 @@ class Organizer(models.Model):
         return self.status != self.STATUS_REJECTED
 
 
+class TrackerNote(models.Model):
+    """A free-text note attached to a single Event or Organizer by the tracker UI."""
+
+    event = models.OneToOneField(
+        "Event", null=True, blank=True,
+        on_delete=models.CASCADE, related_name="tracker_note",
+    )
+    organizer = models.OneToOneField(
+        "Organizer", null=True, blank=True,
+        on_delete=models.CASCADE, related_name="tracker_note",
+    )
+    content = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    models.Q(event__isnull=False, organizer__isnull=True)
+                    | models.Q(event__isnull=True, organizer__isnull=False)
+                ),
+                name="tracker_note_exactly_one_entity",
+            )
+        ]
+
+    def __str__(self):
+        if self.event_id:
+            return f"Note for event {self.event_id}"
+        return f"Note for organizer {self.organizer_id}"
+
+
 class SearchQuery(models.Model):
     """A search term to run against a specific scraper source.
 

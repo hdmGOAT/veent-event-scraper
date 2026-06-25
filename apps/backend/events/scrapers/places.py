@@ -233,5 +233,5 @@ class GooglePlacesVenueScraper:
                 if venue.name:
                     yield venue
 
-    def run(self) -> dict:
+    def run(self, **_kwargs) -> dict:
         return save_venues(self.source, list(self.fetch_venues()))

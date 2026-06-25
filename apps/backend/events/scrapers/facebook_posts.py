@@ -560,10 +560,10 @@ def _parse_post_date(raw: str | None) -> datetime | None:
         return dt
     except ValueError:
         pass
-    dt = _parse_fb_date(raw)
-    if dt is not None and dt.tzinfo is None:
-        dt = dt.replace(tzinfo=dt_timezone.utc)
-    return dt
+    start_dt, _ = _parse_fb_date(raw)
+    if start_dt is not None and start_dt.tzinfo is None:
+        start_dt = start_dt.replace(tzinfo=dt_timezone.utc)
+    return start_dt
 
 
 def _first_readable_line(text: str) -> str | None:
@@ -1000,13 +1000,15 @@ class FacebookPostsScraper(FacebookEventsScraper):
             raw_posts = raw_posts[:max_posts]
         return raw_posts
 
+    supports_keywords = False
+
     def run(self, query_id: int | None = None, max_events: int | None = None, locations=None, query_ids=None) -> dict:
         from django.db import models as dj_models
         from django.utils import timezone
         from events.models import Event, SearchQuery
 
         # 1. Load queries (ORM outside Playwright block)
-        qs = SearchQuery.objects.filter(source=self.source, is_active=True)
+        qs = SearchQuery.objects.filter(is_active=True)
         if query_id:
             qs = qs.filter(pk=query_id)
         queries = list(qs)
@@ -1033,7 +1035,7 @@ class FacebookPostsScraper(FacebookEventsScraper):
             if profile_dir:
                 os.makedirs(profile_dir, exist_ok=True)
                 headless = os.environ.get("FB_HEADLESS", "true").lower() != "false"
-                proxy    = self._playwright_proxy()
+                proxy    = self._resolve_proxy()
                 ctx_kw   = dict(
                     user_agent=(
                         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "

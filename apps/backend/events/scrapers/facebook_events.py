@@ -48,8 +48,8 @@ _FB_BASE   = "https://www.facebook.com"
 _SEARCH_URL = _FB_BASE + "/events/search?q={query}"
 _PHT        = dt_timezone(timedelta(hours=8))
 
-# Block images only — everything else loads normally so FB renders correctly.
-_BLOCK_TYPES = {"image", "media"}
+# Block images, media, and fonts — JS/CSS must load so FB renders correctly.
+_BLOCK_TYPES = {"image", "media", "font"}
 
 # ── JS injected into the page — extracted from veent-fb-scraper content.js ──
 
@@ -288,12 +288,28 @@ _EXTRACT_DETAIL_JS = r"""
     if (!title) return { events: [], debug: { error: 'no title' } };
 
     let start_datetime = null;
-    for (const el of document.querySelectorAll('span, div, h2, strong')) {
-        if (isInSidebarNav(el)) continue;
-        const t = leafText(el);
-        if (!t || t.length < 8 || t.length > 100) continue;
-        if (FULL_MONTH_RE.test(t) && /\bat\b/i.test(t)) { start_datetime = t; break; }
-        if (FULL_MONTH_RE.test(t) && /\d{4}/.test(t))   { start_datetime = t; break; }
+    // FB injects a <time datetime="..."> with a clean ISO or locale string —
+    // prefer it over free-text scanning to avoid picking up concatenated blobs.
+    const timeEl = document.querySelector('time[datetime]');
+    if (timeEl) {
+        start_datetime = timeEl.getAttribute('datetime') || timeEl.textContent.trim();
+    }
+    if (!start_datetime) {
+        // Fallback text scan. Cap at 70 chars: real date strings fit; the
+        // concatenated title+date+venue blobs from nested elements don't.
+        // Month must appear adjacent to a day number — prevents titles with a year
+        // (e.g. 'Conference 2026 August') from being mistaken for date strings.
+        const MONTH_DAY_RE = /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|january|february|march|april|june|july|august|september|october|november|december)\s+\d{1,2}\b|\b\d{1,2}\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|january|february|march|april|june|july|august|september|october|november|december)\b/i;
+        for (const el of document.querySelectorAll('span, div, h2, strong')) {
+            if (isInSidebarNav(el)) continue;
+            if (el.children.length > 0) continue;
+            const t = (el.textContent || '').trim().replace(/ /g, ' ');
+            if (!t || t.length < 8 || t.length > 70) continue;
+            if (!MONTH_DAY_RE.test(t)) continue;
+            if (/\b(?:at|from)\s+\d{1,2}[: ]\d{0,2}/i.test(t)) { start_datetime = t; break; }
+            if (/\d{4}/.test(t)) { start_datetime = t; break; }
+            if (/^\w{3},\s/.test(t)) { start_datetime = t; break; }
+        }
     }
 
     // ── Organizer: "Event by [linked NAME]" ─────────────────────────────────
@@ -446,7 +462,7 @@ _EXTRACT_DETAIL_JS = r"""
         if (UI_CHROME_SET.has(t.toLowerCase())) continue;
         // Skip platform/login UI text that leaks through as standalone leaf nodes
         if (/^(facebook|instagram|twitter|tiktok|youtube|privacy|terms|cookies?|see\s+more|see\s+less)$/i.test(t)) continue;
-        if (/^(log\s*in|sign\s*up|create\s*(new\s*)?account|forgot\s*(account|password)\??|email\s*address|phone\s*number|password|new\s*to\s*facebook|advertising|sponsored|suggested\s+for\s+you|ad\s+choices?)$/i.test(t)) continue;
+        if (/^(log\s*in|sign\s*up|create\s*(new\s*)?account|forgot(?:ten)?\s*(account|password)\??|email\s*address|phone\s*number|password|new\s*to\s*facebook\??|advertising|sponsored|suggested\s+for\s+you|ad\s+choices?)$/i.test(t)) continue;
         if (/^[A-Z]/.test(t) && t.length >= 5) { venue_name = t; break; }
     }
 
@@ -657,33 +673,229 @@ def _human_scroll(page, rounds: int | None = None) -> None:
 
 # ── Date parsing ──────────────────────────────────────────────────────────────
 
+# Minutes-from-UTC for common timezone abbreviations. Used instead of
+# defaulting everything to PHT when we can identify the suffix.
+# CST is mapped to US Central (-360); China Standard (+480) loses this race
+# because FB English events that show CST are predominantly US-based.
+_TZ_OFFSETS: dict[str, int] = {
+    "NST": -210, "NDT": -150,
+    "AST": -240, "ADT": -180,
+    "EST": -300, "EDT": -240,
+    "CST": -360, "CDT": -300,
+    "MST": -420, "MDT": -360,
+    "PST": -480, "PDT": -420,
+    "AKST": -540, "AKDT": -480,
+    "HST": -600,
+    "GMT": 0, "UTC": 0, "WET": 0,
+    "WEST": 60, "BST": 60, "CET": 60,
+    "CEST": 120, "EET": 120, "CAT": 120, "SAST": 120,
+    "EEST": 180, "MSK": 180, "EAT": 180,
+    "GST": 240,
+    "PKT": 300, "IST": 330,
+    "WIB": 420,
+    "SGT": 480, "HKT": 480, "PHT": 480, "MYT": 480, "AWST": 480,
+    "JST": 540, "KST": 540, "WIT": 540,
+    "AEST": 600,
+    "AEDT": 660,
+    "NZST": 720,
+    "NZDT": 780,
+}
+
 _DATE_FMTS = (
-    "%A, %B %d, %Y at %I %p",
-    "%A, %B %d, %Y at %I:%M %p",
-    "%B %d, %Y at %I %p",
-    "%B %d, %Y at %I:%M %p",
-    "%A, %B %d at %I %p",
-    "%B %d at %I %p",
+    # Abbreviated weekday + day-first (from card <time> elements)
+    "%a, %d %b at %H:%M",          # "Fri, 24 Jul at 00:00"
+    "%a, %d %b at %I:%M %p",       # "Fri, 24 Jul at 8:00 PM"
+    "%a, %d %b at %I %p",          # "Fri, 24 Jul at 8 PM"
+    "%a, %d %b",                   # "Mon, 17 Aug"
+    # Abbreviated weekday + month-first (FB also uses this locale)
+    "%a, %b %d at %H:%M",          # "Fri, Jul 24 at 00:00"
+    "%a, %b %d at %I:%M %p",       # "Fri, Jul 24 at 12:00 AM"
+    "%a, %b %d at %I %p",          # "Fri, Jul 24 at 12 AM"
+    "%a, %b %d",                   # "Mon, Aug 17"
+    # Abbreviated month, no weekday (e.g. detail page range start after splitting)
+    "%b %d at %I:%M %p",           # "Jun 26 at 8:00 AM"
+    "%b %d at %I %p",              # "Jun 26 at 8 AM"
+    "%b %d at %H:%M",              # "Jun 26 at 08:00"
+    "%d %b at %I:%M %p",           # "26 Jun at 8:00 AM"
+    "%d %b at %I %p",              # "26 Jun at 8 AM"
+    "%d %b at %H:%M",              # "26 Jun at 08:00"
+    "%d %b %Y at %H:%M",           # "23 Apr 2027 at 19:00"
+    "%d %b %Y at %I:%M %p",        # "23 Apr 2027 at 8:00 PM"
+    "%d %b %Y at %I %p",           # "23 Apr 2027 at 8 PM"
+    "%d %b %Y",                    # "23 Apr 2027"
+    "%b %d, %Y at %I:%M %p",       # "Jun 26, 2026 at 8:00 AM"
+    "%b %d, %Y at %I %p",          # "Jun 26, 2026 at 8 AM"
+    "%b %d, %Y",                   # "Jun 26, 2026"
+    "%b %d",                       # "Jun 26"
+    # Day-first, full month name, 24h time (EU/PH locale)
+    "%A %d %B %Y at %H:%M",        # "Sunday 28 June 2026 at 10:00"
+    "%A, %d %B %Y at %H:%M",       # "Sunday, 28 June 2026 at 10:00"
+    "%A %d %B %Y",                 # "Sunday 28 June 2026"
+    # Full month name, month-first, with year
+    "%A, %B %d, %Y at %I:%M %p",   # "Saturday, June 28, 2025 at 8:30 PM"
+    "%A, %B %d, %Y at %I %p",      # "Saturday, June 28, 2025 at 8 PM"
+    "%B %d, %Y at %I:%M %p",       # "June 28, 2025 at 8:30 PM"
+    "%B %d, %Y at %I %p",          # "June 28, 2025 at 8 PM"
+    # Full month name, month-first, no year
+    "%A, %B %d at %I:%M %p",       # "Saturday, June 28 at 8:30 PM"
+    "%A, %B %d at %I %p",          # "Saturday, June 28 at 8 PM"
+    "%B %d at %I:%M %p",           # "June 28 at 8:30 PM"
+    "%B %d at %I %p",              # "June 28 at 8 PM"
+    # Date-only (no time) — year present or absent
+    "%B %d, %Y",                   # "June 28, 2026"
+    "%B %d",                       # "April 9"  (year inferred as current)
 )
 
+# Time-only formats used when the end portion of a range is just a clock time.
+_TIME_ONLY_FMTS = ("%I:%M %p", "%I %p", "%H:%M")
 
-def _parse_fb_date(raw: str | None) -> datetime | None:
-    if not raw:
-        return None
-    raw = raw.strip()
-    # Strip end-time suffix: "Saturday, June 28, 2025 at 8 PM – 11 PM" → "…at 8 PM"
-    # FB always shows "start – end" in the same text element.
-    raw = re.sub(r'\s*[–\-]\s*\d.*$', '', raw).strip()
+# Date-only formats used when the end portion is just a month+day (multi-day range).
+_DATE_ONLY_FMTS = ("%d %b", "%b %d")
+
+
+def _normalize_raw(raw: str) -> str:
+    raw = re.sub(r'[\u200b\u200c\u200d\ufeff]', '', raw).strip()
+    raw = re.sub(r'^[A-Za-z]+:\s*', '', raw)
+    raw = raw.replace('\u202f', ' ')
+    return raw
+
+
+def _extract_tz(raw: str) -> tuple[str, dt_timezone | None]:
+    """Pull a timezone indicator off the end of raw.
+
+    Handles:
+    - Named abbreviations: PST, CEST, PHT, \u2026
+    - Numeric offsets:  +08, +10, -05, +05:30
+    Returns (raw_without_tz, tz_or_None).
+    """
+    # Named abbreviation (e.g. " PST", " CEST")
+    m = re.search(r'\s+([A-Z]{2,5})((?:\s*[\-\u2013]\s*\S.*)?)$', raw)
+    if m:
+        abbr = m.group(1)
+        if abbr not in ('AM', 'PM') and abbr in _TZ_OFFSETS:
+            tz = dt_timezone(timedelta(minutes=_TZ_OFFSETS[abbr]))
+            raw = (raw[:m.start()] + m.group(2)).strip()
+            return raw, tz
+
+    # Numeric UTC offset (e.g. " +08", " -05", " +05:30")
+    m = re.search(r'\s+([+-]\d{2})(?::(\d{2}))?$', raw)
+    if m:
+        hours = int(m.group(1))
+        mins = int(m.group(2) or 0)
+        tz = dt_timezone(timedelta(hours=hours, minutes=mins if hours >= 0 else -mins))
+        raw = raw[:m.start()].strip()
+        return raw, tz
+
+    return raw, None
+
+
+def _strptime_dt(s: str, tz: dt_timezone | None) -> datetime | None:
+    s = re.sub(r'\bfrom\b', 'at', s, flags=re.IGNORECASE)
     for fmt in _DATE_FMTS:
         try:
-            dt = datetime.strptime(raw, fmt)
+            dt = datetime.strptime(s, fmt)
             if dt.year == 1900:
                 dt = dt.replace(year=datetime.now().year)
-            return dt.replace(tzinfo=_PHT).astimezone(dt_timezone.utc)
+            return dt.replace(tzinfo=tz or _PHT).astimezone(dt_timezone.utc)
         except ValueError:
             continue
     return None
 
+
+def _parse_end_time(end_raw: str, start_dt: datetime, tz: dt_timezone | None) -> datetime | None:
+    end_raw = end_raw.strip().replace('\u202f', ' ')
+    end_raw = re.sub(r'\s+(?!AM|PM)[A-Z]{2,5}$', '', end_raw).strip()
+
+    # Time-only end ("11 PM", "22:00") — apply to start date
+    # Work in local time so time-only and date-only overrides land on the right wall-clock value.
+    local_tz = tz or _PHT
+    start_local = start_dt.astimezone(local_tz)
+
+    for fmt in _TIME_ONLY_FMTS:
+        try:
+            t = datetime.strptime(end_raw, fmt)
+            end_dt = start_local.replace(hour=t.hour, minute=t.minute, second=0, microsecond=0)
+            if end_dt <= start_local:
+                end_dt += timedelta(days=1)
+            return end_dt.astimezone(dt_timezone.utc)
+        except ValueError:
+            continue
+
+    # Date-only end ("5 Jul", "Aug 23") — same time as start, different day
+    for fmt in _DATE_ONLY_FMTS:
+        try:
+            t = datetime.strptime(end_raw, fmt)
+            return start_local.replace(month=t.month, day=t.day).astimezone(dt_timezone.utc)
+        except ValueError:
+            continue
+
+    return _strptime_dt(end_raw, tz)
+
+
+def _parse_fb_date(raw: str | None) -> tuple[datetime | None, datetime | None]:
+    """Parse a raw FB date string into (start_dt, end_dt), both UTC.
+
+    Handles timezone abbreviations (mapped to real offsets, not defaulted to PHT),
+    time ranges ("8 PM \u2013 11 PM", "10:00-22:00", "Aug 17 - Aug 23"),
+    "from" instead of "at", zero-width spaces, and WHEN: prefixes.
+    Falls back to PHT only when no timezone can be identified.
+    """
+    if not raw:
+        return None, None
+    raw = raw.strip()
+
+    # ISO 8601 from <time datetime="..."> — clean path
+    # Replace trailing Z with +00:00 so fromisoformat treats it as UTC, not naive.
+    try:
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=_PHT)
+        return dt.astimezone(dt_timezone.utc), None
+    except ValueError:
+        pass
+
+    raw = _normalize_raw(raw)
+    raw, tz = _extract_tz(raw)
+
+    # ── Split range into start / end portions ───────────────────────────────
+
+    end_raw: str | None = None
+
+    if '\u2013' in raw:
+        # En-dash is FB's canonical range separator: "8 PM \u2013 11 PM"
+        start_part, end_part = raw.split('\u2013', 1)
+        raw, end_raw = start_part.strip(), end_part.strip()
+
+    elif re.search(r'\d{1,2}:\d{2}-\d{1,2}:\d{2}', raw):
+        # 24h time range: "10:00-22:00"
+        m = re.search(r'(\d{1,2}:\d{2})-(\d{1,2}:\d{2})', raw)
+        end_raw = m.group(2)
+        raw = raw[:m.start()] + m.group(1) + raw[m.end():]
+
+    elif re.search(r'\d{1,2}\s+[A-Za-z]{3}-\d{1,2}', raw):
+        # Compact multi-day range: "17 Aug-23 Aug", "3 Jul-5 Jul"
+        m = re.search(r'(\d{1,2}\s+[A-Za-z]{3,})-(\d{1,2}\s+[A-Za-z]{3,})', raw)
+        if m:
+            end_raw = m.group(2).strip()
+            raw = raw[:m.start()] + m.group(1) + raw[m.end():]
+
+    else:
+        # Spaced hyphen: "Aug 17 - Aug 23"
+        m = re.search(r'\s+-\s+(\S.*)$', raw)
+        if m:
+            end_raw = m.group(1).strip()
+            raw = raw[:m.start()].strip()
+
+    # Strip any remaining timezone suffix after range split
+    raw = re.sub(r'\s+(?!AM|PM)[A-Z]{2,5}$', '', raw).strip()
+
+    start_dt = _strptime_dt(raw, tz)
+    if start_dt is None:
+        logger.info("[facebook_events] _parse_fb_date: no format matched raw=%r", raw)
+        return None, None
+
+    end_dt = _parse_end_time(end_raw, start_dt, tz) if end_raw else None
+    return start_dt, end_dt
 
 # ── Scraper ───────────────────────────────────────────────────────────────────
 
@@ -701,11 +913,12 @@ class FacebookEventsScraper(BaseScraper):
 
     # ── Proxy ─────────────────────────────────────────────────────────────────
 
-    def _resolve_proxy(self) -> dict | None:
+    def _resolve_proxy(self) -> dict:
         """Determine the best available proxy config for this run.
 
         Called once per run (not per keyword) to avoid repeated preflight requests.
-        Priority: DataImpulse residential → free proxy list → no proxy.
+        Priority: DataImpulse residential → free proxy list.
+        Raises RuntimeError if no proxy is available — never falls back to unproxied.
         """
         import requests as _requests
 
@@ -746,13 +959,12 @@ class FacebookEventsScraper(BaseScraper):
                     logger.info("[%s] using free proxy: %s", self.source, proxy_url)
                     return {"server": proxy_url}
             except Exception as exc:
-                logger.warning("[%s] free proxy election failed: %s — running without proxy.", self.source, exc)
+                logger.warning("[%s] free proxy election failed: %s", self.source, exc)
 
-        logger.warning(
-            "[%s] no proxy available — Facebook may rate-limit or block datacenter IPs.",
-            self.source,
+        raise RuntimeError(
+            f"[{self.source}] No proxy available — DataImpulse traffic exhausted and "
+            "free proxy list empty or disabled. Aborting to avoid unproxied scraping."
         )
-        return None
 
     def _is_free_proxy(self, proxy: dict | None) -> bool:
         """Return True if proxy came from the free list (not DataImpulse)."""
@@ -777,7 +989,7 @@ class FacebookEventsScraper(BaseScraper):
 
     # ── Browser context ───────────────────────────────────────────────────────
 
-    def _browser_context(self, pw, proxy: dict | None = None):
+    def _browser_context(self, pw, proxy: dict | None = None, *, ignore_cert_errors: bool = False):
         headless = os.environ.get("FB_HEADLESS", "true").lower() != "false"
 
         launch_kwargs: dict = {
@@ -790,6 +1002,7 @@ class FacebookEventsScraper(BaseScraper):
         }
         if proxy:
             launch_kwargs["proxy"] = proxy
+        if ignore_cert_errors:
             # Free proxies often perform SSL interception and present their own
             # certificate. Chromium rejects these with ERR_CERT_AUTHORITY_INVALID.
             launch_kwargs["args"].append("--ignore-certificate-errors")
@@ -847,15 +1060,25 @@ class FacebookEventsScraper(BaseScraper):
         page.evaluate(_DISMISS_MODAL_JS)
         _pause(1.0, 2.0)
 
+        page_title = page.title()
+        page_url   = page.url
+        logger.info(
+            "[%s] search '%s': page title=%r url=%s",
+            self.source, query, page_title, page_url,
+        )
+
         result = page.evaluate(_EXTRACT_SEARCH_JS, query)
         cards  = result.get("events", [])
         debug  = result.get("debug", {})
         logger.info(
-            "[%s] search '%s': %d cards (%d skipped low-count)",
-            self.source, query, len(cards), debug.get("skippedLowCount", 0),
+            "[%s] search '%s': %d cards (%d skipped low-count, %d anchor roots examined)",
+            self.source, query, len(cards),
+            debug.get("skippedLowCount", 0),
+            debug.get("cardRoots", 0),
         )
 
         processed = 0
+        _consec_proxy_failures = 0
         for card in cards:
             if max_events is not None and processed >= max_events:
                 break
@@ -866,7 +1089,15 @@ class FacebookEventsScraper(BaseScraper):
             _pause(1.5, 3.5)
             try:
                 self._goto(page, event_url)
+                _consec_proxy_failures = 0
             except Exception as exc:
+                exc_str = str(exc)
+                if any(e in exc_str for e in ("ERR_PROXY_CONNECTION_FAILED", "ERR_TUNNEL_CONNECTION_FAILED", "ERR_SOCKS_CONNECTION_FAILED")):
+                    _consec_proxy_failures += 1
+                    if _consec_proxy_failures >= 2:
+                        raise RuntimeError(
+                            f"proxy dead: {_consec_proxy_failures} consecutive detail page connection failures"
+                        ) from exc
                 logger.warning("detail page failed for %s: %s", event_url, exc)
                 continue
             _pause(1.5, 3.5)
@@ -908,7 +1139,17 @@ class FacebookEventsScraper(BaseScraper):
             country        = loc_parts[-1] if len(loc_parts) >= 2 else ""
             organizer      = d.get("organizer_name") or card.get("organizer_name") or ""
             organizer_url  = d.get("organizer_url") or ""
-            start_raw      = d.get("start_datetime") or card.get("start_datetime")
+            detail_raw = d.get("start_datetime")
+            card_raw   = card.get("start_datetime")
+            starts_at, ends_at = _parse_fb_date(detail_raw)
+            if starts_at is None and card_raw:
+                # Detail page date failed to parse — fall back to card value.
+                starts_at, ends_at = _parse_fb_date(card_raw)
+            start_raw = detail_raw or card_raw
+            logger.info(
+                "[facebook_events] start_raw: detail=%r card=%r → starts_at=%s",
+                detail_raw, card_raw, starts_at,
+            )
             external_id    = d.get("event_id") or card.get("event_id", "")
             description    = d.get("description") or card.get("short_description") or ""
             image_url      = d.get("image_url") or ""
@@ -931,7 +1172,8 @@ class FacebookEventsScraper(BaseScraper):
                 description=description,
                 image_url=image_url,
                 registration_url=registration_url,
-                starts_at=_parse_fb_date(start_raw),
+                starts_at=starts_at,
+                ends_at=ends_at,
                 url=event_url,
                 external_id=external_id,
                 source_url=search_url,
@@ -981,6 +1223,7 @@ class FacebookEventsScraper(BaseScraper):
         query_ids: list[int] | None = None,
         locations: list[str] | None = None,
         max_events: int | None = None,
+        on_progress=None,
     ) -> dict:
         """Run the scraper for active SearchQuery rows.
 
@@ -1008,6 +1251,12 @@ class FacebookEventsScraper(BaseScraper):
             logger.info("[%s] no active search queries — nothing to do.", self.source)
             return {"source": self.source, "created": 0, "updated": 0}
 
+        # Bandwidth accumulator: total response body bytes buffered by Playwright
+        # across all keywords this run. Initialized here (not __init__) so re-use
+        # of the instance would not leak state.
+        self._bytes_transferred: int = 0
+        keyword_bytes_before: int = 0
+
         # Fan out queries × locations. Without locations, behaviour is unchanged.
         active_locs = locations or []
         if active_locs:
@@ -1023,12 +1272,21 @@ class FacebookEventsScraper(BaseScraper):
         using_free_proxy = self._is_free_proxy(proxy)
         failure_score = 0   # accumulates across the run; all failures count when on free proxy
         _ROTATE_THRESHOLD = 4
+        _KEYWORD_RETRIES  = 5  # retry a keyword this many times before skipping it
 
         # ── 2. Scrape + save per keyword ──────────────────────────────────────
         # ORM calls inside sync_playwright() are safe: run_scraper_job sets
         # DJANGO_ALLOW_ASYNC_UNSAFE=true for this subprocess.
         org_details: dict[str, dict] = {}   # url → enriched organizer data (global dedup)
-        seen_org_urls: set[str] = set()     # dedup organizer page visits across keywords
+
+        # Pre-seed with organizer FB URLs already in the DB so we skip re-visiting
+        # pages for organizers whose contact details we've already scraped.
+        from events.models import Organizer
+        seen_org_urls: set[str] = {
+            u.rstrip("/")
+            for u in Organizer.objects.exclude(facebook_url="").values_list("facebook_url", flat=True)
+            if u
+        }
         seen_org_keys: set[str] = set()     # dedup organizer upserts globally
         total_created = total_updated = 0
 
@@ -1037,55 +1295,143 @@ class FacebookEventsScraper(BaseScraper):
                 effective_term = f"{sq.query} {location_suffix}".strip()
                 logger.info("[%s] keyword %d/%d: '%s'", self.source, i, len(work_items), effective_term)
 
-                # Fresh browser context per keyword — forces a new TCP connection
-                # to the proxy so DataImpulse rotates to a new residential IP.
-                browser, context = self._browser_context(pw, proxy)
-                page = context.new_page()
-                Stealth().use_sync(page)
-                self._block_heavy_resources(page)
-                try:
-                    try:
-                        cards = list(self._fetch_for_query(page, effective_term, max_events=max_events))
-                        failure_score = max(0, failure_score - 1)  # ease off on success
-                        n = len(cards)
-                        with_img  = sum(1 for e in cards if e.image_url)
-                        with_desc = sum(1 for e in cards if e.description)
-                        logger.info(
-                            "[%s] search '%s' done: %d events, %d with image, %d with description",
-                            self.source, effective_term, n, with_img, with_desc,
-                        )
-                    except Exception as exc:
-                        logger.warning("[%s] search '%s' failed, skipping: %s", self.source, effective_term, exc)
-                        if using_free_proxy:
-                            failure_score += 1
-                            logger.warning(
-                                "[%s] free proxy failure score: %d/%d",
-                                self.source, failure_score, _ROTATE_THRESHOLD,
-                            )
-                            if failure_score >= _ROTATE_THRESHOLD:
-                                logger.warning("[%s] rotating free proxy (score %d)", self.source, failure_score)
-                                new_proxy = self._rotate_free_proxy()
-                                if new_proxy:
-                                    proxy = new_proxy
-                                failure_score = 0
-                        _pause(3.0, 6.0)
-                        continue
+                # Bytes before this keyword (shared across all retry attempts).
+                keyword_bytes_before = self._bytes_transferred
+                cards: list = []
+                _fetched = False
 
-                    # Visit organizer pages for new organizers in these cards.
-                    for se in cards:
-                        url = (se.organizer_url or "").rstrip("/")
-                        if not url or url in seen_org_urls:
-                            continue
-                        seen_org_urls.add(url)
-                        logger.info("[%s] visiting organizer page: %s", self.source, url)
-                        details = self._fetch_organizer_page(page, url)
-                        if not details.get("name"):
-                            details["name"] = se.organizer
-                        org_details[url] = details
-                        _pause(2.0, 4.0)
-                finally:
-                    context.close()
-                    browser.close()
+                for _kattempt in range(1, _KEYWORD_RETRIES + 1):
+                    # Fresh browser context per attempt — forces a new TCP connection
+                    # to the proxy so DataImpulse rotates to a new residential IP.
+                    browser, context = self._browser_context(pw, proxy, ignore_cert_errors=using_free_proxy)
+                    page = context.new_page()
+
+                    _resource_breakdown: dict[str, int] = {}
+
+                    # CDP gives us encodedDataLength — actual compressed wire bytes,
+                    # unlike response.body() which is decompressed.
+                    _cdp = context.new_cdp_session(page)
+                    _cdp.send("Network.enable")
+
+                    def _on_response_received(params, _bd=_resource_breakdown):
+                        try:
+                            rtype = params.get("type", "other").lower()
+                            # Map request ID → type so loadingFinished can bucket it.
+                            _bd[f"__req_{params['requestId']}"] = rtype
+                        except Exception:
+                            logger.debug("CDP responseReceived handler error", exc_info=True)
+
+                    def _on_loading_finished(params, _self=self, _bd=_resource_breakdown):
+                        try:
+                            size  = int(params.get("encodedDataLength", 0))
+                            _self._bytes_transferred += size
+                            rtype = _bd.pop(f"__req_{params['requestId']}", "other")
+                            _bd[rtype] = _bd.get(rtype, 0) + size
+                        except Exception:
+                            logger.debug("CDP loadingFinished handler error", exc_info=True)
+
+                    _cdp.on("Network.responseReceived", _on_response_received)
+                    _cdp.on("Network.loadingFinished", _on_loading_finished)
+
+                    Stealth().use_sync(page)
+                    self._block_heavy_resources(page)
+                    attempt_bytes_before = self._bytes_transferred
+                    _proxy_blocked = False
+                    try:
+                        try:
+                            cards = list(self._fetch_for_query(page, effective_term, max_events=max_events))
+                            attempt_delta = self._bytes_transferred - attempt_bytes_before
+                            if not cards and attempt_delta < 2_000_000 and using_free_proxy:
+                                # Near-zero bytes + 0 cards means the proxy swallowed the
+                                # connection silently. A real "no results" page still loads
+                                # FB's full shell (hundreds of KB). Rotate and retry.
+                                _proxy_blocked = True
+                                logger.warning(
+                                    "[%s] search '%s': 0 cards + %.2f MB on attempt %d/%d — likely blocked proxy, retrying",
+                                    self.source, effective_term, attempt_delta / 1_048_576, _kattempt, _KEYWORD_RETRIES,
+                                )
+                                if _kattempt < _KEYWORD_RETRIES:
+                                    new_proxy = self._rotate_free_proxy()
+                                    if new_proxy:
+                                        proxy = new_proxy
+                                        failure_score = 0
+                                    _pause(3.0, 6.0)
+                            else:
+                                _fetched = True
+                                failure_score = max(0, failure_score - 1)  # ease off on success
+                                n = len(cards)
+                                with_img  = sum(1 for e in cards if e.image_url)
+                                with_desc = sum(1 for e in cards if e.description)
+                                logger.info(
+                                    "[%s] search '%s' done: %d events, %d with image, %d with description",
+                                    self.source, effective_term, n, with_img, with_desc,
+                                )
+                        except Exception as exc:
+                            if _kattempt < _KEYWORD_RETRIES:
+                                logger.warning(
+                                    "[%s] search '%s' failed (attempt %d/%d), retrying with new proxy: %s",
+                                    self.source, effective_term, _kattempt, _KEYWORD_RETRIES, exc,
+                                )
+                                if using_free_proxy:
+                                    new_proxy = self._rotate_free_proxy()
+                                    if new_proxy:
+                                        proxy = new_proxy
+                                        failure_score = 0
+                            else:
+                                logger.warning(
+                                    "[%s] search '%s' failed after %d attempts, skipping: %s",
+                                    self.source, effective_term, _KEYWORD_RETRIES, exc,
+                                )
+                                if using_free_proxy:
+                                    failure_score += 1
+                                    logger.warning(
+                                        "[%s] free proxy failure score: %d/%d",
+                                        self.source, failure_score, _ROTATE_THRESHOLD,
+                                    )
+                                    if failure_score >= _ROTATE_THRESHOLD:
+                                        logger.warning("[%s] rotating free proxy (score %d)", self.source, failure_score)
+                                        new_proxy = self._rotate_free_proxy()
+                                        if new_proxy:
+                                            proxy = new_proxy
+                                        failure_score = 0
+                            _pause(3.0, 6.0)
+                        else:
+                            # Visit organizer pages for new organizers in these cards.
+                            if not _proxy_blocked:
+                                for se in cards:
+                                    url = (se.organizer_url or "").rstrip("/")
+                                    if not url or url in seen_org_urls:
+                                        continue
+                                    seen_org_urls.add(url)
+                                    logger.info("[%s] visiting organizer page: %s", self.source, url)
+                                    details = self._fetch_organizer_page(page, url)
+                                    if not details.get("name"):
+                                        details["name"] = se.organizer
+                                    org_details[url] = details
+                                    _pause(2.0, 4.0)
+                    finally:
+                        context.close()
+                        browser.close()
+                        delta = self._bytes_transferred - keyword_bytes_before
+                        breakdown = ", ".join(
+                            f"{t}: {b/1_048_576:.1f}MB"
+                            for t, b in sorted(
+                                ((t, b) for t, b in _resource_breakdown.items() if not t.startswith("__req_")),
+                                key=lambda x: -x[1],
+                            )
+                        )
+                        logger.info(
+                            "[%s] keyword '%s': transferred %.1f MB (run total %.1f MB) [%s]",
+                            self.source, effective_term,
+                            delta / 1_048_576, self._bytes_transferred / 1_048_576,
+                            breakdown,
+                        )
+
+                    if _fetched:
+                        break
+
+                if not _fetched:
+                    continue
 
                 # Save immediately — a crash or cancellation won't lose this keyword's data.
                 kw_orgs: list[ScrapedOrganizer] = []
@@ -1134,6 +1480,11 @@ class FacebookEventsScraper(BaseScraper):
                     "[%s] saved query '%s': %d created, %d updated",
                     self.source, effective_term, result["created"], result["updated"],
                 )
+                if on_progress is not None:
+                    try:
+                        on_progress({"total_bytes": self._bytes_transferred})
+                    except Exception:
+                        pass
                 _pause(3.0, 6.0)
 
         logger.info(
@@ -1144,4 +1495,5 @@ class FacebookEventsScraper(BaseScraper):
             "source": self.source,
             "created": total_created,
             "updated": total_updated,
+            "total_bytes": self._bytes_transferred,
         }

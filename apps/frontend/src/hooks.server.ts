@@ -4,6 +4,7 @@ import type { Handle } from '@sveltejs/kit';
 // at the real servers. No rebuild needed; env vars are read at runtime.
 const DJANGO_URL = (process.env.DJANGO_API_URL ?? 'http://localhost:8000').replace(/\/$/, '');
 const NODE_URL = (process.env.NODE_API_URL ?? 'http://localhost:8001').replace(/\/$/, '');
+const IS_PRODUCTION = process.env.ENVIRONMENT === 'production';
 
 const proxyRequest = async (targetUrl: string, request: Request): Promise<Response> => {
 	const headers = new Headers(request.headers);
@@ -50,6 +51,11 @@ export const handle: Handle = async ({ event, resolve }) => {
 	// Proxy /api/* → DJANGO_URL/api/*
 	if (pathname.startsWith('/api/')) {
 		return proxyRequest(`${DJANGO_URL}${pathname}${search}`, event.request);
+	}
+
+	// In production, only tracker routes are accessible — redirect everything else.
+	if (IS_PRODUCTION && !pathname.startsWith('/tracker')) {
+		return new Response(null, { status: 302, headers: { Location: '/tracker' } });
 	}
 
 	return resolve(event);
