@@ -37,5 +37,6 @@ apps/frontend/build/
 .claude/chrome-devtools/tmp/
 
 www.facebook.com_cookies.txt
+www.instagram.com_cookies.txt
 apps/backend/scripts/fb_profile
 apps/backend/scripts/fb_cookies.json

@@ -12,6 +12,7 @@
 	let sourceFilter = $state('');
 	let showAddForm = $state(false);
 	let newQuery = $state('');
+	let newSource = $state('instagram_posts');
 	let adding = $state(false);
 	let addError = $state('');
 	let addSummary = $state('');
@@ -107,7 +108,7 @@
 			const created: SearchQuery[] = [];
 			for (const token of tokens) {
 				try {
-					created.push(await api.createSearchQuery({ query: token }));
+					created.push(await api.createSearchQuery({ query: token, source: newSource }));
 					added += 1;
 				} catch (e: unknown) {
 					// Only 409 (already exists) is a known expected failure; other errors propagate.
@@ -262,6 +263,18 @@
 						class="w-full rounded-md border border-border bg-surface-2 px-3 py-2 text-sm text-text placeholder:text-muted focus:border-accent focus:outline-none"
 					/>
 				</div>
+				<div>
+					<label for="new-source" class="mb-1 block text-xs text-muted">Source</label>
+					<select
+						id="new-source"
+						bind:value={newSource}
+						class="rounded-md border border-border bg-surface-2 px-3 py-2 text-sm text-text focus:border-accent focus:outline-none"
+					>
+						<option value="instagram_posts">instagram_posts</option>
+						<option value="facebook_events">facebook_events</option>
+						<option value="facebook_posts">facebook_posts</option>
+					</select>
+				</div>
 				<div class="flex gap-2">
 					<button
 						onclick={handleAdd}
@@ -271,7 +284,7 @@
 						{adding ? 'Adding…' : 'Add'}
 					</button>
 					<button
-						onclick={() => { showAddForm = false; addError = ''; addSummary = ''; newQuery = ''; }}
+						onclick={() => { showAddForm = false; addError = ''; addSummary = ''; newQuery = ''; newSource = 'instagram_posts'; }}
 						class="rounded-md border border-border px-4 py-2 text-sm text-muted transition hover:bg-surface-2 hover:text-text"
 					>
 						Cancel
