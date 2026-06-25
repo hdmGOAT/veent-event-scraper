@@ -192,7 +192,7 @@ class Command(BaseCommand):
                 else (
                     scraper.run(query_id=query_id, locations=locations, on_progress=flush_progress)
                     if query_id
-                    else scraper.run(locations=locations, on_progress=flush_progress)
+                    else scraper.run(on_progress=flush_progress)
                 )
             )
         except Exception:
@@ -223,7 +223,10 @@ class Command(BaseCommand):
             from events.scrapers.facebook_events import log_bandwidth
             from events.scrapers.social_proxy import social_proxy_configured
             from events.models import BandwidthLog
-            proxy_type = BandwidthLog.PROXY_DATAIMPULSE if social_proxy_configured() else BandwidthLog.PROXY_FREE
+            _used_free = result.get("using_free_proxy")
+            if _used_free is None:
+                _used_free = not social_proxy_configured()
+            proxy_type = BandwidthLog.PROXY_FREE if _used_free else BandwidthLog.PROXY_DATAIMPULSE
             try:
                 log_bandwidth(source=key, bytes_transferred=total_bytes, proxy_type=proxy_type, scraper_run=run)
             except Exception:

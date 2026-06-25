@@ -1,8 +1,10 @@
 @import 'tailwindcss';
 
 /* ------------------------------------------------------------------ */
-/* Veent admin dashboard — dark design system.                        */
-/* Custom color tokens become Tailwind utilities (bg-surface, etc.).  */
+/* Veent admin dashboard — design token system.                        */
+/* Dark values live in @theme (Tailwind default). Light overrides are  */
+/* applied via html.light { … } so every utility (bg-surface, etc.)   */
+/* automatically reflects the active theme without duplication.        */
 /* ------------------------------------------------------------------ */
 @theme {
 	--color-bg: #0a0e14;
@@ -25,6 +27,32 @@
 	--font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
 }
 
+/* ------------------------------------------------------------------ */
+/* Light mode token overrides                                          */
+/* All Tailwind utilities that reference var(--color-*) will pick     */
+/* these up automatically when the html.light class is present.       */
+/* ------------------------------------------------------------------ */
+html.light {
+	--color-bg: #f8fafc;
+	--color-surface: #ffffff;
+	--color-surface-2: #f1f5f9;
+	--color-border: #e2e8f0;
+	--color-muted: #64748b;
+	--color-text: #334155;
+	--color-heading: #0f172a;
+	/* Slightly darker cyan so text-accent is legible on white */
+	--color-accent: #0891b2;
+	/* Light teal tint used as badge/chip background in light mode */
+	--color-accent-dim: #cffafe;
+
+	--color-success: #059669;
+	--color-success-bg: #d1fae5;
+	--color-warning: #d97706;
+	--color-warning-bg: #fef3c7;
+	--color-danger: #dc2626;
+	--color-danger-bg: #fee2e2;
+}
+
 html,
 body {
 	background-color: var(--color-bg);
@@ -35,4 +63,67 @@ body {
 * {
 	scrollbar-width: thin;
 	scrollbar-color: var(--color-border) transparent;
+}
+
+/* Smooth color transition only during the ~300 ms toggle window.    */
+/* Added/removed programmatically by themeStore.toggle() to avoid    */
+/* interfering with hover and animation transitions elsewhere.        */
+html.theme-transitioning,
+html.theme-transitioning *,
+html.theme-transitioning *::before,
+html.theme-transitioning *::after {
+	transition-duration: 0.2s !important;
+	transition-property: background-color, border-color, color, fill, stroke !important;
+	transition-timing-function: ease !important;
+	transition-delay: 0s !important;
+}
+
+/* ------------------------------------------------------------------ */
+/* Leaflet map popup — light mode overrides                           */
+/* Dark defaults live in VenueMap.svelte <style>. These rules only   */
+/* apply when html.light is active.                                   */
+/* ------------------------------------------------------------------ */
+html.light .vm-popup-wrap .leaflet-popup-content-wrapper {
+	background: #ffffff;
+	border: 1px solid #e2e8f0;
+	box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+	color: #0f172a;
+}
+
+html.light .vm-popup-wrap .leaflet-popup-tip {
+	background: #ffffff;
+}
+
+html.light .vm-name {
+	color: #7c3aed;
+}
+
+html.light .vm-name:hover {
+	color: #6d28d9;
+}
+
+html.light .vm-type {
+	color: #475569;
+	background: #f1f5f9;
+}
+
+html.light .vm-loc {
+	color: #64748b;
+}
+
+html.light .vm-addr {
+	color: #94a3b8;
+}
+
+html.light .vm-events {
+	color: #7c3aed;
+	background: #ede9fe;
+}
+
+html.light .vm-website {
+	color: #0891b2;
+}
+
+html.light .leaflet-container {
+	background: #f8fafc;
 }

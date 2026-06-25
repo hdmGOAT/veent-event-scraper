@@ -499,7 +499,7 @@ _EXTRACT_DETAIL_JS = r"""
         if (UI_CHROME_SET.has(t.toLowerCase())) continue;
         // Skip platform/login UI text that leaks through as standalone leaf nodes
         if (/^(facebook|instagram|twitter|tiktok|youtube|privacy|terms|cookies?|see\s+more|see\s+less)$/i.test(t)) continue;
-        if (/^(log\s*in|sign\s*up|create\s*(new\s*)?account|forgot(?:ten)?\s*(account|password)\??|email\s*address|phone\s*number|password|new\s*to\s*facebook|advertising|sponsored|suggested\s+for\s+you|ad\s+choices?)$/i.test(t)) continue;
+        if (/^(log\s*in|sign\s*up|create\s*(new\s*)?account|forgot(?:ten)?\s*(account|password)\??|email\s*address|phone\s*number|password|new\s*to\s*facebook\??|advertising|sponsored|suggested\s+for\s+you|ad\s+choices?)$/i.test(t)) continue;
         if (/^(details|overview|schedule|map|tickets?|share|more options)$/i.test(t)) continue;
         if (/^consumer\s+health\s+privacy$/i.test(t)) continue;
         if (/^duration:\s*\d+/i.test(t)) continue;
@@ -817,7 +817,7 @@ _TZ_OFFSETS: dict[str, int] = {
     "NZDT": 780,
 }
 
-from .geo_normalize import normalize_country as _normalize_country
+from .geo_normalize import normalize_country as _normalize_country, has_alias as _has_alias
 
 
 _DATE_FMTS = (
@@ -926,13 +926,17 @@ def _parse_end_time(end_raw: str, start_dt: datetime, tz: dt_timezone | None) ->
     end_raw = re.sub(r'\s+(?!AM|PM)[A-Z]{2,5}$', '', end_raw).strip()
 
     # Time-only end ("11 PM", "22:00") — apply to start date
+    # Work in local time so time-only and date-only overrides land on the right wall-clock value.
+    local_tz = tz or _PHT
+    start_local = start_dt.astimezone(local_tz)
+
     for fmt in _TIME_ONLY_FMTS:
         try:
             t = datetime.strptime(end_raw, fmt)
-            end_dt = start_dt.replace(hour=t.hour, minute=t.minute, second=0, microsecond=0)
-            if end_dt <= start_dt:
+            end_dt = start_local.replace(hour=t.hour, minute=t.minute, second=0, microsecond=0)
+            if end_dt <= start_local:
                 end_dt += timedelta(days=1)
-            return end_dt
+            return end_dt.astimezone(dt_timezone.utc)
         except ValueError:
             continue
 
@@ -940,7 +944,7 @@ def _parse_end_time(end_raw: str, start_dt: datetime, tz: dt_timezone | None) ->
     for fmt in _DATE_ONLY_FMTS:
         try:
             t = datetime.strptime(end_raw, fmt)
-            return start_dt.replace(month=t.month, day=t.day)
+            return start_local.replace(month=t.month, day=t.day).astimezone(dt_timezone.utc)
         except ValueError:
             continue
 
@@ -960,8 +964,9 @@ def _parse_fb_date(raw: str | None) -> tuple[datetime | None, datetime | None]:
     raw = raw.strip()
 
     # ISO 8601 from <time datetime="..."> — clean path
+    # Replace trailing Z with +00:00 so fromisoformat treats it as UTC, not naive.
     try:
-        dt = datetime.fromisoformat(raw.rstrip("Z"))
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=_PHT)
         return dt.astimezone(dt_timezone.utc), None
@@ -1109,7 +1114,7 @@ class FacebookEventsScraper(BaseScraper):
 
     # ── Browser context ───────────────────────────────────────────────────────
 
-    def _browser_context(self, pw, proxy: dict | None = None):
+    def _browser_context(self, pw, proxy: dict | None = None, *, ignore_cert_errors: bool = False):
         headless = os.environ.get("FB_HEADLESS", "true").lower() != "false"
 
         launch_kwargs: dict = {
@@ -1122,6 +1127,7 @@ class FacebookEventsScraper(BaseScraper):
         }
         if proxy:
             launch_kwargs["proxy"] = proxy
+        if ignore_cert_errors:
             # Free proxies often perform SSL interception and present their own
             # certificate. Chromium rejects these with ERR_CERT_AUTHORITY_INVALID.
             launch_kwargs["args"].append("--ignore-certificate-errors")
@@ -1254,10 +1260,14 @@ class FacebookEventsScraper(BaseScraper):
             venue_name     = d.get("venue_name") or card.get("venue_name") or ""
             city_location  = d.get("city_location", "")
             loc_parts      = [p.strip() for p in city_location.split(",")] if city_location else []
-            country        = _normalize_country(loc_parts[-1] if len(loc_parts) >= 2 else "")
-            # With 3+ parts (e.g. "Sub-venue, 2600 City, Country") take the second-to-last
-            # and strip any leading postal code digits to get the actual city name.
-            _city_raw      = loc_parts[-2] if len(loc_parts) >= 3 else (loc_parts[0] if loc_parts else "")
+            _last_seg      = loc_parts[-1] if len(loc_parts) >= 2 else ""
+            country        = _normalize_country(_last_seg) if _has_alias(_last_seg) else ""
+            # With 3+ parts (e.g. "Sub-venue, 2600 City, Country") take the second-to-last;
+            # for 2 parts where last isn't a country alias, last segment is the city.
+            if country and len(loc_parts) >= 2:
+                _city_raw = loc_parts[-2] if len(loc_parts) >= 3 else loc_parts[0]
+            else:
+                _city_raw = loc_parts[-1] if len(loc_parts) >= 2 else (loc_parts[0] if loc_parts else "")
             city           = _city_raw.lstrip("0123456789 ").strip()
             event_address  = d.get("address") or ""
             organizer      = d.get("organizer_name") or card.get("organizer_name") or ""
@@ -1408,9 +1418,11 @@ class FacebookEventsScraper(BaseScraper):
         # Pre-seed with organizer FB URLs already in the DB so we skip re-visiting
         # pages for organizers whose contact details we've already scraped.
         from events.models import Organizer
-        seen_org_urls: set[str] = set(
-            Organizer.objects.exclude(facebook_url="").values_list("facebook_url", flat=True)
-        )
+        seen_org_urls: set[str] = {
+            u.rstrip("/")
+            for u in Organizer.objects.exclude(facebook_url="").values_list("facebook_url", flat=True)
+            if u
+        }
         seen_org_keys: set[str] = set()     # dedup organizer upserts globally
         total_created = total_updated = 0
 
@@ -1427,7 +1439,7 @@ class FacebookEventsScraper(BaseScraper):
                 for _kattempt in range(1, _KEYWORD_RETRIES + 1):
                     # Fresh browser context per attempt — forces a new TCP connection
                     # to the proxy so DataImpulse rotates to a new residential IP.
-                    browser, context = self._browser_context(pw, proxy)
+                    browser, context = self._browser_context(pw, proxy, ignore_cert_errors=using_free_proxy)
                     page = context.new_page()
 
                     _resource_breakdown: dict[str, int] = {}
@@ -1443,7 +1455,7 @@ class FacebookEventsScraper(BaseScraper):
                             # Map request ID → type so loadingFinished can bucket it.
                             _bd[f"__req_{params['requestId']}"] = rtype
                         except Exception:
-                            pass
+                            logger.debug("CDP responseReceived handler error", exc_info=True)
 
                     def _on_loading_finished(params, _self=self, _bd=_resource_breakdown):
                         try:
@@ -1452,7 +1464,7 @@ class FacebookEventsScraper(BaseScraper):
                             rtype = _bd.pop(f"__req_{params['requestId']}", "other")
                             _bd[rtype] = _bd.get(rtype, 0) + size
                         except Exception:
-                            pass
+                            logger.debug("CDP loadingFinished handler error", exc_info=True)
 
                     _cdp.on("Network.responseReceived", _on_response_received)
                     _cdp.on("Network.loadingFinished", _on_loading_finished)
@@ -1465,7 +1477,7 @@ class FacebookEventsScraper(BaseScraper):
                         try:
                             cards = list(self._fetch_for_query(page, effective_term, max_events=max_events))
                             attempt_delta = self._bytes_transferred - attempt_bytes_before
-                            if not cards and attempt_delta < 2_000_000 and using_free_proxy and _kattempt < _KEYWORD_RETRIES:
+                            if not cards and attempt_delta < 2_000_000 and using_free_proxy:
                                 # Near-zero bytes + 0 cards means the proxy swallowed the
                                 # connection silently. A real "no results" page still loads
                                 # FB's full shell (hundreds of KB). Rotate and retry.
@@ -1474,12 +1486,12 @@ class FacebookEventsScraper(BaseScraper):
                                     "[%s] search '%s': 0 cards + %.2f MB on attempt %d/%d — likely blocked proxy, retrying",
                                     self.source, effective_term, attempt_delta / 1_048_576, _kattempt, _KEYWORD_RETRIES,
                                 )
-                                if using_free_proxy:
+                                if _kattempt < _KEYWORD_RETRIES:
                                     new_proxy = self._rotate_free_proxy()
                                     if new_proxy:
                                         proxy = new_proxy
                                         failure_score = 0
-                                _pause(3.0, 6.0)
+                                    _pause(3.0, 6.0)
                             else:
                                 _fetched = True
                                 failure_score = max(0, failure_score - 1)  # ease off on success
@@ -1620,4 +1632,5 @@ class FacebookEventsScraper(BaseScraper):
             "created": total_created,
             "updated": total_updated,
             "total_bytes": self._bytes_transferred,
+            "using_free_proxy": using_free_proxy,
         }

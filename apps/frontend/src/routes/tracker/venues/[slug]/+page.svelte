@@ -1,6 +1,8 @@
 <script lang="ts">
+	import { Moon, Sun } from 'lucide-svelte';
 	import Badge from '$lib/components/Badge.svelte';
 	import { formatDate } from '$lib/format';
+	import { themeStore } from '$lib/theme.svelte';
 	import { safeUrl } from '$lib/utils/url';
 	import type { PageData } from './$types';
 
@@ -15,10 +17,24 @@
 </svelte:head>
 
 <div class="p-8">
-	<a href="/tracker" class="mb-5 inline-flex items-center gap-1 text-sm text-muted hover:text-accent">
-		<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12" /><polyline points="12 19 5 12 12 5" /></svg>
-		Back to Tracker
-	</a>
+	<div class="mb-5 flex items-center justify-between">
+		<a href="/tracker" class="inline-flex items-center gap-1 text-sm text-muted hover:text-accent">
+			<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12" /><polyline points="12 19 5 12 12 5" /></svg>
+			Back to Tracker
+		</a>
+		<button
+			type="button"
+			onclick={() => themeStore.toggle()}
+			aria-label={themeStore.current === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+			class="flex h-8 w-8 items-center justify-center rounded-lg text-muted transition-colors hover:bg-surface-2 hover:text-heading"
+		>
+			{#if themeStore.current === 'dark'}
+				<Sun size={16} strokeWidth={2} />
+			{:else}
+				<Moon size={16} strokeWidth={2} />
+			{/if}
+		</button>
+	</div>
 
 	<div class="grid grid-cols-1 gap-6 lg:grid-cols-3">
 		<!-- Info card -->

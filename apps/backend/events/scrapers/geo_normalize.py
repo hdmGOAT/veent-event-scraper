@@ -79,7 +79,8 @@ _ALIASES: dict[str, str] = {
     "dc": "United States", "district of columbia": "United States",
 
     # ── Canada — ISO codes + provinces/territories ───────────────────────────
-    "ca": "Canada", "can": "Canada", "canada": "Canada",
+    # "ca" intentionally omitted: conflicts with California (US state) which takes priority.
+    "can": "Canada", "canada": "Canada",
     "ab": "Canada", "alberta": "Canada",
     "bc": "Canada", "british columbia": "Canada",
     "mb": "Canada", "manitoba": "Canada",
@@ -87,10 +88,12 @@ _ALIASES: dict[str, str] = {
     "nl": "Canada", "newfoundland and labrador": "Canada",
     "ns": "Canada", "nova scotia": "Canada",
     "on": "Canada", "ontario": "Canada",
-    "pe": "Canada", "prince edward island": "Canada",
+    # "pe" intentionally omitted: conflicts with Peru ("pe") added below; pe→PEI retained via full name.
+    "prince edward island": "Canada",
     "qc": "Canada", "quebec": "Canada",
-    "sk": "Canada", "saskatchewan": "Canada",
-    "nt": "Canada", "northwest territories": "Canada",
+    # "sk" intentionally omitted: conflicts with Slovakia ("sk") added below; retained via full name.
+    "saskatchewan": "Canada",
+    "nt": "Canada", "northwest territories": "Canada",  # takes priority over "nt" → Australia (Northern Territory)
     "nu": "Canada", "nunavut": "Canada",
     "yt": "Canada", "yukon": "Canada",
 
@@ -106,13 +109,16 @@ _ALIASES: dict[str, str] = {
     "vic": "Australia", "victoria": "Australia",
     "qld": "Australia", "queensland": "Australia",
     "sa": "Australia", "south australia": "Australia",
-    "wa": "Australia", "western australia": "Australia",
+    # "wa" omitted: conflicts with Washington (US state) which takes priority.
+    "western australia": "Australia",
     "tas": "Australia", "tasmania": "Australia",
     "act": "Australia", "australian capital territory": "Australia",
-    "nt": "Australia", "northern territory": "Australia",
+    # "nt" omitted: "nt" → Canada (Northwest Territories) takes priority.
+    "northern territory": "Australia",
 
     # ── India ─────────────────────────────────────────────────────────────────
-    "in": "India", "ind": "India", "india": "India",
+    # "in" omitted: conflicts with Indiana (US state) which takes priority.
+    "ind": "India", "india": "India",
 
     # ── Indonesia ─────────────────────────────────────────────────────────────
     "idn": "Indonesia", "indonesia": "Indonesia",
@@ -135,7 +141,8 @@ _ALIASES: dict[str, str] = {
     "south korea": "South Korea", "korea": "South Korea",
 
     # ── Germany ───────────────────────────────────────────────────────────────
-    "de": "Germany", "deu": "Germany", "germany": "Germany",
+    # "de" omitted: conflicts with Delaware (US state) which takes priority.
+    "deu": "Germany", "germany": "Germany",
 
     # ── France ────────────────────────────────────────────────────────────────
     "fr": "France", "fra": "France", "france": "France",
@@ -243,13 +250,16 @@ _ALIASES: dict[str, str] = {
     "et": "Ethiopia", "eth": "Ethiopia", "ethiopia": "Ethiopia",
 
     # ── Argentina ─────────────────────────────────────────────────────────────
-    "ar": "Argentina", "arg": "Argentina", "argentina": "Argentina",
+    # "ar" omitted: conflicts with Arkansas (US state) which takes priority.
+    "arg": "Argentina", "argentina": "Argentina",
 
     # ── Colombia ──────────────────────────────────────────────────────────────
-    "co": "Colombia", "col": "Colombia", "colombia": "Colombia",
+    # "co" omitted: conflicts with Colorado (US state) which takes priority.
+    "col": "Colombia", "colombia": "Colombia",
 
     # ── Peru ──────────────────────────────────────────────────────────────────
-    "pe": "Peru", "per": "Peru", "peru": "Peru",
+    # "pe" omitted: conflicts with Prince Edward Island (Canada) which takes priority.
+    "per": "Peru", "peru": "Peru",
 
     # ── Chile ─────────────────────────────────────────────────────────────────
     "cl": "Chile", "chl": "Chile", "chile": "Chile",
@@ -276,21 +286,25 @@ _ALIASES: dict[str, str] = {
     "bn": "Brunei", "brn": "Brunei", "brunei": "Brunei",
 
     # ── Laos ──────────────────────────────────────────────────────────────────
-    "la": "Laos", "lao": "Laos", "laos": "Laos",
+    # "la" omitted: conflicts with Louisiana (US state) which takes priority.
+    "lao": "Laos", "laos": "Laos",
 
     # ── Malta ─────────────────────────────────────────────────────────────────
-    "mt": "Malta", "mlt": "Malta", "malta": "Malta",
+    # "mt" omitted: conflicts with Montana (US state) which takes priority.
+    "mlt": "Malta", "malta": "Malta",
 
     # ── Papua New Guinea ──────────────────────────────────────────────────────
     "pg": "Papua New Guinea", "png": "Papua New Guinea",
     "papua new guinea": "Papua New Guinea",
 
     # ── Saudi Arabia ──────────────────────────────────────────────────────────
-    "sa": "Saudi Arabia", "sau": "Saudi Arabia", "saudi arabia": "Saudi Arabia",
+    # "sa" omitted: conflicts with South Australia which takes priority.
+    "sau": "Saudi Arabia", "saudi arabia": "Saudi Arabia",
     "ksa": "Saudi Arabia",
 
     # ── Israel ────────────────────────────────────────────────────────────────
-    "il": "Israel", "isr": "Israel", "israel": "Israel",
+    # "il" omitted: conflicts with Illinois (US state) which takes priority.
+    "isr": "Israel", "israel": "Israel",
 
     # ── Russia ────────────────────────────────────────────────────────────────
     "ru": "Russia", "rus": "Russia", "russia": "Russia",
@@ -312,13 +326,15 @@ _ALIASES: dict[str, str] = {
     "hr": "Croatia", "hrv": "Croatia", "croatia": "Croatia",
 
     # ── Slovakia ──────────────────────────────────────────────────────────────
-    "sk": "Slovakia", "svk": "Slovakia", "slovakia": "Slovakia",
+    # "sk" omitted: conflicts with Saskatchewan (Canada) which takes priority.
+    "svk": "Slovakia", "slovakia": "Slovakia",
 
     # ── Serbia ────────────────────────────────────────────────────────────────
     "rs": "Serbia", "srb": "Serbia", "serbia": "Serbia",
 
     # ── Morocco ───────────────────────────────────────────────────────────────
-    "ma": "Morocco", "mar": "Morocco", "morocco": "Morocco",
+    # "ma" omitted: conflicts with Massachusetts (US state) which takes priority.
+    "mar": "Morocco", "morocco": "Morocco",
 
     # ── Tanzania ──────────────────────────────────────────────────────────────
     "tz": "Tanzania", "tza": "Tanzania", "tanzania": "Tanzania",
@@ -423,13 +439,16 @@ def geocode_country(query: str, *, timeout: int = 15) -> str:
     for i in range(1, len(parts)):
         candidates.append(", ".join(parts[i:]))
 
-    for candidate in candidates:
+    for i, candidate in enumerate(candidates):
         if candidate in _geocode_cache:
             result = _geocode_cache[candidate]
             if result:
                 _geocode_cache[query] = result
                 return result
             continue
+        if i > 0:
+            import time as _time
+            _time.sleep(1)
         try:
             result = _nominatim_lookup(candidate, timeout)
             _geocode_cache[candidate] = result

@@ -9,6 +9,9 @@ export default defineConfig(({ mode }) => {
 	const djangoUrl = rootEnv.DJANGO_API_URL ?? 'http://localhost:8000';
 	const nodeUrl = rootEnv.NODE_API_URL ?? 'http://localhost:8001';
 
+	// Inject root .env vars into process.env so hooks.server.ts can read them at SSR runtime.
+	Object.assign(process.env, rootEnv);
+
 	return {
 		plugins: [
 			tailwindcss(),

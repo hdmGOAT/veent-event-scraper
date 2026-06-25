@@ -264,7 +264,13 @@ class Command(BaseCommand):
                     elif has_alias(venue_name.strip()):
                         country = _normalize_country(venue_name.strip())
 
-                _city_raw    = loc_parts[-2] if len(loc_parts) >= 3 else (loc_parts[0] if loc_parts else "")
+                # Strip trailing country/state alias segments, then take the last remaining part as city.
+                # E.g. "Camp Aguinaldo, Quezon City, Philippines" → strips "Philippines" → city="Quezon City"
+                #      "Camp Aguinaldo, Quezon City" → strips nothing → city="Quezon City"
+                _city_parts = list(loc_parts)
+                while _city_parts and has_alias(_city_parts[-1]):
+                    _city_parts.pop()
+                _city_raw = _city_parts[-1] if _city_parts else ""
                 # Strip leading postal codes: "FI-00100 Helsinki" → "Helsinki", "2600 Baguio City" → "Baguio City"
                 city = re.sub(r'^[A-Z]{2,3}[-\s]\d{3,}[A-Z0-9-]*\s*', '', _city_raw).strip()
                 city = re.sub(r'^\d{3,}[A-Z0-9-]*\s*', '', city).strip()
@@ -276,7 +282,7 @@ class Command(BaseCommand):
                 )
 
                 if event.starts_at and event.venue and event.venue.country:
-                    self.stdout.write(f"  ·  already complete — skipping")
+                    self.stdout.write("  ·  already complete — skipping")
                     skipped += 1
                     _pause(*_PAUSE_BETWEEN)
                     continue
@@ -289,23 +295,22 @@ class Command(BaseCommand):
 
                 starts_at = event.starts_at
                 ends_at   = event.ends_at
+                date_ok   = True
                 if raw:
                     parsed_start, parsed_end = _parse_fb_date(raw)
                     if parsed_start is None:
                         self.stdout.write(f"  ✗  date parse failed (raw={raw!r})")
-                        failed += 1
-                        _pause(*_PAUSE_BETWEEN)
-                        continue
-                    starts_at, ends_at = parsed_start, parsed_end
+                        date_ok = False
+                    else:
+                        starts_at, ends_at = parsed_start, parsed_end
 
                 saved = []
                 if not dry_run:
-                    event_updates = {}
-                    if starts_at is not None:
-                        event_updates["starts_at"] = starts_at
-                        event_updates["ends_at"]   = ends_at
-                    if event_updates:
-                        Event.objects.filter(pk=event.pk).update(**event_updates)
+                    if date_ok and starts_at is not None:
+                        event_updates = {"starts_at": starts_at}
+                        if ends_at is not None:
+                            event_updates["ends_at"] = ends_at
+                        Event.objects.filter(pk=event.pk, starts_at__isnull=True).update(**event_updates)
                         saved.append(f"date→{starts_at.date()}")
 
                     if country or city or address:
@@ -338,15 +343,21 @@ class Command(BaseCommand):
                     f"  ✓  {starts_at}{ends_str} | {country or '—'}"
                     f"  [{_mb(event_bw)} this event | {_mb(bytes_transferred)} total]{saved_str}"
                 )
-                updated += 1
+                if date_ok is False and not saved:
+                    failed += 1
+                else:
+                    updated += 1
                 _pause(*_PAUSE_BETWEEN)
 
         if bytes_transferred and not dry_run:
             proxy_type = BandwidthLog.PROXY_DATAIMPULSE if not using_free_proxy else BandwidthLog.PROXY_FREE
             try:
                 log_bandwidth(source=f"{source}_backfill", bytes_transferred=bytes_transferred, proxy_type=proxy_type)
-            except Exception:
-                pass
+            except Exception as _bw_exc:
+                logger.warning(
+                    "backfill_event_dates: failed to log bandwidth (source=%s bytes=%d): %s",
+                    source, bytes_transferred, _bw_exc,
+                )
 
         self.stdout.write(
             f"\n{'─' * 70}\n"

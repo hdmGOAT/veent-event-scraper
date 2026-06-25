@@ -60,7 +60,7 @@ class Command(BaseCommand):
             )
 
         self.stdout.write("\nRecent entries (last 10):\n")
-        for log in BandwidthLog.objects.order_by("-created_at")[:10]:
+        for log in qs.order_by("-created_at")[:10]:
             mb = log.bytes_transferred / 1_048_576
             self.stdout.write(
                 f"  {log.created_at.strftime('%Y-%m-%d %H:%M')}  "
