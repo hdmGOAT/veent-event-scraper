@@ -1023,8 +1023,10 @@ class FacebookEventsScraper(BaseScraper):
 
     Navigates public Facebook Events search pages as a guest, dismisses the
     login-gate modal, and extracts event data from the DOM — no credentials
-    required. Routes traffic through DataImpulse residential proxies when
-    configured; falls back to direct connections with a warning.
+    required. Routes all traffic through a proxy — DataImpulse residential
+    (primary) or a free public proxy (fallback) via resolve_playwright_proxy().
+    Raises RuntimeError and aborts if neither is available; never scrapes via
+    a direct connection.
     """
 
     source = "facebook_events"

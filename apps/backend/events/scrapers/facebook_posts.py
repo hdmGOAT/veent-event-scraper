@@ -1046,11 +1046,14 @@ class FacebookPostsScraper(FacebookEventsScraper):
                 )
                 if proxy:
                     ctx_kw["proxy"] = proxy
+                args = ["--disable-blink-features=AutomationControlled", "--no-first-run", "--no-sandbox"]
+                if using_free_proxy:
+                    args.append("--ignore-certificate-errors")
                 logger.info("[%s] using persistent profile: %s", self.source, profile_dir)
                 context = pw.chromium.launch_persistent_context(
                     profile_dir,
                     headless=headless,
-                    args=["--disable-blink-features=AutomationControlled", "--no-first-run", "--no-sandbox"],
+                    args=args,
                     **ctx_kw,
                 )
                 browser = None
