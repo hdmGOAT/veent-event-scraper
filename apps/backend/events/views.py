@@ -314,10 +314,15 @@ def api_events(request):
         page = 1
     upcoming = request.GET.get("upcoming", "").strip()
     ordering = request.GET.get("ordering", "").strip()
+    scraped_after = request.GET.get("scraped_after", "").strip()
+    try:
+        limit = max(1, min(int(request.GET.get("limit", 50)), 500))
+    except ValueError:
+        limit = 50
     date_from = request.GET.get("date_from", "").strip()
     date_to = request.GET.get("date_to", "").strip()
 
-    events = Event.objects.select_related("venue", "organizer_ref")
+    events = Event.objects.select_related("venue", "organizer_ref", "search_query")
     if q:
         events = events.filter(
             Q(name__icontains=q) | Q(description__icontains=q)
@@ -328,6 +333,15 @@ def api_events(request):
         events = events.filter(agent_categories__contains=[category])
     if upcoming == "1":
         events = events.filter(starts_at__gte=timezone.now())
+    if scraped_after:
+        from django.utils.dateparse import parse_datetime
+        try:
+            ts = parse_datetime(scraped_after)
+        except (ValueError, TypeError):
+            ts = None
+        if ts is None:
+            return JsonResponse({"error": "Invalid scraped_after timestamp"}, status=400)
+        events = events.filter(scraped_at__gt=ts)
     if date_from:
         events = events.filter(starts_at__date__gte=date_from)
     if date_to:
@@ -341,24 +355,37 @@ def api_events(request):
     }
     events = events.order_by(*_order_map.get(ordering, ["-scraped_at", "name"]))
 
-    paginator = Paginator(events, 50)
+    paginator = Paginator(events, limit)
     page_obj = paginator.get_page(page)
 
     results = [
         {
-            "slug": e.slug,
-            "name": e.name,
-            "starts_at": e.starts_at.isoformat() if e.starts_at else None,
-            "ends_at": e.ends_at.isoformat() if e.ends_at else None,
-            "category": e.category,
+            # Google Sheets columns
+            "db_id":          e.id,
+            "scraped_at":     e.scraped_at.isoformat() if e.scraped_at else None,
+            "search_term":    e.search_query.query if e.search_query_id else None,
+            "event":          e.name,
+            "organizer_name": e.organizer_display_name,
+            "category":       e.agent_categories[0] if e.agent_categories else e.category,
+            "location":       e.venue.city if e.venue_id and e.venue.city else None,
+            "post_link":      e.url,
+            "fb_post_id":     e.external_id or None,
+            "post_date":       e.post_date.isoformat() if e.post_date else None,
+            "event_date":      e.starts_at.isoformat() if e.starts_at else None,
+            "summary":         e.description or None,
+            # Legacy fields — preserved for backward compat with SvelteKit frontend
+            "slug":           e.slug,
+            "name":           e.name,
+            "starts_at":      e.starts_at.isoformat() if e.starts_at else None,
+            "ends_at":        e.ends_at.isoformat() if e.ends_at else None,
             "agent_categories": e.agent_categories,
-            "source": e.source,
-            "price": e.price,
-            "venue": e.venue.name if e.venue else None,
-            "venue_slug": e.venue.slug if e.venue else None,
-            "organizer": e.organizer_display_name,
+            "source":         e.source,
+            "price":          e.price,
+            "venue":          e.venue.name if e.venue_id else None,
+            "venue_slug":     e.venue.slug if e.venue_id else None,
+            "organizer":      e.organizer_display_name,
             "organizer_slug": e.organizer_ref.slug if e.organizer_ref_id else None,
-            "url": e.url,
+            "url":            e.url,
         }
         for e in page_obj
     ]

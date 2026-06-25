@@ -123,6 +123,15 @@ class Event(models.Model):
     # Stable identifier from the source, used to deduplicate on re-scrape.
     external_id = models.CharField(max_length=255, blank=True, db_index=True)
     scraped_at = models.DateTimeField(null=True, blank=True)
+    # Raw FB post caption captured at scrape time — source of truth for Ollama processing.
+    raw_text = models.TextField(blank=True, default="")
+    # Timestamp when the FB post was published (from <time datetime="..."> in DOM).
+    # Null when FB does not expose the datetime attribute (e.g. older posts).
+    post_date = models.DateTimeField(null=True, blank=True, db_index=True)
+    enriched_at = models.DateTimeField(
+        null=True, blank=True,
+        help_text="Set when the Ollama LLM successfully structured this FB post.",
+    )
     # When events are found via a search query (e.g. facebook_events scraper),
     # this links back to the SearchQuery row that produced them.
     search_query = models.ForeignKey(
