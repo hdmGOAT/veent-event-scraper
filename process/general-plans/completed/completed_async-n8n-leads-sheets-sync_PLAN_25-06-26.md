@@ -2,7 +2,21 @@
 
 **Date:** 25-06-26
 **Complexity:** SIMPLE (one-session — no backend code, no migrations; deliverable is one SDK workflow file + one docs file, authored via n8n MCP server)
-**Status:** 🔶 IN PROGRESS — in-repo deliverables DONE (backend fields + retargeted SDK code/docs + pre-flight verified); steps 4–9 blocked on hosted n8n.cloud / Google OAuth (manual)
+**Status:** ✅ VERIFIED — shipped in PR #52 (branch `feat/async-n8n-events-sheets-sync`), verified end-to-end via Manual Run, ~2,025 rows written to "Events Sync" tab.
+
+---
+
+## Outcome (2026-06-25)
+
+Goal achieved: async, decoupled n8n workflow syncs DB event rows to Google Sheets with no scraping.
+
+**Key deviations from original plan:**
+
+- **Endpoint:** changed from `/api/leads/` → `/api/events/` to match the real Sheets layout (no CRM columns, all data columns A–P).
+- **URL:** hardcoded to `http://127.0.0.1:8000` — `$env` is blocked (`N8N_BLOCK_ENV_ACCESS_IN_NODE=true` on self-hosted n8n); `localhost` resolves to IPv6 `::1` which fails, so `127.0.0.1` is required.
+- **Column P (`event_status`):** computed column added (derived from `event_date`/`starts_at` — upcoming vs. past). Clear range widened to `A2:P`.
+- **Sheet tab:** uses a fresh "Events Sync" tab (gid 424242) in "[EXPERIMENT] Centralized List of Events" spreadsheet, not `Sheet1`, to avoid legacy column-drift.
+- **n8n instance:** local self-hosted (`http://127.0.0.1:5678`), not `jsrl.app.n8n.cloud`. Workflow id `EzCKmFfmHrYXutx2`, name "FB Scraper to Google Sheets".
 
 ---
 
