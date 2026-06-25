@@ -1,22 +1,22 @@
 # n8n Workflow: FB Scraper to Google Sheets (async events → Sheets sync)
 
-Polls the live `GET /api/events/` endpoint and writes the current database event
-rows into a Google Sheets tracker. Does **no scraping** — the scraper writes to
-the DB, this workflow only reads the API and syncs to Sheets. The DB is the shared
-state between the two systems, so scraping and syncing are fully decoupled.
+Polls the live `GET /api/events/` endpoint and **upserts** the current database
+event rows into a Google Sheets tracker. Does **no scraping** — the scraper writes
+to the DB, this workflow only reads the API and syncs to Sheets. The DB is the
+shared state between the two systems, so scraping and syncing are fully decoupled.
 
 - **n8n instance:** local self-hosted n8n (v2.27.3), `http://localhost:5678`
   (the global `n8n` install, launched via `apps/n8n` / `pnpm dev`). **Not** n8n.cloud.
 - **Workflow name / ID:** `FB Scraper to Google Sheets` / `EzCKmFfmHrYXutx2`
 - **Target spreadsheet:** `[EXPERIMENT] Centralized List of Events`
   (`1OFkShy9b2Nt39tgizjd6yYpyFsGDbzLy-lj9JsB8U7A`)
-- **Target tab:** `Events Sync` (gid `424242`) — a dedicated, bot-managed tab
+- **Target tab:** `Events Sync` (gid `424242`)
 - **API endpoint:** `GET /api/events/` (Django, unauthenticated read endpoint)
 
-> The endpoint and its 15-field row shape are documented in
+> The endpoint and its row shape are documented in
 > `process/general-plans/references/leads-api-n8n-handoff.md` (that doc describes
-> `/api/leads/`; this workflow uses the richer `/api/events/`, which exposes
-> `search_term`, `fb_post_id`, `summary`, and `raw_text` as well).
+> `/api/leads/`; this workflow uses the richer `/api/events/`, which also exposes
+> `search_term`, `fb_post_id`, `summary`, and `raw_text`).
 
 ---
 
@@ -24,71 +24,83 @@ state between the two systems, so scraping and syncing are fully decoupled.
 
 ```
 Daily 00:00 UTC Trigger ─┐
-Manual Run               ┘→ Clear Events Sync Range   Google Sheets: Clear, range A2:P (keeps header row 1)
-                              │
-                              ▼
-                          Fetch All Events (Paginated)   GET http://127.0.0.1:8000/api/events/?limit=500
-                              │                          pagination: "Update a parameter in each request",
-                              │                          page = {{ $pageCount + 1 }}, halts when page >= pages
-                              ▼
-                          Map Events to Sheet Rows       Code node — flatten pages → 16 columns, null-safe,
-                              │                          computes event_status (Upcoming / Past / No Date)
-                              ▼
-                          Append Event Rows              Google Sheets: Append, auto-map by header
+Manual Run               ┘→ [Clear Events Sync Range — DISABLED]
+                              → Fetch All Events (Paginated)   GET http://127.0.0.1:8000/api/events/?limit=500
+                                  │                            pagination: page = {{ $pageCount + 1 }}, halts when page >= pages
+                                  ▼
+                              Map Events to Sheet Rows         Code node — maps API rows to the n8n-owned columns,
+                                  │                            formats event_date, computes event_status
+                                  ▼
+                              Upsert Event Rows (by db_id)     Google Sheets: Append or Update, match on db_id
 ```
 
-**Full Replace strategy.** Both triggers fan in to the **Clear** node first, which
-blanks the data range `A2:P` (preserving the header row in row 1). Then the fetch
-→ map → append runs. Clearing *before* appending means there is never a
-partial-overlap state. Because the Clear keeps row 1, the append's auto-map always
-binds to a stable header row — this is what prevents column drift (see
-[Troubleshooting](#troubleshooting)).
+**Upsert strategy (not Full Replace).** Each sync **updates existing rows in place**
+(matched on `db_id`) and **appends new events**. It writes only the n8n-owned
+columns and **never clears** the sheet. This is deliberate:
 
-Both triggers share the identical chain (fan-in), so a Manual Run and the daily
-Schedule run behave the same.
+- It preserves human-managed columns that sit anywhere in the sheet — both the
+  `event_date` neighbours and the CRM columns on the right (Notes, Added By,
+  Reached Out By, Status, Date Reached Out). A clear-and-replace would wipe or
+  misalign them.
+- Events removed from the DB are **not deleted** from the sheet — correct for a
+  lead tracker (you don't lose rows you've annotated). The trade-off: stale rows
+  accumulate; purge them manually if ever needed.
+
+The old `Clear Events Sync Range` node is left in the canvas but **disabled** — the
+upsert makes clearing unnecessary and unsafe.
+
+Both triggers fan in to the same chain, so a Manual Run and the daily Schedule run
+behave identically.
 
 ---
 
-## Sheet columns (16, A–P)
+## Columns
 
-The `Events Sync` tab is **all data, no human-managed columns** — every column is
-overwritten on each run.
+n8n writes these columns by **header name** (order in the sheet does not matter —
+auto-map binds by name):
 
-| Col | Header | Source |
-|---|---|---|
-| A | `db_id` | API `db_id` |
-| B | `scraped_at` | API `scraped_at` |
-| C | `search_term` | API `search_term` |
-| D | `event` | API `event` |
-| E | `event_date` | API `event_date` |
-| F | `organizer_name` | API `organizer_name` |
-| G | `organizer_email` | API `organizer_email` |
-| H | `organizer_phone` | API `organizer_phone` |
-| I | `category` | API `category` |
-| J | `location` | API `location` |
-| K | `post_link` | API `post_link` |
-| L | `fb_post_id` | API `fb_post_id` |
-| M | `post_date` | API `post_date` |
-| N | `summary` | API `summary` |
-| O | `raw_text` | API `raw_text` |
-| **P** | **`event_status`** | **computed — see below** |
+| Header | Source / transform |
+|---|---|
+| `db_id` | API `db_id` — **the match key** for upsert |
+| `scraped_at` | API `scraped_at` |
+| `search_term` | API `search_term` |
+| `event` | API `event` |
+| `event_date` | API `event_date`, reformatted to `M/D/YYYY H:MM:SS` (see below) |
+| `organizer_name` | API `organizer_name` |
+| `organizer_email` | API `organizer_email` |
+| `organizer_phone` | API `organizer_phone` — written only if the header exists |
+| `category` | API `category` |
+| `location` | API `location` |
+| `post_link` | API `post_link` |
+| `fb_post_id` | API `fb_post_id` |
+| `post_date` | API `post_date` |
+| `summary` | API `summary` |
+| `raw_text` | API `raw_text` |
+| `event_status` | computed — `Upcoming` / `Past` / `No Date` |
 
-Columns A–O are a **passthrough by key** (the `/api/events/` field names match the
-headers 1:1), null-safe — every blank becomes `''` (never the literal string
-`"null"`, which Sheets would otherwise display).
+**Never touched by n8n** (safe to add/edit/format freely): any column not in the
+list above — e.g. the CRM columns `Notes`, `Added By`, `Reached Out By`, `Status`,
+`Date Reached Out`. The Upsert node's `handlingExtraData` is set to `ignoreIt`, so
+a column n8n expects but can't find is silently skipped rather than erroring.
+
+### `event_date` formatting
+
+The Map node formats the API's ISO timestamp into `M/D/YYYY H:MM:SS`
+(e.g. `2026-06-27T11:00:00+00:00` → `6/27/2026 11:00:00`) using the timestamp's
+**UTC wall-clock** (no timezone shift — 11:00 stays 11:00). It is written with the
+default `USER_ENTERED` cell format, so Sheets stores it as a real, sortable
+date/time that displays in that format. To store the literal string as text
+instead, switch the Upsert node's `cellFormat` to `RAW`.
 
 ### `event_status` (computed)
-
-The Map node compares each row's `event_date` to the run time:
 
 | Value | Condition |
 |---|---|
 | `Upcoming` | `event_date >= now` |
 | `Past` | `event_date < now` |
-| `No Date` | `event_date` is empty/unparseable |
+| `No Date` | `event_date` empty/unparseable |
 
-This lets the sheet hold **both past and future events** while still
-differentiating them (filter/sort on column P).
+Lets the sheet hold both past and future events while differentiating them.
 
 ---
 
@@ -100,13 +112,13 @@ The Fetch node URL is the literal `http://127.0.0.1:8000/api/events/`.
 
 - **Why not `{{ $env.LEADS_API_BASE_URL }}`?** This n8n instance has
   `N8N_BLOCK_ENV_ACCESS_IN_NODE` enabled, so `$env` access from a node throws
-  `access to env vars denied`. The URL is therefore set directly.
+  `access to env vars denied`.
 - **Why `127.0.0.1` and not `localhost`?** n8n resolves `localhost` to IPv6 `::1`,
-  but the Django dev server listens on IPv4 `127.0.0.1:8000` only — using
-  `localhost` fails with `ECONNREFUSED ::1:8000`.
-- **Deploying n8n off this machine?** Change the Fetch node URL to the reachable
-  tunnel/domain (and ensure the API is reachable from wherever n8n runs). If you
-  want env-var indirection, an admin must unset `N8N_BLOCK_ENV_ACCESS_IN_NODE`.
+  but Django listens on IPv4 `127.0.0.1:8000` only — `localhost` fails with
+  `ECONNREFUSED ::1:8000`.
+- **Deploying n8n off this machine?** Change the URL to a reachable tunnel/domain
+  (the API must be reachable from wherever n8n runs). For env-var indirection, an
+  admin must unset `N8N_BLOCK_ENV_ACCESS_IN_NODE`.
 
 ### Google Sheets credential
 
@@ -116,19 +128,39 @@ credential — `/api/events/` is unauthenticated.
 
 ### Schedule
 
-The workflow contains a daily 00:00 UTC Schedule Trigger, but is **run manually**
-for now — it will not fire on schedule until toggled **Active** in the n8n UI.
+A daily 00:00 UTC Schedule Trigger exists but the workflow is **run manually** for
+now — it won't fire on schedule until toggled **Active**, and (being local) only
+runs while the machine + n8n are up. n8n does **not** catch up missed runs.
 
 ### Query parameters (Fetch node)
 
 | Param | Default | Effect |
 |---|---|---|
 | `limit` | `500` | Max rows per page |
-| `page` | _(pagination)_ | Driven by "update a parameter in each request", starts at 1 |
+| `page` | _(pagination)_ | Auto-incremented until `page >= pages` |
 | `scraped_after` | _(unset)_ | Optional ISO 8601 freshness filter |
-| `upcoming` | _(unset)_ | Set to `1` to fetch only future events (otherwise all events, past + future, are synced) |
+| `upcoming` | _(unset)_ | Set to `1` to fetch only future events |
 
-`ordering` is not set, so the endpoint defaults to `-scraped_at` (newest scrapes first).
+---
+
+## ⚠️ Editing the sheet columns — the column-cache caveat
+
+The Upsert (Append/Update) node **caches the sheet's column list** at setup time
+and re-validates it against the live sheet on every **UI and scheduled** run
+(API-triggered runs skip this check). If a column **n8n writes** is renamed,
+removed, or added, that cache goes stale and the run fails with:
+
+> *Column names were updated after the node's setup. Refresh the columns list…
+> Missing columns: `<name>`*
+
+Fix: click **"Refresh columns"** in the Upsert node (or rebuild its column list).
+
+Rules of thumb:
+- **Safe, no refresh needed:** adding/editing/formatting columns n8n does **not**
+  write (CRM columns, any extra columns).
+- **Needs a column refresh:** adding, removing, or renaming a column n8n **does**
+  write (the list above). Example seen in practice: removing `organizer_phone`, or
+  renaming `raw_event_date` → `event_date`.
 
 ---
 
@@ -137,49 +169,23 @@ for now — it will not fire on schedule until toggled **Active** in the n8n UI.
 Run against the local Django server (use `127.0.0.1`, not `localhost`):
 
 ```bash
-# 1. Basic shape — results array of 15-field event rows + pagination envelope
 curl -s "http://127.0.0.1:8000/api/events/?limit=5" | python3 -m json.tool
-
-# 2. Freshness filter — only rows scraped after a timestamp
-curl -s "http://127.0.0.1:8000/api/events/?scraped_after=2026-06-24T00:00:00Z&limit=5" | python3 -m json.tool
-
-# 3. Upcoming only
 curl -s "http://127.0.0.1:8000/api/events/?upcoming=1&limit=5" | python3 -m json.tool
-
-# 4. Pagination metadata
 curl -s "http://127.0.0.1:8000/api/events/?limit=500&page=1" | python3 -c \
   "import sys,json; d=json.load(sys.stdin); print(f'total={d[\"total\"]} pages={d[\"pages\"]} page={d[\"page\"]}')"
 ```
-
-Each row carries the 15 keys: `db_id`, `scraped_at`, `search_term`, `event`,
-`event_date`, `organizer_name`, `organizer_email`, `organizer_phone`, `category`,
-`location`, `post_link`, `fb_post_id`, `post_date`, `summary`, `raw_text`.
 
 ---
 
 ## Manual Run verification
 
-After clicking **Manual Run** (verified working on 2026-06-25, ~2,025 rows across 4 pages):
+(Last verified 2026-06-25: ~2,025 rows, 4 pages, no duplicate `db_id`s.)
 
-1. **Clear node** — succeeds; `A2:P` is blanked (header row 1 preserved).
-2. **Fetch node** — paginates; execution log shows one HTTP call per page; the page
-   envelopes report matching `total`/`pages`.
-3. **Map node** — each item has all 16 keys including `event_status`; spot-check
-   `Upcoming`/`Past` against `event_date`.
-4. **Append node** — row count matches `total`; data lands in columns **A–P**,
-   correctly aligned; no cell contains the literal string `"null"`.
-
----
-
-## Filter combination reference
-
-Change the Fetch node query params to scope the sync:
-
-| Use case | Query params |
-|---|---|
-| Full sync — all events, past + future (default) | `limit=500` |
-| Upcoming events only | `upcoming=1&limit=500` |
-| Only recently scraped rows | `scraped_after=2026-06-24T00:00:00Z&limit=500` |
+1. **Fetch** paginates; page envelopes report matching `total`/`pages`.
+2. **Map** emits one item per event with the n8n-owned columns; `event_date` is
+   `M/D/YYYY H:MM:SS`; `event_status` matches the date.
+3. **Upsert** succeeds; existing rows update in place (no duplication — row count
+   equals distinct `db_id` count); CRM columns and any non-n8n columns unchanged.
 
 ---
 
@@ -187,14 +193,12 @@ Change the Fetch node query params to scope the sync:
 
 | Symptom | Likely cause / fix |
 |---|---|
-| HTTP node: `ECONNREFUSED ::1:8000` | `localhost` resolved to IPv6; use `127.0.0.1` in the Fetch URL |
-| HTTP node: `access to env vars denied` | `$env` blocked by `N8N_BLOCK_ENV_ACCESS_IN_NODE`; hardcode the URL or have an admin unset the flag |
+| `Column names were updated after the node's setup … Missing columns: X` | A column n8n writes was renamed/removed/added — refresh the Upsert node's column list (see caveat above) |
+| HTTP node: `ECONNREFUSED ::1:8000` | `localhost` resolved to IPv6; use `127.0.0.1` |
+| HTTP node: `access to env vars denied` | `$env` blocked by `N8N_BLOCK_ENV_ACCESS_IN_NODE`; hardcode the URL |
 | HTTP node: connection refused | Django not running, or URL not reachable from the n8n host |
-| HTTP node: 400 on `scraped_after` | Invalid timestamp — remove it or use ISO 8601 |
-| Pagination only fetches page 1 | Completion expression missing — `{{ $response.body.page >= $response.body.pages }}` |
-| **All data collapses into one column / shifts to columns past O** | The target tab had a **legacy/mismatched header row or used-range**, so auto-map mis-bound. Fix: use a clean dedicated tab (here, `Events Sync`) and clear `A2:P` (keep the header row) — never clear the whole tab, since wiping headers makes auto-map re-create drifting columns |
-| Sheet cells contain `"null"` | Map node missing the null-safe default (`(v === null || v === undefined) ? '' : v`) |
-| Clear leaves stale rows | Clear range too narrow — keep it at `A2:P` |
-| Append writes 0 rows | API returned 0 results for the current filters |
+| Duplicate rows appear | `db_id` match key missing/renamed in the sheet, or matching failed — confirm header `db_id` exists and is the match column |
+| `event_date` shows as text not a date (or vice-versa) | Controlled by the column's Sheets number format + the node `cellFormat` (`USER_ENTERED` vs `RAW`) |
+| Stale events never disappear | Expected — upsert never deletes; purge manually if needed |
 | Google Sheets: 401 / permission error | OAuth credential not attached or expired — re-authorize in n8n |
-| Workflow does not run on schedule | Workflow not Active — toggle Active in the n8n UI |
+| Workflow does not run on schedule | Workflow not Active, or the machine/n8n was down at the scheduled time (no catch-up) |

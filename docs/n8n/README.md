@@ -5,7 +5,7 @@
 | [n8n-webhook-endpoints.md](n8n-webhook-endpoints.md) | Django webhook endpoints, auth setup, `.env`, code changes made |
 | [n8n-scraper-automation-workflow.md](n8n-scraper-automation-workflow.md) | Scheduled workflow that runs all 8 Django scrapers via n8n |
 | [n8n-ai-event-scraper.md](n8n-ai-event-scraper.md) | AI-powered scraper using Jina Reader + GPT-4o (Lu.ma; cloneable for other sites) |
-| [n8n-leads-sheets-sync.md](n8n-leads-sheets-sync.md) | Async sync of `/api/events/` (16 columns A–P incl. computed `event_status`) into the `Events Sync` Google Sheets tab (Full Replace, no scraping) |
+| [n8n-leads-sheets-sync.md](n8n-leads-sheets-sync.md) | Async **upsert** of `/api/events/` (by `db_id`) into the `Events Sync` Google Sheets tab — formats `event_date`, computes `event_status`, preserves human/CRM columns; no scraping |
 
 ## Quick start
 
