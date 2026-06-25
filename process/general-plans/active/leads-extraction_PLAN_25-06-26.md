@@ -47,7 +47,7 @@ the `api/organizers/<slug:slug>/` entry, so more-specific organizer paths stay o
 correctly. The leads path carries no slug or type converter, so ordering relative to
 other `api/` paths does not matter beyond that.
 
-```
+```python
 path("api/leads/", views.api_leads, name="api_leads"),
 ```
 
@@ -57,7 +57,7 @@ path("api/leads/", views.api_leads, name="api_leads"),
 
 ### 3.1 Function signature and entry guard
 
-```
+```python
 def api_leads(request):
 ```
 
@@ -65,7 +65,7 @@ No decorator. The endpoint is GET-only; non-GET methods should return a 405.
 
 At the top of the function, guard:
 
-```
+```python
 if request.method != "GET":
     return JsonResponse({"error": "Method not allowed"}, status=405)
 ```
@@ -80,6 +80,7 @@ Parse all params at the top, before touching the ORM.
 | `source`        | `request.GET.get("source", "")`            | str  | `""`    | strip()                                            |
 | `scraped_after` | `request.GET.get("scraped_after", "")`     | str  | `""`    | strip(); parse below                               |
 | `has_contact`   | `request.GET.get("has_contact", "")`       | str  | `""`    | truthy when value == "1"                           |
+| `min_days`      | `request.GET.get("min_days", 0)`           | int  | 0       | `max(0, int(...))`, ValueError → 0                 |
 | `page`          | `request.GET.get("page", 1)`               | int  | 1       | `max(1, int(...))`, ValueError → 1                 |
 | `limit`         | `request.GET.get("limit", 100)`            | int  | 100     | `max(1, min(int(...), 500))`, ValueError → 100     |
 
@@ -184,9 +185,11 @@ for e in page_obj:
     # Organizer contact — only available when organizer_ref FK is resolved
     organizer_email = None
     organizer_phone = None
+    organizer_facebook = None
     if e.organizer_ref_id:
         organizer_email = e.organizer_ref.email or None
         organizer_phone = e.organizer_ref.phone or None
+        organizer_facebook = e.organizer_ref.facebook_url or None
 
     # Venue location — only available when venue FK is set
     location_city = None
@@ -205,10 +208,11 @@ for e in page_obj:
         "link":              e.url or None,
         "event_date":        e.starts_at.isoformat() if e.starts_at else None,
         "post_date":         e.post_date.isoformat() if e.post_date else None,
-        "organizer_email":   organizer_email,
-        "organizer_phone":   organizer_phone,
-        "platform":          e.source or None,
-        "scraped_at":        e.scraped_at.isoformat() if e.scraped_at else None,
+        "organizer_email":    organizer_email,
+        "organizer_phone":    organizer_phone,
+        "organizer_facebook": organizer_facebook,
+        "platform":           e.source or None,
+        "scraped_at":         e.scraped_at.isoformat() if e.scraped_at else None,
     })
 ```
 
@@ -239,7 +243,7 @@ return JsonResponse({
     "results": results,
     "total":   paginator.count,
     "pages":   paginator.num_pages,
-    "page":    page,
+    "page":    page_obj.number,
 })
 ```
 
@@ -248,17 +252,18 @@ frontend pagination helper (if ever wired up) can reuse the same response parser
 
 ### 3.8 Complete function skeleton (pseudocode summary)
 
-```
+```text
 def api_leads(request):
     if request.method != "GET":
         return 405
 
-    parse: country, source, scraped_after, has_contact, page, limit
+    parse: country, source, scraped_after, has_contact, min_days, page, limit
     if scraped_after present and not parseable → return 400
 
+    cutoff = now() + timedelta(days=min_days)   # min_days=0 → now (default behaviour)
     events = Event.objects
         .select_related("venue", "organizer_ref")
-        .filter(starts_at__gte=timezone.now())   # future events only, always applied
+        .filter(starts_at__gte=cutoff)
         .order_by("starts_at")                   # soonest first
 
     if country      → filter(venue__country__iexact=country)
@@ -270,9 +275,9 @@ def api_leads(request):
     paginator = Paginator(events, limit)
     page_obj = paginator.get_page(page)
 
-    results = [serialize each event as leads row]
+    results = [serialize each event as leads row]   # 14 fields incl. organizer_facebook
 
-    return JsonResponse({results, total, pages, page})
+    return JsonResponse({results, total, pages, page: page_obj.number})
 ```
 
 ---
@@ -288,7 +293,7 @@ curl -s "http://localhost:8000/api/leads/" | python3 -m json.tool | head -60
 ```
 
 Expected: `{"results": [...], "total": <int>, "pages": <int>, "page": 1}`. Each
-result object must contain exactly 13 keys defined in Section 3.6. Then confirm
+result object must contain exactly 14 keys defined in Section 3.6. Then confirm
 all `event_date` values are in the future:
 
 ```bash
@@ -383,9 +388,9 @@ Expected: results that satisfy both filters simultaneously and all have future
 
 1. `GET /api/leads/` responds with HTTP 200 and a JSON envelope matching
    `{"results": [...], "total": int, "pages": int, "page": int}`.
-2. Each result object contains exactly 13 keys: `db_id`, `category`, `page_name`,
+2. Each result object contains exactly 14 keys: `db_id`, `category`, `page_name`,
    `location_city`, `location_country`, `event`, `link`, `event_date`, `post_date`,
-   `organizer_email`, `organizer_phone`, `platform`, `scraped_at`.
+   `organizer_email`, `organizer_phone`, `organizer_facebook`, `platform`, `scraped_at`.
 3. Every result has `event_date >= now` — no past events are ever returned. This is
    unconditional; no query param can override it.
 4. `?country=` returns only events whose `venue.country` case-insensitively matches.
@@ -430,7 +435,7 @@ Expected: results that satisfy both filters simultaneously and all have future
 - `GET /api/leads/` → `{"results": [...], "total": int, "pages": int, "page": int}`
 - Always returns future events only (`starts_at >= now`). No override available.
 - Default ordering: `starts_at` ascending (soonest first).
-- Query params: `country`, `source`, `scraped_after`, `has_contact`, `page`, `limit`
+- Query params: `country`, `source`, `scraped_after`, `has_contact`, `min_days`, `page`, `limit`
 - Error responses: `{"error": "<message>"}` with appropriate HTTP status code
 
 ## Blast Radius

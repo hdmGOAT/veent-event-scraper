@@ -595,7 +595,7 @@ def api_leads(request):
         "results": results,
         "total":   paginator.count,
         "pages":   paginator.num_pages,
-        "page":    page,
+        "page":    page_obj.number,
     })
 
 
