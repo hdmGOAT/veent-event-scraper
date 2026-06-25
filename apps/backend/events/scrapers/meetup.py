@@ -205,7 +205,7 @@ def _build_event(node: dict) -> ScrapedEvent | None:
     image_url = (
         node.get("imageUrl")
         or node.get("image_url")
-        or node.get("featuredEventPhoto", {}).get("photoUrl", "")
+        or (node.get("featuredEventPhoto") or {}).get("photoUrl", "")
         or (node.get("imageUrls") or [None])[0]
         or ""
     )

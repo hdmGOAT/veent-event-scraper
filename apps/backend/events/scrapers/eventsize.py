@@ -435,8 +435,8 @@ def _build_venue(jsonld: dict) -> ScrapedVenue | None:
     return ScrapedVenue(
         name=name or addr_str,
         address=addr_str,
-        city=city,
-        country=country,
+        city=city[:120],
+        country=country[:120],
     )
 
 
