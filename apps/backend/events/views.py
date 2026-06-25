@@ -366,6 +366,8 @@ def api_events(request):
             "search_term":    e.search_query.query if e.search_query_id else None,
             "event":          e.name,
             "organizer_name": e.organizer_display_name,
+            "organizer_email": (e.organizer_ref.email or None) if e.organizer_ref_id else None,
+            "organizer_phone": (e.organizer_ref.phone or None) if e.organizer_ref_id else None,
             "category":       e.agent_categories[0] if e.agent_categories else e.category,
             "location":       e.venue.city if e.venue_id and e.venue.city else None,
             "post_link":      e.url,
@@ -373,6 +375,7 @@ def api_events(request):
             "post_date":       e.post_date.isoformat() if e.post_date else None,
             "event_date":      e.starts_at.isoformat() if e.starts_at else None,
             "summary":         e.description or None,
+            "raw_text":        e.raw_text or None,
             # Legacy fields — preserved for backward compat with SvelteKit frontend
             "slug":           e.slug,
             "name":           e.name,

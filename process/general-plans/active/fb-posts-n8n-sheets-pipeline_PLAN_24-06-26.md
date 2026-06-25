@@ -493,6 +493,8 @@ Expected output: at least 3 rows with `True` for `raw_text`, and a mix of dateti
 
 ### RFC-003: API Expansion (all 11 columns + scraped_after filter)
 
+> **Note (2026-06-25):** The 3 organizer/raw_text fields (`organizer_email`, `organizer_phone`, `raw_text`) and the `scraped_after` filter were partially delivered by PR #52 (`feat/async-n8n-events-sheets-sync` — see `process/general-plans/completed/completed_async-n8n-leads-sheets-sync_PLAN_25-06-26.md`). Verify current `api_events()` shape before implementing this RFC to avoid double-adds.
+
 **Summary:** Update `api_events()` in `views.py` to return all 11 Google Sheets columns.
 Add `?scraped_after=<ISO 8601>` for incremental n8n sync. Add `select_related("search_query")`
 to avoid N+1 on the new `search_term` field.
