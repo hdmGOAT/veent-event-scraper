@@ -105,19 +105,20 @@ local import pattern here to remain consistent with the existing file style.
 
 ```python
 events = (
+    cutoff = timezone.now() + timedelta(days=min_days)  # min_days=0 → now (default)
     Event.objects
     .select_related("venue", "organizer_ref")
-    .filter(starts_at__gte=timezone.now())
+    .filter(starts_at__gte=cutoff)
     .order_by("starts_at")
 )
 ```
 
 Key decisions:
 
-- `starts_at__gte=timezone.now()` is evaluated at request time and is non-negotiable.
-  There is no query parameter to disable this filter. Events with `starts_at=NULL`
-  are excluded by this filter (NULL comparisons in SQL are never true), which is the
-  correct behaviour — an event with no known date cannot be confirmed as upcoming.
+- `starts_at__gte=cutoff` uses `cutoff = timezone.now() + timedelta(days=min_days)`.
+  When `min_days=0` (default) this is equivalent to `timezone.now()`. Events with
+  `starts_at=NULL` are excluded by this filter (NULL comparisons in SQL are never true),
+  which is the correct behaviour — an event with no known date cannot be confirmed as upcoming.
 - Ordering is `starts_at` ascending (soonest-first) rather than `-scraped_at`. This
   matches the natural consumption pattern for a leads sheet: the most imminent events
   are most actionable.

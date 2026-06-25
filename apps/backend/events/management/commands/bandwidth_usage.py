@@ -37,11 +37,12 @@ class Command(BaseCommand):
             )["total"] or 0
             mb = total / 1_048_576
             if proxy_type == BandwidthLog.PROXY_DATAIMPULSE:
+                quota_mb = DATAIMPULSE_QUOTA_BYTES / 1_048_576
                 pct = 100 * total / DATAIMPULSE_QUOTA_BYTES
-                bar_filled = int(pct / 2)
+                bar_filled = min(int(pct / 2), 50)
                 bar = "█" * bar_filled + "░" * (50 - bar_filled)
                 self.stdout.write(
-                    f"  {label:15s}: {mb:8.1f} MB / 2500.0 MB  ({pct:5.1f}%)\n"
+                    f"  {label:15s}: {mb:8.1f} MB / {quota_mb:.1f} MB  ({pct:5.1f}%)\n"
                     f"  [{bar}]\n"
                 )
             else:

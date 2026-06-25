@@ -101,8 +101,8 @@ def dataimpulse_playwright_proxy(source: str = "") -> dict:
     if not social_proxy_configured():
         raise RuntimeError("DataImpulse credentials not configured.")
 
-    user     = os.environ["DATAIMPULSE_USER"]
-    password = os.environ["DATAIMPULSE_PASS"]
+    user     = quote(os.environ["DATAIMPULSE_USER"], safe="")
+    password = quote(os.environ["DATAIMPULSE_PASS"], safe="")
     host     = os.environ.get("DATAIMPULSE_HOST", _DEFAULT_HOST)
     port     = os.environ.get("DATAIMPULSE_PORT", _DEFAULT_PORT)
     proxy_url = f"http://{user}:{password}@{host}:{port}"
@@ -122,8 +122,8 @@ def dataimpulse_playwright_proxy(source: str = "") -> dict:
     logger.info("%sDataImpulse proxy OK — using residential proxy.", tag)
     return {
         "server":   f"http://{host}:{port}",
-        "username": user,
-        "password": password,
+        "username": os.environ["DATAIMPULSE_USER"],
+        "password": os.environ["DATAIMPULSE_PASS"],
     }
 
 

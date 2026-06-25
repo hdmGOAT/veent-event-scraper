@@ -14,9 +14,9 @@ import logging
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-import requests
 from bs4 import BeautifulSoup
 
+from .proxy_manager import get_session
 from .base import (
     BaseScraper,
     ScrapedEvent,
@@ -141,7 +141,7 @@ class EventbriteScraper(BaseScraper):
         if page > 1:
             url += f"?page={page}"
         try:
-            resp = requests.get(url, headers=_HEADERS, timeout=_TIMEOUT)
+            resp = get_session().get(url, headers=_HEADERS, timeout=_TIMEOUT)
             resp.raise_for_status()
         except Exception as exc:
             logger.error("Eventbrite: listing failed %s p%d: %s", location, page, exc)
@@ -160,7 +160,7 @@ class EventbriteScraper(BaseScraper):
         if not event_ids:
             return []
         try:
-            resp = requests.get(
+            resp = get_session().get(
                 _API_URL,
                 headers=_HEADERS,
                 params={

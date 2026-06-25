@@ -12,9 +12,9 @@ import logging
 from datetime import datetime, timedelta, timezone as dt_timezone
 from typing import Iterable
 
-import requests
 from django.conf import settings
 
+from .proxy_manager import get_session
 from .base import (
     BaseScraper,
     ScrapedEvent,
@@ -158,7 +158,7 @@ def _item_to_scraped_event(item: dict, city_name: str) -> ScrapedEvent | None:
 def _fetch_page(api_key: str, city_cfg: dict, page: int) -> list[dict]:
     params = {**city_cfg, "page": page}
     try:
-        resp = requests.post(
+        resp = get_session().post(
             _API_URL,
             headers=_headers(api_key),
             params=params,

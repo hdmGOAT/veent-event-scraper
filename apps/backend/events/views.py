@@ -343,9 +343,23 @@ def api_events(request):
             return JsonResponse({"error": "Invalid scraped_after timestamp"}, status=400)
         events = events.filter(scraped_at__gt=ts)
     if date_from:
-        events = events.filter(starts_at__date__gte=date_from)
+        from django.utils.dateparse import parse_date
+        try:
+            parsed_date_from = parse_date(date_from)
+        except (ValueError, TypeError):
+            parsed_date_from = None
+        if parsed_date_from is None:
+            return JsonResponse({"error": "Invalid date_from — expected YYYY-MM-DD"}, status=400)
+        events = events.filter(starts_at__date__gte=parsed_date_from)
     if date_to:
-        events = events.filter(starts_at__date__lte=date_to)
+        from django.utils.dateparse import parse_date
+        try:
+            parsed_date_to = parse_date(date_to)
+        except (ValueError, TypeError):
+            parsed_date_to = None
+        if parsed_date_to is None:
+            return JsonResponse({"error": "Invalid date_to — expected YYYY-MM-DD"}, status=400)
+        events = events.filter(starts_at__date__lte=parsed_date_to)
 
     _order_map = {
         "name": ["name"],

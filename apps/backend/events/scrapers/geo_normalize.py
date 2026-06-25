@@ -85,7 +85,7 @@ _ALIASES: dict[str, str] = {
     "bc": "Canada", "british columbia": "Canada",
     "mb": "Canada", "manitoba": "Canada",
     "nb": "Canada", "new brunswick": "Canada",
-    "nl": "Canada", "newfoundland and labrador": "Canada",
+    "newfoundland and labrador": "Canada",
     "ns": "Canada", "nova scotia": "Canada",
     "on": "Canada", "ontario": "Canada",
     # "pe" intentionally omitted: conflicts with Peru ("pe") added below; pe→PEI retained via full name.

@@ -944,7 +944,10 @@ def _parse_end_time(end_raw: str, start_dt: datetime, tz: dt_timezone | None) ->
     for fmt in _DATE_ONLY_FMTS:
         try:
             t = datetime.strptime(end_raw, fmt)
-            return start_local.replace(month=t.month, day=t.day).astimezone(dt_timezone.utc)
+            candidate = start_local.replace(month=t.month, day=t.day)
+            if candidate < start_local:
+                candidate = candidate.replace(year=start_local.year + 1)
+            return candidate.astimezone(dt_timezone.utc)
         except ValueError:
             continue
 
@@ -1023,8 +1026,10 @@ class FacebookEventsScraper(BaseScraper):
 
     Navigates public Facebook Events search pages as a guest, dismisses the
     login-gate modal, and extracts event data from the DOM — no credentials
-    required. Routes traffic through DataImpulse residential proxies when
-    configured; falls back to direct connections with a warning.
+    required. Routes all traffic through a proxy — DataImpulse residential
+    (primary) or a free public proxy (fallback) via resolve_playwright_proxy().
+    Raises RuntimeError and aborts if neither is available; never scrapes via
+    a direct connection.
     """
 
     source = "facebook_events"

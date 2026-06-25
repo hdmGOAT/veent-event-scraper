@@ -166,10 +166,12 @@ class Command(BaseCommand):
 
                 for attempt in range(_PAGE_RETRIES):
                     self.stdout.write(f"  → loading (attempt {attempt+1}/{_PAGE_RETRIES})...")
-                    # Fresh browser context per event — forces a new DataImpulse residential
-                    # IP each time and avoids stale connection state from previous events.
-                    browser, context, page = _make_page(pw, proxy, warmup=(attempt == 0))
+                    browser = None
+                    context = None
                     try:
+                        # Fresh browser context per event — forces a new DataImpulse residential
+                        # IP each time and avoids stale connection state from previous events.
+                        browser, context, page = _make_page(pw, proxy, warmup=(attempt == 0))
                         page.goto(event.url, wait_until="domcontentloaded", timeout=30_000)
                         # Wait for React to finish its XHR calls after domcontentloaded —
                         # without this the FB logo is still rendering when JS extraction runs.
@@ -220,8 +222,10 @@ class Command(BaseCommand):
                             failed += 1
                             detail = None
                     finally:
-                        context.close()
-                        browser.close()
+                        if context is not None:
+                            context.close()
+                        if browser is not None:
+                            browser.close()
 
                 if detail is None:
                     _pause(*_PAUSE_BETWEEN)

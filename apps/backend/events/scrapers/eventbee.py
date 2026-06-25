@@ -22,9 +22,9 @@ import re
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-import requests
 from bs4 import BeautifulSoup
 
+from .proxy_manager import get_session
 from .base import BaseScraper, ScrapedEvent, ScrapedVenue, save_events
 
 logger = logging.getLogger(__name__)
@@ -81,7 +81,7 @@ class EventbeeScraper(BaseScraper):
 
     def _search(self, term: str) -> list[dict]:
         try:
-            r = requests.post(
+            r = get_session().post(
                 _SEARCH_URL,
                 headers=_HEADERS,
                 data={"searchcontent": term},

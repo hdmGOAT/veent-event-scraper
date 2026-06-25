@@ -224,13 +224,12 @@ class Command(BaseCommand):
             from events.scrapers.social_proxy import social_proxy_configured
             from events.models import BandwidthLog
             _used_free = result.get("using_free_proxy")
-            if _used_free is None:
-                _used_free = not social_proxy_configured()
-            proxy_type = BandwidthLog.PROXY_FREE if _used_free else BandwidthLog.PROXY_DATAIMPULSE
-            try:
-                log_bandwidth(source=key, bytes_transferred=total_bytes, proxy_type=proxy_type, scraper_run=run)
-            except Exception:
-                pass  # never block a successful run for logging
+            if _used_free is not None:
+                proxy_type = BandwidthLog.PROXY_FREE if _used_free else BandwidthLog.PROXY_DATAIMPULSE
+                try:
+                    log_bandwidth(source=key, bytes_transferred=total_bytes, proxy_type=proxy_type, scraper_run=run)
+                except Exception:
+                    pass  # never block a successful run for logging
 
         run.status = ScraperRun.Status.SUCCESS
         run.finished_at = timezone.now()
