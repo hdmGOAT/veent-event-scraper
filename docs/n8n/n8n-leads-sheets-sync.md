@@ -1,9 +1,10 @@
 # n8n Workflow: FB Scraper to Google Sheets (async events → Sheets sync)
 
-Polls the live `GET /api/events/` endpoint and **upserts** the current database
-event rows into a Google Sheets tracker. Does **no scraping** — the scraper writes
-to the DB, this workflow only reads the API and syncs to Sheets. The DB is the
-shared state between the two systems, so scraping and syncing are fully decoupled.
+Polls the live `GET /api/events/` endpoint for **upcoming events only** and
+**upserts** them into a Google Sheets tracker. Does **no scraping** — the scraper
+writes to the DB, this workflow only reads the API and syncs to Sheets. The DB is
+the shared state between the two systems, so scraping and syncing are fully
+decoupled.
 
 - **n8n instance:** local self-hosted n8n (v2.27.3), `http://localhost:5678`
   (the global `n8n` install, launched via `apps/n8n` / `pnpm dev`). **Not** n8n.cloud.
@@ -24,30 +25,29 @@ shared state between the two systems, so scraping and syncing are fully decouple
 
 ```
 Daily 00:00 UTC Trigger ─┐
-Manual Run               ┘→ [Clear Events Sync Range — DISABLED]
-                              → Fetch All Events (Paginated)   GET http://127.0.0.1:8000/api/events/?limit=500
-                                  │                            pagination: page = {{ $pageCount + 1 }}, halts when page >= pages
-                                  ▼
-                              Map Events to Sheet Rows         Code node — maps API rows to the n8n-owned columns,
-                                  │                            formats event_date, computes event_status
-                                  ▼
-                              Upsert Event Rows (by db_id)     Google Sheets: Append or Update, match on db_id
+Manual Run               ┘→ Fetch Upcoming Events (Paginated)  GET http://127.0.0.1:8000/api/events/?limit=500&upcoming=1
+                              │                                pagination: page = {{ $pageCount + 1 }}, halts when page >= pages
+                              ▼
+                          Map Events to Sheet Rows             Code node — maps API rows to the n8n-owned columns,
+                              │                                formats event_date
+                              ▼
+                          Upsert Event Rows (by db_id)         Google Sheets: Append or Update, match on db_id
 ```
 
-**Upsert strategy (not Full Replace).** Each sync **updates existing rows in place**
-(matched on `db_id`) and **appends new events**. It writes only the n8n-owned
-columns and **never clears** the sheet. This is deliberate:
+**Upsert strategy (not Full Replace).** Each sync fetches **only upcoming events**,
+**updates existing rows in place** (matched on `db_id`), and **appends new events**.
+It writes only the n8n-owned columns and **never clears or deletes** rows. This is
+deliberate:
 
-- It preserves human-managed columns that sit anywhere in the sheet — both the
-  `event_date` neighbours and the CRM columns on the right (Notes, Added By,
-  Reached Out By, Status, Date Reached Out). A clear-and-replace would wipe or
-  misalign them.
-- Events removed from the DB are **not deleted** from the sheet — correct for a
-  lead tracker (you don't lose rows you've annotated). The trade-off: stale rows
-  accumulate; purge them manually if ever needed.
-
-The old `Clear Events Sync Range` node is left in the canvas but **disabled** — the
-upsert makes clearing unnecessary and unsafe.
+- **CRM / human columns are never affected.** The upsert writes only the n8n-owned
+  columns by name; any other column — the `event_date` neighbours and the CRM
+  columns on the right (Notes, Added By, Reached Out By, Status, Date Reached Out) —
+  is left exactly as-is. No row is ever deleted, so annotations are never lost.
+- **No past events are pulled in.** Because the fetch is `upcoming=1`, new syncs only
+  ever add/update future events; past events are never re-fetched.
+- Trade-off: a row whose event later becomes past is **not** removed automatically —
+  it stays in the sheet (with its annotations intact). Purge such stale rows manually
+  if you ever want to.
 
 Both triggers fan in to the same chain, so a Manual Run and the daily Schedule run
 behave identically.
@@ -76,7 +76,6 @@ auto-map binds by name):
 | `post_date` | API `post_date` |
 | `summary` | API `summary` |
 | `raw_text` | API `raw_text` |
-| `event_status` | computed — `Upcoming` / `Past` / `No Date` |
 
 **Never touched by n8n** (safe to add/edit/format freely): any column not in the
 list above — e.g. the CRM columns `Notes`, `Added By`, `Reached Out By`, `Status`,
@@ -92,15 +91,10 @@ default `USER_ENTERED` cell format, so Sheets stores it as a real, sortable
 date/time that displays in that format. To store the literal string as text
 instead, switch the Upsert node's `cellFormat` to `RAW`.
 
-### `event_status` (computed)
-
-| Value | Condition |
-|---|---|
-| `Upcoming` | `event_date >= now` |
-| `Past` | `event_date < now` |
-| `No Date` | `event_date` empty/unparseable |
-
-Lets the sheet hold both past and future events while differentiating them.
+> **No `event_status` column.** Earlier versions wrote a computed
+> `Upcoming` / `Past` / `No Date` column. It was removed: new syncs only ever fetch
+> upcoming events (`upcoming=1`), so the status is implied. If you re-add an
+> `event_status` header, n8n will not populate it.
 
 ---
 
@@ -137,9 +131,9 @@ runs while the machine + n8n are up. n8n does **not** catch up missed runs.
 | Param | Default | Effect |
 |---|---|---|
 | `limit` | `500` | Max rows per page |
+| `upcoming` | `1` | Fetch only future events (`starts_at >= now`). Keeps new syncs from pulling in past events. Also excludes date-less events. |
 | `page` | _(pagination)_ | Auto-incremented until `page >= pages` |
 | `scraped_after` | _(unset)_ | Optional ISO 8601 freshness filter |
-| `upcoming` | _(unset)_ | Set to `1` to fetch only future events |
 
 ---
 
@@ -179,13 +173,17 @@ curl -s "http://127.0.0.1:8000/api/events/?limit=500&page=1" | python3 -c \
 
 ## Manual Run verification
 
-(Last verified 2026-06-25: ~2,025 rows, 4 pages, no duplicate `db_id`s.)
+(The upsert path was last verified 2026-06-25: ~2,025 rows, 4 pages, no duplicate
+`db_id`s. The `upcoming=1` filter was added after that run and should be re-verified
+on the next Manual Run.)
 
-1. **Fetch** paginates; page envelopes report matching `total`/`pages`.
+1. **Fetch** paginates over `upcoming=1`; page envelopes report matching
+   `total`/`pages`, and every returned `event_date` is in the future.
 2. **Map** emits one item per event with the n8n-owned columns; `event_date` is
-   `M/D/YYYY H:MM:SS`; `event_status` matches the date.
+   `M/D/YYYY H:MM:SS`.
 3. **Upsert** succeeds; existing rows update in place (no duplication — row count
-   equals distinct `db_id` count); CRM columns and any non-n8n columns unchanged.
+   equals distinct `db_id` count); CRM columns and any non-n8n columns unchanged; no
+   row is deleted.
 
 ---
 
@@ -199,6 +197,6 @@ curl -s "http://127.0.0.1:8000/api/events/?limit=500&page=1" | python3 -c \
 | HTTP node: connection refused | Django not running, or URL not reachable from the n8n host |
 | Duplicate rows appear | `db_id` match key missing/renamed in the sheet, or matching failed — confirm header `db_id` exists and is the match column |
 | `event_date` shows as text not a date (or vice-versa) | Controlled by the column's Sheets number format + the node `cellFormat` (`USER_ENTERED` vs `RAW`) |
-| Stale events never disappear | Expected — upsert never deletes; purge manually if needed |
+| Stale (now-past) events never disappear | Expected — new syncs only add/update upcoming events and never delete; purge past rows manually if needed |
 | Google Sheets: 401 / permission error | OAuth credential not attached or expired — re-authorize in n8n |
 | Workflow does not run on schedule | Workflow not Active, or the machine/n8n was down at the scheduled time (no catch-up) |
