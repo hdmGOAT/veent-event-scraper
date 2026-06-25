@@ -12,7 +12,7 @@ Goal achieved: async, decoupled n8n workflow syncs DB event rows to Google Sheet
 
 **Key deviations from original plan:**
 
-- **Endpoint:** changed from `/api/leads/` → `/api/events/` to match the real Sheets layout (no CRM columns, all data columns A–P).
+- **Endpoint:** changed from `/api/leads/` → `/api/events/` to match the real Sheets layout (no CRM columns, API data columns A–O; column P is a derived `event_status` field computed in the n8n Code node, not part of the API payload).
 - **URL:** hardcoded to `http://127.0.0.1:8000` — `$env` is blocked (`N8N_BLOCK_ENV_ACCESS_IN_NODE=true` on self-hosted n8n); `localhost` resolves to IPv6 `::1` which fails, so `127.0.0.1` is required.
 - **Column P (`event_status`):** computed column added (derived from `event_date`/`starts_at` — upcoming vs. past). Clear range widened to `A2:P`.
 - **Sheet tab:** uses a fresh "Events Sync" tab (gid 424242) in "[EXPERIMENT] Centralized List of Events" spreadsheet, not `Sheet1`, to avoid legacy column-drift.
