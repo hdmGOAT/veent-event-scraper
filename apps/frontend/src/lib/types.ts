@@ -37,6 +37,7 @@ export interface EventRow {
 	organizer: string;
 	organizer_slug: string | null;
 	url: string;
+	image_url: string;
 }
 
 export interface Organizer {

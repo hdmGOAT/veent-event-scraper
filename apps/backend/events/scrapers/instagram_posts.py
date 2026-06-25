@@ -38,6 +38,7 @@ import time
 from datetime import datetime, timezone as dt_timezone
 from pathlib import Path
 from typing import Iterable
+from urllib.parse import quote as _urlquote
 
 from playwright.sync_api import sync_playwright
 from playwright_stealth import Stealth
@@ -297,7 +298,7 @@ class InstagramPostsScraper(BaseScraper):
             return p
         # Resolve relative to the Django project root (where manage.py lives).
         # __file__ = .../apps/backend/events/scrapers/instagram_posts.py
-        # .parent×3   = .../apps/backend/
+        # .parent x3  = .../apps/backend/
         return Path(__file__).parent.parent.parent / raw
 
     # ── Proxy ─────────────────────────────────────────────────────────────────
@@ -336,7 +337,7 @@ class InstagramPostsScraper(BaseScraper):
         except Exception as exc:
             logger.warning(
                 "[%s] DataImpulse proxy check failed (%s) — falling back to direct connection.",
-                self.source, exc,
+                self.source, type(exc).__name__,
             )
             return None
 
@@ -411,7 +412,7 @@ class InstagramPostsScraper(BaseScraper):
     def _fetch_for_hashtag(self, page, hashtag: str) -> list[dict]:
         """Navigate to the IG hashtag explore page, scroll, and extract posts."""
         tag = hashtag.lstrip("#")
-        url = _TAG_URL.format(hashtag=tag)
+        url = _TAG_URL.format(hashtag=_urlquote(tag, safe=""))
 
         self._goto(page, url)
         _pause(2.5, 5.0)
@@ -493,18 +494,18 @@ class InstagramPostsScraper(BaseScraper):
         with sync_playwright() as pw:
             for i, sq in enumerate(queries, 1):
                 hashtag    = sq.query.strip()
-                source_url = _TAG_URL.format(hashtag=hashtag.lstrip("#"))
+                source_url = _TAG_URL.format(hashtag=_urlquote(hashtag.lstrip("#"), safe=""))
                 logger.info(
                     "[%s] query %d/%d: #%s",
                     self.source, i, len(queries), hashtag.lstrip("#"),
                 )
 
-                browser, context = self._browser_context(pw, proxy)
-                page = context.new_page()
-                Stealth().use_sync(page)
-                self._block_heavy_resources(page)
-
+                browser = context = None
                 try:
+                    browser, context = self._browser_context(pw, proxy)
+                    page = context.new_page()
+                    Stealth().use_sync(page)
+                    self._block_heavy_resources(page)
                     raw_posts = self._fetch_for_hashtag(page, hashtag)
                     if max_events is not None:
                         raw_posts = raw_posts[:max_events]
@@ -516,8 +517,10 @@ class InstagramPostsScraper(BaseScraper):
                     )
                     raw_by_query[sq.pk] = ([], hashtag, source_url)
                 finally:
-                    context.close()
-                    browser.close()
+                    if context is not None:
+                        context.close()
+                    if browser is not None:
+                        browser.close()
 
                 _pause(3.0, 7.0)
 
@@ -623,6 +626,11 @@ class InstagramPostsScraper(BaseScraper):
 
             if not scraped_events:
                 logger.info("[%s] #%s: 0 usable events extracted.", self.source, hashtag)
+                db_connection.close()
+                SearchQuery.objects.filter(pk=sq.pk).update(
+                    last_run_at=timezone.now(),
+                    updated_at=timezone.now(),
+                )
                 continue
 
             # LLM calls can take minutes (especially on timeouts) — force a fresh
@@ -679,8 +687,8 @@ class InstagramPostsScraper(BaseScraper):
             if on_progress is not None:
                 try:
                     on_progress({})
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("[%s] on_progress callback raised: %s", self.source, exc)
 
         logger.info(
             "[%s] run complete — %d queries, %d created, %d updated",

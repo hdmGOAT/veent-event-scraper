@@ -359,6 +359,7 @@ def api_events(request):
             "organizer": e.organizer_display_name,
             "organizer_slug": e.organizer_ref.slug if e.organizer_ref_id else None,
             "url": e.url,
+            "image_url": e.image_url or "",
         }
         for e in page_obj
     ]
