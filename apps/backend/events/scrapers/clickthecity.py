@@ -36,7 +36,9 @@ def _parse_date(date_str: str) -> datetime | None:
     if not date_str:
         return None
     try:
-        dt = datetime.fromisoformat(date_str)
+        # fromisoformat() on Python <3.11 doesn't handle trailing 'Z' or '.000Z'.
+        normalized = date_str.replace("Z", "+00:00")
+        dt = datetime.fromisoformat(normalized)
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=dt_timezone.utc)
         return dt
