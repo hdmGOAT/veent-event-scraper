@@ -38,7 +38,6 @@ from .facebook_events import (
     _DISMISS_MODAL_JS,
     _EXTRACT_ORGANIZER_JS,
     _pause,
-    _human_scroll,
     _parse_fb_date,
 )
 from events.registration_patterns import find_registration_url
@@ -78,13 +77,122 @@ _NULL_LIKE = frozenset([
 
 _EXPAND_SEE_MORE_JS = """
 () => {
+    function humanClick(el) {
+        if (!el || el.offsetParent === null) return;
+        const rect = el.getBoundingClientRect();
+        const x = rect.left + Math.random() * rect.width;
+        const y = rect.top + Math.random() * rect.height;
+        for (const type of ['mouseover', 'mousedown', 'mouseup', 'click']) {
+            el.dispatchEvent(new MouseEvent(type, {
+                bubbles: true, cancelable: true, clientX: x, clientY: y,
+            }));
+        }
+    }
     const candidates = [];
     for (const el of document.querySelectorAll('div[dir="auto"] span, div[dir="auto"] div')) {
         const txt = (el.innerText || el.textContent || '').trim();
         if (/^see more$/i.test(txt) && el.offsetParent !== null) candidates.push(el);
     }
-    candidates.forEach(el => el.click());
+    candidates.forEach(el => humanClick(el));
     return candidates.length;
+}
+"""
+
+# ── "Recent posts" sort filter click (mirrors content-posts.js clickRecent) ───
+
+_CLICK_RECENT_FILTER_JS = """
+() => {
+    function humanClick(el) {
+        if (!el || el.offsetParent === null) return;
+        const rect = el.getBoundingClientRect();
+        const x = rect.left + Math.random() * rect.width;
+        const y = rect.top + Math.random() * rect.height;
+        for (const type of ['mouseover', 'mousedown', 'mouseup', 'click']) {
+            el.dispatchEvent(new MouseEvent(type, {
+                bubbles: true, cancelable: true, clientX: x, clientY: y,
+            }));
+        }
+    }
+    // Strategy 1: direct aria-label match
+    const direct = document.querySelector('[aria-label="Recent posts"], [aria-label="Recent"]');
+    if (direct) { humanClick(direct); return true; }
+
+    // Strategy 2: role tab/button whose text is "Recent" or "Recent posts"
+    for (const el of document.querySelectorAll('[role="tab"], [role="button"]')) {
+        const txt = (el.innerText || '').trim();
+        if (/^recent\\s*(posts)?$/i.test(txt)) { humanClick(el); return true; }
+    }
+
+    // Strategy 3: any visible span/div whose text is exactly "Recent posts"
+    for (const el of document.querySelectorAll('span, div')) {
+        const txt = (el.innerText || '').trim();
+        if (/^recent posts$/i.test(txt) && el.offsetParent !== null) { humanClick(el); return true; }
+    }
+
+    return false;
+}
+"""
+
+# ── "See more results" pagination button click (mirrors content-posts.js) ─────
+
+_CLICK_SEE_MORE_RESULTS_JS = """
+() => {
+    function humanClick(el) {
+        if (!el || el.offsetParent === null) return;
+        const rect = el.getBoundingClientRect();
+        const x = rect.left + Math.random() * rect.width;
+        const y = rect.top + Math.random() * rect.height;
+        for (const type of ['mouseover', 'mousedown', 'mouseup', 'click']) {
+            el.dispatchEvent(new MouseEvent(type, {
+                bubbles: true, cancelable: true, clientX: x, clientY: y,
+            }));
+        }
+    }
+    let clicked = 0;
+    for (const el of document.querySelectorAll('[role="button"], button')) {
+        const txt = (el.innerText || '').trim();
+        if (!/^(see more results|see more posts|more results|see more)$/i.test(txt)) continue;
+        // Skip caption "See more" links (those live inside div[dir="auto"]).
+        if (el.closest('div[dir="auto"]')) continue;
+        humanClick(el);
+        clicked += 1;
+    }
+    return clicked;
+}
+"""
+
+# ── Fresh (not-yet-in-DB) post-anchor counter ─────────────────────────────────
+
+_COUNT_FRESH_ANCHORS_JS = r"""
+(knownIds) => {
+    function isPostHref(href) {
+        if (!href || /\/photo[/?]/.test(href) || /\/media\//.test(href)) return false;
+        return (
+            /\/(posts|permalink)\//.test(href) ||
+            /\/groups\/[^/]+\/(posts|permalink)\//.test(href) ||
+            /story\.php\?/.test(href) ||
+            /[?&](post_id|story_fbid)=\d+/.test(href) ||
+            /\/videos\/\d/.test(href)
+        );
+    }
+    const known = new Set(knownIds || []);
+    let fresh = 0;
+    const counted = new Set();
+    for (const a of document.querySelectorAll('a[href]')) {
+        const href = a.getAttribute('href') || '';
+        if (!isPostHref(href)) continue;
+        // Normalise to _post_external_id() form: drop everything up to and
+        // including 'facebook.com/', strip leading/trailing slashes (preserving
+        // query params for story.php URLs), then replace remaining '/' with '_'.
+        const externalId = href
+            .split('facebook.com/').pop()
+            .replace(/^\/+|\/+$/g, '')
+            .replace(/\//g, '_');
+        if (!externalId || counted.has(externalId)) continue;
+        counted.add(externalId);
+        if (!known.has(externalId)) fresh += 1;
+    }
+    return fresh;
 }
 """
 
@@ -233,6 +341,10 @@ _EXTRACT_POSTS_JS = r"""
             author_name: findAuthorName(card),
             raw_caption: rawCaption.substring(0, 2000),
             raw_links:   findRegistrationLinks(card, rawCaption),
+            post_date_raw: (() => {
+                const t = card.querySelector('time[datetime]');
+                return t ? t.getAttribute('datetime') : null;
+            })(),
         });
     }
 
@@ -256,8 +368,13 @@ def _build_post_prompt(raw_caption: str, author_name: str | None, timestamp: str
         "  - Announcing a streaming release, album drop, or digital content",
         "  - A retweet or quote with no new event information",
         "  - Too vague or unrelated to live events",
+        "  - A post whose entire text is hashtags, emojis, or mentions with no readable event announcement",
+        "  - A post that contains no readable event name or description (less than 20 meaningful characters)",
         "",
         'Set "is_event" to true only if the post directly announces an upcoming live event.',
+        "",
+        "IMPORTANT: if you cannot extract a meaningful event title (not just hashtags) from the post,",
+        "  set is_event to false rather than inventing a title.",
         "",
         "IMPORTANT — for start_datetime:",
         f"  The post was collected at approximately: {timestamp}",
@@ -378,6 +495,14 @@ def _call_llm_structure(
             data = json.loads(resp.read())
         text   = data.get("response", "")
         result = _parse_structure_response(text)
+        if result is not None:
+            all_text = raw_caption + " " + " ".join(raw_links or [])
+            if result.get("organizer_phone") and not _phone_found_in_text(result["organizer_phone"], all_text):
+                logger.warning("[facebook_posts] fabricated phone rejected: [REDACTED]")
+                result["organizer_phone"] = None
+            if result.get("organizer_email") and not _email_found_in_text(result["organizer_email"], all_text):
+                logger.warning("[facebook_posts] fabricated email rejected: [REDACTED]")
+                result["organizer_email"] = None
         if result is None:
             logger.warning(
                 "[facebook_posts] Ollama (%s) returned unparseable output for: %s…",
@@ -441,6 +566,57 @@ def _parse_post_date(raw: str | None) -> datetime | None:
     return start_dt
 
 
+def _first_readable_line(text: str) -> str | None:
+    """Return the first line of text that is not purely hashtags/whitespace."""
+    for line in (text or "").splitlines():
+        stripped = line.strip()
+        clean = re.sub(r'[#@]\S+', '', stripped).strip()
+        if len(clean) >= 10:
+            return stripped[:120]
+    return None
+
+
+def _normalize_title_for_dedup(title: str) -> str:
+    """Lowercase, strip non-alphanumeric-space chars, collapse whitespace."""
+    t = title.lower()
+    t = re.sub(r'[^a-z0-9 ]+', '', t)
+    return re.sub(r'\s+', ' ', t).strip()
+
+
+def _titles_are_near_duplicates(a: str, b: str, threshold: float = 0.75) -> bool:
+    """Return True when two normalized titles share >= threshold word overlap (Jaccard).
+
+    Catches same-event posts where one title has extra words the other doesn't:
+      'Brian McKnight performs live'
+      'Brian McKnight performs live in Cebu on March 22 2026'
+    Both share 4/7 unique words → Jaccard ≈ 0.57; with threshold=0.6 that's a dup.
+    Minimum 4 shared words required so short generic titles don't false-positive.
+    """
+    words_a = set(a.split())
+    words_b = set(b.split())
+    if not words_a or not words_b:
+        return False
+    shared = words_a & words_b
+    if len(shared) < 4:
+        return False
+    union = words_a | words_b
+    return len(shared) / len(union) >= threshold
+
+
+def _phone_found_in_text(phone: str, source_text: str) -> bool:
+    """Return True only if phone's digit-run appears verbatim in source_text."""
+    digits = re.sub(r'\D', '', phone or '')
+    if len(digits) < 7:
+        return False
+    source_digits = re.sub(r'\D', '', source_text or '')
+    return digits in source_digits
+
+
+def _email_found_in_text(email: str, source_text: str) -> bool:
+    """Return True only if email appears literally (case-insensitive) in source_text."""
+    return bool(email) and bool(source_text) and (email.lower() in source_text.lower())
+
+
 def _post_external_id(post_url: str) -> str:
     """Derive a stable dedup key from the post URL.
 
@@ -450,6 +626,73 @@ def _post_external_id(post_url: str) -> str:
     # Keep everything after facebook.com/ including query string
     after_domain = post_url.split("facebook.com/")[-1].strip("/")
     return after_domain.replace("/", "_") or post_url[-40:]
+
+
+# ── Smart scroll loop (mirrors content-posts.js autoScroll) ───────────────────
+
+def _smart_scroll(page, known_urls: set = frozenset(), max_rounds: int = 20) -> None:
+    """Scroll the feed in rounds, clicking "See more results" and expanding
+    captions each round. Stops early when enough fresh (not-in-DB) posts are
+    found or after several consecutive idle rounds.
+    """
+    MAX_IDLE = 4
+    MIN_FRESH_TARGET = 15
+    SCROLL_SLEEP_MIN, SCROLL_SLEEP_MAX = 0.6, 1.0
+    ROUND_SLEEP_MIN, ROUND_SLEEP_MAX = 1.5, 2.5
+
+    idle_rounds = 0
+
+    for i in range(max_rounds):
+        prev_height = page.evaluate("document.body.scrollHeight")
+        prev_count = page.evaluate("document.querySelectorAll('div[dir=\"auto\"]').length")
+
+        page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+        _pause(SCROLL_SLEEP_MIN, SCROLL_SLEEP_MAX)
+
+        see_more_clicked = page.evaluate(_CLICK_SEE_MORE_RESULTS_JS)
+        if see_more_clicked > 0:
+            logger.debug(
+                "[facebook_posts] _smart_scroll round %d: clicked %d see-more-results",
+                i, see_more_clicked,
+            )
+
+        expanded = page.evaluate(_EXPAND_SEE_MORE_JS)
+        if expanded > 0:
+            logger.debug(
+                "[facebook_posts] _smart_scroll round %d: expanded %d captions",
+                i, expanded,
+            )
+
+        new_height = page.evaluate("document.body.scrollHeight")
+        new_count = page.evaluate("document.querySelectorAll('div[dir=\"auto\"]').length")
+
+        changed = (new_height != prev_height) or (new_count != prev_count)
+        if not changed:
+            idle_rounds += 1
+        else:
+            idle_rounds = 0
+
+        if idle_rounds >= MAX_IDLE:
+            logger.info(
+                "[facebook_posts] _smart_scroll: IDLE stop after %d rounds", i + 1
+            )
+            return
+
+        if known_urls:
+            fresh = page.evaluate(_COUNT_FRESH_ANCHORS_JS, list(known_urls))
+            if fresh >= MIN_FRESH_TARGET:
+                logger.info(
+                    "[facebook_posts] _smart_scroll: MIN_FRESH_TARGET reached "
+                    "(%d fresh) at round %d",
+                    fresh, i + 1,
+                )
+                return
+
+        _pause(ROUND_SLEEP_MIN, ROUND_SLEEP_MAX)
+
+    logger.info(
+        "[facebook_posts] _smart_scroll: MAX_ROUNDS (%d) reached", max_rounds
+    )
 
 
 # ── Scraper ───────────────────────────────────────────────────────────────────
@@ -473,6 +716,7 @@ class FacebookPostsScraper(FacebookEventsScraper):
     """
 
     source = "facebook_posts"
+    MAX_POSTS_PER_QUERY = 15
 
     def fetch(self) -> Iterable[ScrapedEvent]:
         return iter([])
@@ -713,7 +957,13 @@ class FacebookPostsScraper(FacebookEventsScraper):
             search_url = "https://www.facebook.com/search/posts?q=" + urllib.parse.quote(query)
             self._goto(page, search_url)
 
-    def _fetch_raw_posts(self, page, query: str, max_posts: int | None = None) -> list[dict]:
+    def _fetch_raw_posts(
+        self,
+        page,
+        query: str,
+        max_posts: int | None = None,
+        known_urls: set = frozenset(),
+    ) -> list[dict]:
         """Navigate, dismiss modal, expand "See more", scroll, and extract posts."""
         self._navigate_to_query(page, query)
         _pause(3.0, 5.0)
@@ -728,10 +978,15 @@ class FacebookPostsScraper(FacebookEventsScraper):
         except Exception:
             pass
 
+        # Keyword search results default to "Top" — click "Recent posts" to sort newest first.
+        if "/search/posts" in page.url:
+            page.evaluate(_CLICK_RECENT_FILTER_JS)
+            _pause(1.0, 2.0)
+
         page.evaluate(_EXPAND_SEE_MORE_JS)
         _pause(0.5, 1.0)
 
-        _human_scroll(page)
+        _smart_scroll(page, known_urls)
         page.evaluate(_DISMISS_MODAL_JS)
         _pause(1.0, 2.0)
         page.evaluate(_EXPAND_SEE_MORE_JS)
@@ -747,7 +1002,7 @@ class FacebookPostsScraper(FacebookEventsScraper):
 
     supports_keywords = False
 
-    def run(self, query_id: int | None = None, max_events: int | None = None) -> dict:
+    def run(self, query_id: int | None = None, max_events: int | None = None, locations=None, query_ids=None) -> dict:
         from django.db import models as dj_models
         from django.utils import timezone
         from events.models import Event, SearchQuery
@@ -760,6 +1015,15 @@ class FacebookPostsScraper(FacebookEventsScraper):
         if not queries:
             logger.info("[%s] no active search queries — nothing to do.", self.source)
             return {"source": self.source, "created": 0, "updated": 0}
+
+        # Pre-load existing post external_ids per query so _smart_scroll can early-exit
+        # once enough fresh (not-yet-in-DB) posts are visible. ORM runs OUTSIDE Playwright.
+        known_urls_by_query: dict[int, set[str]] = {}
+        for sq in queries:
+            ids = Event.objects.filter(
+                source=self.source, search_query=sq
+            ).values_list("external_id", flat=True)
+            known_urls_by_query[sq.id] = set(ids)
 
         # 2. Scrape raw posts (Playwright block — no Django ORM inside)
         raw_by_query: dict[int, list[dict]] = {}
@@ -818,7 +1082,9 @@ class FacebookPostsScraper(FacebookEventsScraper):
                 for sq in queries:
                     try:
                         raw_by_query[sq.id] = self._fetch_raw_posts(
-                            page, sq.query, max_posts=max_events,
+                            page, sq.query,
+                            max_posts=max_events if max_events is not None else self.MAX_POSTS_PER_QUERY,
+                            known_urls=known_urls_by_query.get(sq.id, set()),
                         )
                     except Exception as exc:
                         logger.warning("[%s] query '%s' failed: %s", self.source, sq.query, exc)
@@ -835,6 +1101,8 @@ class FacebookPostsScraper(FacebookEventsScraper):
         for sq in queries:
             scraped_events: list[ScrapedEvent] = []
             scraped_orgs:   list[ScrapedOrganizer] = []
+            enriched_event_urls: set[str] = set()
+            seen_titles_this_batch: set[str] = set()  # within-batch title dedup
             collected_at = timezone.now().isoformat()
 
             for raw in raw_by_query.get(sq.id, []):
@@ -842,6 +1110,8 @@ class FacebookPostsScraper(FacebookEventsScraper):
                 post_url  = raw.get("post_url", "")
                 author    = raw.get("author_name") or ""
                 raw_links = raw.get("raw_links") or []
+                post_date_raw = raw.get("post_date_raw")
+                post_date     = _parse_post_date(post_date_raw) if post_date_raw else None
 
                 if not _is_eligible(caption):
                     logger.debug("[%s] SKIP pre-filter: %s", self.source, post_url[:60])
@@ -852,8 +1122,16 @@ class FacebookPostsScraper(FacebookEventsScraper):
 
                 structured = _call_llm_structure(caption, author, collected_at, raw_links)
 
+                if structured is not None:
+                    enriched_event_urls.add(_post_external_id(post_url))
+
                 if structured is not None and not structured["is_event"]:
                     logger.debug("[%s] SKIP not event: %s", self.source, post_url[:60])
+                    continue
+
+                # Skip if LLM ran but could not extract a readable title (hashtag-dump guard).
+                if structured is not None and not structured.get("title"):
+                    logger.debug("[%s] SKIP no-title (hashtag dump?): %s", self.source, post_url[:60])
                     continue
 
                 # Fallback fields when Claude is offline or returned None
@@ -888,16 +1166,79 @@ class FacebookPostsScraper(FacebookEventsScraper):
 
                 external_id = _post_external_id(post_url)
 
+                save_url = post_url
+                if "/fbpost/posts/synth_" in post_url:
+                    _query_text = fields.get("title") or _first_readable_line(caption)
+                    if _query_text:
+                        save_url = (
+                            "https://www.facebook.com/search/top/?q="
+                            + urllib.parse.quote(_query_text.strip(), safe="")
+                        )
+
+                # Content dedup by normalized title (mirrors events-posts.js:146-171).
+                # Three tiers: exact match → prefix match → word-overlap (Jaccard ≥ 0.75).
+                # Within-batch check runs first (DB not yet written for same-batch posts).
+                norm_title = _normalize_title_for_dedup(title)
+                if any(
+                    _titles_are_near_duplicates(norm_title, t) or norm_title == t
+                    for t in seen_titles_this_batch
+                ):
+                    logger.debug("[%s] DUP (batch) title='%s': %s", self.source, title[:60], post_url[:60])
+                    continue
+                _is_content_dup = False
+                if len(norm_title) >= 3:
+                    exact_dup = Event.objects.filter(
+                        source=self.source,
+                    ).extra(
+                        where=["regexp_replace(lower(trim(name)), '[^a-z0-9 ]+', '', 'g') = %s"],
+                        params=[norm_title],
+                    ).exists()
+                    if exact_dup:
+                        _is_content_dup = True
+                    elif len(norm_title) >= 10:
+                        prefix_dup = Event.objects.filter(
+                            source=self.source,
+                        ).extra(
+                            where=[
+                                "regexp_replace(lower(trim(name)), '[^a-z0-9 ]+', '', 'g') LIKE %s"
+                                " OR %s LIKE regexp_replace(lower(trim(name)), '[^a-z0-9 ]+', '', 'g') || ' %%'"
+                            ],
+                            params=[norm_title + " %", norm_title],
+                        ).exists()
+                        if prefix_dup:
+                            _is_content_dup = True
+                        else:
+                            # Word-overlap (Jaccard) check — fetch candidate names sharing
+                            # the first significant word so we don't scan the full table.
+                            first_word = norm_title.split()[0] if norm_title.split() else ""
+                            if len(first_word) >= 4:
+                                candidates = Event.objects.filter(
+                                    source=self.source,
+                                    name__icontains=first_word,
+                                ).values_list("name", flat=True)[:50]
+                                for cand in candidates:
+                                    if _titles_are_near_duplicates(
+                                        norm_title, _normalize_title_for_dedup(cand)
+                                    ):
+                                        _is_content_dup = True
+                                        break
+                if _is_content_dup:
+                    logger.debug("[%s] DUP (content) title='%s': %s", self.source, title[:60], post_url[:60])
+                    continue
+
+                seen_titles_this_batch.add(norm_title)
                 scraped_events.append(ScrapedEvent(
                     name=title,
-                    description=fields.get("short_description") or caption[:500],
+                    description=fields.get("short_description") or "",
                     starts_at=_parse_post_date(fields.get("start_datetime")),
-                    url=post_url,
+                    url=save_url,
                     registration_url=registration_url,
                     external_id=external_id,
                     source_url=sq.query,
                     organizer=organizer_name,
                     venue=venue,
+                    raw_text=caption,
+                    post_date=post_date,
                 ))
 
                 if organizer_name:
@@ -921,6 +1262,13 @@ class FacebookPostsScraper(FacebookEventsScraper):
                 save_organizers(self.source, scraped_orgs)
 
             result = save_events(self.source, scraped_events)
+
+            if enriched_event_urls and result.get("event_ids"):
+                Event.objects.filter(
+                    pk__in=result["event_ids"],
+                    external_id__in=enriched_event_urls,
+                    enriched_at__isnull=True,
+                ).update(enriched_at=timezone.now())
 
             Event.objects.filter(
                 pk__in=result.get("event_ids", []),

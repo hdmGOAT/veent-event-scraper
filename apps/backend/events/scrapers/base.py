@@ -77,6 +77,8 @@ class ScrapedEvent:
     address: str = ""
     city: str = ""
     country: str = ""
+    raw_text: str = ""
+    post_date: datetime | None = None
 
 
 class BaseScraper:
@@ -458,6 +460,13 @@ def save_events(source: str, events: Iterable[ScrapedEvent]) -> dict:
             source=source, source_url=se.source_url,
             external_id=se.external_id, scraped_at=now,
         )
+
+        # Only write when provided so scrapers that don't populate these
+        # fields never clear existing values on re-scrape.
+        if se.raw_text:
+            fields["raw_text"] = se.raw_text
+        if se.post_date is not None:
+            fields["post_date"] = se.post_date
 
         if existing:
             for k, v in fields.items():
