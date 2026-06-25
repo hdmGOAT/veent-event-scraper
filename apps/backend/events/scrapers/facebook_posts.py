@@ -1059,6 +1059,20 @@ class FacebookPostsScraper(FacebookEventsScraper):
 
             cookie_count = self._load_fb_cookies(context)
             page = context.new_page()
+
+            bytes_transferred = 0
+            cdp = context.new_cdp_session(page)
+            cdp.send("Network.enable")
+
+            def _on_loading_finished(params):
+                nonlocal bytes_transferred
+                try:
+                    bytes_transferred += int(params.get("encodedDataLength", 0))
+                except Exception:
+                    pass
+
+            cdp.on("Network.loadingFinished", _on_loading_finished)
+
             Stealth().use_sync(page)
             # NOTE: resource blocking is applied AFTER auth so CAPTCHA images load.
             if cookie_count == 0:
@@ -1278,4 +1292,4 @@ class FacebookPostsScraper(FacebookEventsScraper):
             "[%s] run complete — %d queries, %d created, %d updated",
             self.source, len(queries), total_created, total_updated,
         )
-        return {"source": self.source, "created": total_created, "updated": total_updated}
+        return {"source": self.source, "created": total_created, "updated": total_updated, "total_bytes": bytes_transferred}

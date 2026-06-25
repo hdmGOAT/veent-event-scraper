@@ -74,6 +74,9 @@ class ScrapedEvent:
     organizer: str = ""
     organizer_url: str = ""
     venue: ScrapedVenue | None = None
+    address: str = ""
+    city: str = ""
+    country: str = ""
     raw_text: str = ""
     post_date: datetime | None = None
 
