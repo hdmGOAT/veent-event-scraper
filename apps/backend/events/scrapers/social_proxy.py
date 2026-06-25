@@ -105,7 +105,7 @@ def dataimpulse_playwright_proxy(source: str = "") -> dict:
     password = quote(os.environ["DATAIMPULSE_PASS"], safe="")
     host     = os.environ.get("DATAIMPULSE_HOST", _DEFAULT_HOST)
     port     = os.environ.get("DATAIMPULSE_PORT", _DEFAULT_PORT)
-    proxy_url = f"http://{user}:{password}@{host}:{port}"
+    proxy_url = f"http://{quote(user, safe='')}:{quote(password, safe='')}@{host}:{port}"
 
     resp = _requests.get(
         "https://www.facebook.com/robots.txt",
