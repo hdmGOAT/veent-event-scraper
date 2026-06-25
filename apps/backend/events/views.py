@@ -495,6 +495,110 @@ def api_organizers_export(request):
     return response
 
 
+def api_leads(request):
+    if request.method != "GET":
+        return JsonResponse({"error": "Method not allowed"}, status=405)
+
+    country = request.GET.get("country", "").strip()
+    source = request.GET.get("source", "").strip()
+    scraped_after = request.GET.get("scraped_after", "").strip()
+    has_contact = request.GET.get("has_contact", "")
+    try:
+        min_days = max(0, int(request.GET.get("min_days", 0)))
+    except (ValueError, TypeError):
+        min_days = 0
+    try:
+        page = max(1, int(request.GET.get("page", 1)))
+    except (ValueError, TypeError):
+        page = 1
+    try:
+        limit = max(1, min(int(request.GET.get("limit", 100)), 500))
+    except (ValueError, TypeError):
+        limit = 100
+
+    scraped_after_ts = None
+    if scraped_after:
+        from django.utils.dateparse import parse_datetime
+        try:
+            scraped_after_ts = parse_datetime(scraped_after)
+        except (ValueError, TypeError):
+            scraped_after_ts = None
+        if scraped_after_ts is None:
+            return JsonResponse({"error": "Invalid scraped_after timestamp"}, status=400)
+
+    from datetime import timedelta
+    cutoff = timezone.now() + timedelta(days=min_days)
+    events = (
+        Event.objects
+        .select_related("venue", "organizer_ref")
+        .filter(starts_at__gte=cutoff)
+        .order_by("starts_at")
+    )
+
+    if country:
+        events = events.filter(venue__country__iexact=country)
+    if source:
+        events = events.filter(source=source)
+    if scraped_after_ts is not None:
+        events = events.filter(scraped_at__gt=scraped_after_ts)
+    if has_contact == "1":
+        events = events.filter(
+            organizer_ref__isnull=False
+        ).filter(
+            Q(organizer_ref__email__gt="") | Q(organizer_ref__phone__gt="")
+        )
+
+    paginator = Paginator(events, limit)
+    page_obj = paginator.get_page(page)
+
+    results = []
+    for e in page_obj:
+        if e.agent_categories:
+            category = e.agent_categories[0]
+        elif e.category:
+            category = e.category
+        else:
+            category = None
+
+        organizer_email = None
+        organizer_phone = None
+        organizer_facebook = None
+        if e.organizer_ref_id:
+            organizer_email = e.organizer_ref.email or None
+            organizer_phone = e.organizer_ref.phone or None
+            organizer_facebook = e.organizer_ref.facebook_url or None
+
+        location_city = None
+        location_country = None
+        if e.venue_id:
+            location_city = e.venue.city or None
+            location_country = e.venue.country or None
+
+        results.append({
+            "db_id":             e.id,
+            "category":          category,
+            "page_name":         e.organizer_display_name,
+            "location_city":     location_city,
+            "location_country":  location_country,
+            "event":             e.name,
+            "link":              e.url or None,
+            "event_date":        e.starts_at.isoformat() if e.starts_at else None,
+            "post_date":         e.post_date.isoformat() if e.post_date else None,
+            "organizer_email":    organizer_email,
+            "organizer_phone":    organizer_phone,
+            "organizer_facebook": organizer_facebook,
+            "platform":           e.source or None,
+            "scraped_at":        e.scraped_at.isoformat() if e.scraped_at else None,
+        })
+
+    return JsonResponse({
+        "results": results,
+        "total":   paginator.count,
+        "pages":   paginator.num_pages,
+        "page":    page,
+    })
+
+
 @csrf_exempt
 def api_organizer_detail(request, slug):
     import json as _json
