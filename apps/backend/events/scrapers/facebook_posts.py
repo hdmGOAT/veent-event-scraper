@@ -723,8 +723,8 @@ class FacebookPostsScraper(FacebookEventsScraper):
         from .social_proxy import social_proxy_configured, dataimpulse_playwright_proxy
         if not social_proxy_configured():
             raise RuntimeError(
-                "FacebookPostsScraper requires a proxy. "
-                "Set DATAIMPULSE_USER / DATAIMPULSE_PASS or disable with SCRAPER_USE_PROXY=false."
+                "FacebookPostsScraper requires DataImpulse proxy credentials. "
+                "Set DATAIMPULSE_USER and DATAIMPULSE_PASS."
             )
         return dataimpulse_playwright_proxy(source=self.source)
 

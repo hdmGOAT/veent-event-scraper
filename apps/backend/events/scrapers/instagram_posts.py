@@ -319,7 +319,7 @@ class InstagramPostsScraper(BaseScraper):
             return None
         try:
             return dataimpulse_playwright_proxy(source=self.source)
-        except Exception as exc:
+        except RuntimeError as exc:
             logger.warning(
                 "[%s] DataImpulse unavailable (%s) — falling back to direct connection.",
                 self.source, exc,
