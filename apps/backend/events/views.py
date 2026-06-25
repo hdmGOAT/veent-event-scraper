@@ -583,7 +583,7 @@ def api_leads(request):
             "location_country":  location_country,
             "event":             e.name,
             "link":              e.url or None,
-            "event_date":        e.starts_at.isoformat() if e.starts_at else None,
+            "event_date":        e.starts_at.strftime("%-m/%-d/%Y %H:%M:%S") if e.starts_at else None,
             "post_date":         e.post_date.isoformat() if e.post_date else None,
             "organizer_email":    organizer_email,
             "organizer_phone":    organizer_phone,
