@@ -221,3 +221,42 @@ def get_session() -> requests.Session:
     if get_proxy_enabled():
         return get_proxy_session()
     return requests.Session()
+
+
+def resolve_playwright_proxy(source: str = "") -> dict:
+    """Return a Playwright proxy dict using DataImpulse (primary) or free list (fallback).
+
+    Priority:
+      1. DataImpulse residential proxy — verified by preflight check.
+      2. Free public proxy list (subject to SCRAPER_USE_PROXY toggle).
+
+    Raises RuntimeError if no proxy is available — never falls back to unproxied.
+    """
+    from .social_proxy import social_proxy_configured, dataimpulse_playwright_proxy
+
+    tag = f"[{source}] " if source else ""
+
+    if social_proxy_configured():
+        try:
+            return dataimpulse_playwright_proxy(source=source)
+        except Exception as exc:
+            msg = str(exc).lower()
+            if "exhausted" in msg or "407" in msg:
+                logger.warning("%sDataImpulse traffic exhausted — falling back to free proxy.", tag)
+            else:
+                logger.warning("%sDataImpulse preflight failed (%s) — falling back to free proxy.", tag, exc)
+
+    if get_proxy_enabled():
+        try:
+            session = get_proxy_session()
+            proxy_url = session.proxies.get("https") or session.proxies.get("http")
+            if proxy_url:
+                logger.info("%susing free proxy: %s", tag, proxy_url)
+                return {"server": proxy_url}
+        except Exception as exc:
+            logger.warning("%sfree proxy election failed: %s", tag, exc)
+
+    raise RuntimeError(
+        f"{tag}No proxy available — DataImpulse traffic exhausted and "
+        "free proxy list empty or disabled. Aborting to avoid unproxied scraping."
+    )

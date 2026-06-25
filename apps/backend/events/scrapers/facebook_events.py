@@ -1039,57 +1039,8 @@ class FacebookEventsScraper(BaseScraper):
         Priority: DataImpulse residential → free proxy list.
         Raises RuntimeError if no proxy is available — never falls back to unproxied.
         """
-        import requests as _requests
-
-        # Priority 1: DataImpulse residential proxy — verify traffic isn't exhausted.
-        if social_proxy_configured():
-            user     = os.environ["DATAIMPULSE_USER"]
-            password = os.environ["DATAIMPULSE_PASS"]
-            host     = os.environ.get("DATAIMPULSE_HOST", "gw.dataimpulse.com")
-            port     = os.environ.get("DATAIMPULSE_PORT", "823")
-            proxy_url = f"http://{user}:{password}@{host}:{port}"
-            try:
-                resp = _requests.get(
-                    "https://www.facebook.com/robots.txt",
-                    proxies={"http": proxy_url, "https": proxy_url},
-                    timeout=15,
-                    headers={"User-Agent": "Mozilla/5.0"},
-                )
-                if resp.status_code == 407 or "TRAFFIC_EXHAUSTED" in resp.text:
-                    raise Exception(f"407 / TRAFFIC_EXHAUSTED")
-                if resp.status_code != 200 or "user-agent" not in resp.text.lower():
-                    raise Exception(f"unexpected response {resp.status_code}")
-                logger.info("[%s] DataImpulse proxy OK — using residential proxy.", self.source)
-                return {
-                    "server": f"http://{host}:{port}",
-                    "username": user,
-                    "password": password,
-                }
-            except Exception as exc:
-                if "407" in str(exc) or "TRAFFIC_EXHAUSTED" in str(exc):
-                    logger.warning(
-                        "[%s] DataImpulse traffic exhausted — falling back to free proxy.", self.source
-                    )
-                else:
-                    logger.warning(
-                        "[%s] DataImpulse preflight failed (%s) — falling back to free proxy.", self.source, exc
-                    )
-
-        # Priority 2: free proxy list (Scraper Center toggle).
-        if get_proxy_enabled():
-            try:
-                session = get_proxy_session()
-                proxy_url = session.proxies.get("https") or session.proxies.get("http")
-                if proxy_url:
-                    logger.info("[%s] using free proxy: %s", self.source, proxy_url)
-                    return {"server": proxy_url}
-            except Exception as exc:
-                logger.warning("[%s] free proxy election failed: %s", self.source, exc)
-
-        raise RuntimeError(
-            f"[{self.source}] No proxy available — DataImpulse traffic exhausted and "
-            "free proxy list empty or disabled. Aborting to avoid unproxied scraping."
-        )
+        from .proxy_manager import resolve_playwright_proxy
+        return resolve_playwright_proxy(self.source)
 
     def _is_free_proxy(self, proxy: dict | None) -> bool:
         """Return True if proxy came from the free list (not DataImpulse)."""

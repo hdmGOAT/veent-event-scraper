@@ -1028,14 +1028,14 @@ class FacebookPostsScraper(FacebookEventsScraper):
         # 2. Scrape raw posts (Playwright block — no Django ORM inside)
         raw_by_query: dict[int, list[dict]] = {}
 
+        proxy = self._resolve_proxy()
+        using_free_proxy = self._is_free_proxy(proxy)
+
         with sync_playwright() as pw:
-            # Persistent profile (FB_PROFILE_DIR) keeps the session between runs so
-            # 2FA only needs to be completed once.  Falls back to a normal context.
             profile_dir = os.environ.get("FB_PROFILE_DIR", "")
             if profile_dir:
                 os.makedirs(profile_dir, exist_ok=True)
                 headless = os.environ.get("FB_HEADLESS", "true").lower() != "false"
-                proxy    = self._resolve_proxy()
                 ctx_kw   = dict(
                     user_agent=(
                         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -1055,7 +1055,7 @@ class FacebookPostsScraper(FacebookEventsScraper):
                 )
                 browser = None
             else:
-                browser, context = self._browser_context(pw)
+                browser, context = self._browser_context(pw, proxy=proxy, ignore_cert_errors=using_free_proxy)
 
             cookie_count = self._load_fb_cookies(context)
             page = context.new_page()
@@ -1292,4 +1292,4 @@ class FacebookPostsScraper(FacebookEventsScraper):
             "[%s] run complete — %d queries, %d created, %d updated",
             self.source, len(queries), total_created, total_updated,
         )
-        return {"source": self.source, "created": total_created, "updated": total_updated, "total_bytes": bytes_transferred}
+        return {"source": self.source, "created": total_created, "updated": total_updated, "total_bytes": bytes_transferred, "using_free_proxy": using_free_proxy}
