@@ -10,9 +10,9 @@ import logging
 import re
 from urllib.parse import urljoin, urlparse
 
-import requests
 from bs4 import BeautifulSoup
 
+from .proxy_manager import get_session
 from .base import BaseScraper, ScrapedOrganizer, save_organizers
 
 logger = logging.getLogger(__name__)
@@ -27,7 +27,7 @@ _TIMEOUT = 15
 
 def _get_soup(url: str) -> BeautifulSoup | None:
     try:
-        resp = requests.get(url, headers=_HEADERS, timeout=_TIMEOUT)
+        resp = get_session().get(url, headers=_HEADERS, timeout=_TIMEOUT)
         resp.raise_for_status()
         return BeautifulSoup(resp.text, "lxml")
     except Exception as exc:

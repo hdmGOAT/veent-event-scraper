@@ -15,9 +15,9 @@ import logging
 import time
 from datetime import datetime
 
-import requests
 from bs4 import BeautifulSoup
 
+from .proxy_manager import get_session
 from .base import (
     BaseScraper,
     ScrapedEvent,
@@ -75,7 +75,7 @@ def _post_explore(offset: int) -> dict:
     # country="" (empty); the country filter is applied via current_country_code_trp.
     position = (offset // _PER_PAGE) + 1
     try:
-        resp = requests.post(
+        resp = get_session().post(
             _EXPLORE_API,
             headers=_API_HEADERS,
             data={
@@ -110,7 +110,7 @@ def _post_explore(offset: int) -> dict:
 
 def _get_html(url: str) -> str:
     try:
-        resp = requests.get(url, headers=_HEADERS, timeout=_TIMEOUT)
+        resp = get_session().get(url, headers=_HEADERS, timeout=_TIMEOUT)
         resp.raise_for_status()
         time.sleep(_DELAY)
         return resp.text

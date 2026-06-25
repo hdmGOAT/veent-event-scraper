@@ -46,7 +46,8 @@ _MAX_WORKERS = 8
 
 
 def _make_session() -> requests.Session:
-    s = requests.Session()
+    from .proxy_manager import get_session
+    s = get_session()
     s.headers.update(_HEADERS)
     s.verify = False  # certifi bundle absent in this venv
     return s

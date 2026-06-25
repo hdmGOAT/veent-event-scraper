@@ -19,6 +19,7 @@ from dataclasses import replace
 from datetime import datetime, timezone as dt_timezone, timedelta
 from typing import Iterable
 
+from .proxy_manager import get_proxy_enabled, get_proxy_session
 from .base import BaseScraper, ScrapedEvent, ScrapedOrganizer, ScrapedVenue, save_organizers
 
 BASE_URL = "https://happeningnext.com/cagayan%2Bde%2Boro"
@@ -50,6 +51,14 @@ class HappeningNextCDOScraper(BaseScraper):
                 if org:
                     self._scraped_organizers.append(org)
 
+        _proxy_url = None
+        if get_proxy_enabled():
+            try:
+                _sess = get_proxy_session()
+                _proxy_url = _sess.proxies.get("https") or _sess.proxies.get("http")
+            except Exception:
+                pass
+
         StealthyFetcher.fetch(
             BASE_URL,
             headless=True,
@@ -57,6 +66,7 @@ class HappeningNextCDOScraper(BaseScraper):
             timeout=90_000,
             solve_cloudflare=True,
             page_action=_scrape_all,
+            proxy=_proxy_url,
         )
 
         yield from collected

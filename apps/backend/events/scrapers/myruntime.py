@@ -13,8 +13,7 @@ import re
 from datetime import datetime
 from urllib.parse import urlparse
 
-import requests
-
+from .proxy_manager import get_session
 from .base import BaseScraper, ScrapedEvent, ScrapedOrganizer, ScrapedVenue, save_events, save_organizers
 
 logger = logging.getLogger(__name__)
@@ -119,7 +118,7 @@ class MyRuntimeScraper(BaseScraper):
 
     def _fetch_data(self) -> list[dict]:
         try:
-            resp = requests.get(
+            resp = get_session().get(
                 _API_URL,
                 params={"limit": 2000},
                 headers=_HEADERS,

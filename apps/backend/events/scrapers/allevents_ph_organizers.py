@@ -19,6 +19,7 @@ from typing import Iterable
 
 from bs4 import BeautifulSoup
 
+from .proxy_manager import get_proxy_enabled, get_proxy_session
 from .base import BaseScraper, ScrapedOrganizer, save_organizers
 
 logger = logging.getLogger(__name__)
@@ -26,7 +27,7 @@ logger = logging.getLogger(__name__)
 _BASE = "https://allevents.in"
 
 
-def _fetch_html(url: str) -> str:
+def _fetch_html(url: str, proxy: str | None = None) -> str:
     from scrapling.fetchers import StealthyFetcher
 
     page = StealthyFetcher.fetch(
@@ -34,6 +35,7 @@ def _fetch_html(url: str) -> str:
         headless=True,
         solve_cloudflare=True,
         network_idle=True,
+        proxy=proxy,
     )
     html = page.html_content or ""
     if "Just a moment" in html:
@@ -141,6 +143,14 @@ class AllEventsPHOrganizersScraper(BaseScraper):
     def run(self, **_kwargs) -> dict:  # type: ignore[override]
         from events.models import Event
 
+        _proxy_url = None
+        if get_proxy_enabled():
+            try:
+                _sess = get_proxy_session()
+                _proxy_url = _sess.proxies.get("https") or _sess.proxies.get("http")
+            except Exception:
+                pass
+
         # ── Phase 1: collect org URLs from event detail pages ─────────────────
         events_qs = list(
             Event.objects.filter(source="allevents_in", organizer_url="")
@@ -155,7 +165,7 @@ class AllEventsPHOrganizersScraper(BaseScraper):
         for i, event in enumerate(events_qs, 1):
             logger.info("  [%d/%d] %s", i, total, event.url)
             try:
-                html = _fetch_html(event.url)
+                html = _fetch_html(event.url, proxy=_proxy_url)
                 org_name, org_url = _extract_org_from_event_page(html)
                 if org_url:
                     Event.objects.filter(pk=event.pk).update(
@@ -182,7 +192,7 @@ class AllEventsPHOrganizersScraper(BaseScraper):
         for org_url, fallback_name in org_urls.items():
             logger.info("  Org: %s", org_url)
             try:
-                html = _fetch_html(org_url)
+                html = _fetch_html(org_url, proxy=_proxy_url)
                 org = _extract_org_profile(html, org_url)
                 if org:
                     organizers.append(org)

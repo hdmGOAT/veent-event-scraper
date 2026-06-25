@@ -12,6 +12,7 @@ from datetime import datetime, timezone as dt_timezone
 
 import requests
 
+from .proxy_manager import get_session
 from .base import BaseScraper, ScrapedEvent, ScrapedVenue, save_events
 
 logger = logging.getLogger(__name__)
@@ -108,7 +109,7 @@ class ClickTheCityScraper(BaseScraper):
 
     def fetch(self):
         try:
-            resp = requests.get(
+            resp = get_session().get(
                 _API,
                 params={"limit": 1000},
                 headers=_HEADERS,

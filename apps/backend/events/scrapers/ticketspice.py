@@ -24,6 +24,7 @@ from urllib.parse import urlparse, quote_plus
 import requests
 from bs4 import BeautifulSoup
 
+from .proxy_manager import get_session, get_proxy_enabled, get_proxy_session
 from .base import (
     BaseScraper,
     ScrapedEvent,
@@ -76,7 +77,7 @@ _UTC = dt_timezone.utc
 # ---------------------------------------------------------------------------
 
 def _make_session() -> requests.Session:
-    s = requests.Session()
+    s = get_session()
     s.headers.update(_HEADERS)
     return s
 
@@ -113,6 +114,14 @@ def _clean_url(url: str) -> str:
 def _google_search_urls(queries: list[str], pages_per_query: int) -> set[str]:
     """Run Google queries via StealthyFetcher, one fresh browser session per page for reliability."""
     from scrapling.fetchers import StealthyFetcher
+
+    _proxy_url = None
+    if get_proxy_enabled():
+        try:
+            _sess = get_proxy_session()
+            _proxy_url = _sess.proxies.get("https") or _sess.proxies.get("http")
+        except Exception:
+            pass
 
     found: set[str] = set()
 
@@ -152,6 +161,7 @@ def _google_search_urls(queries: list[str], pages_per_query: int) -> set[str]:
                     headless=True,
                     network_idle=False,
                     page_action=_collect,
+                    proxy=_proxy_url,
                 )
             except Exception as exc:
                 logger.warning(

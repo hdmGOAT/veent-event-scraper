@@ -10,8 +10,7 @@ import logging
 import re
 from datetime import datetime
 
-import requests
-
+from .proxy_manager import get_session
 from .base import BaseScraper, ScrapedEvent, ScrapedOrganizer, ScrapedVenue, save_events, save_organizers
 
 logger = logging.getLogger(__name__)
@@ -28,7 +27,7 @@ def _fetch_all_events() -> list[dict]:
     page = 1
     while True:
         try:
-            resp = requests.get(
+            resp = get_session().get(
                 f"{_API}/api/events",
                 params={"limit": 50, "page": page},
                 headers=_HEADERS,

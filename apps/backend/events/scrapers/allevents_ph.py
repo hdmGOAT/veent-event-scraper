@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 
 from bs4 import BeautifulSoup
 
+from .proxy_manager import get_proxy_enabled, get_proxy_session
 from .base import BaseScraper, ScrapedEvent, ScrapedVenue
 
 logger = logging.getLogger(__name__)
@@ -91,6 +92,14 @@ class AllEventsPHScraper(BaseScraper):
     def fetch(self) -> Iterable[ScrapedEvent]:
         from scrapling.fetchers import StealthyFetcher
 
+        _proxy_url = None
+        if get_proxy_enabled():
+            try:
+                _sess = get_proxy_session()
+                _proxy_url = _sess.proxies.get("https") or _sess.proxies.get("http")
+            except Exception:
+                pass
+
         for city in _CITIES:
             url = f"https://allevents.in/{city['slug']}/all"
             logger.info("Fetching %s", url)
@@ -100,6 +109,7 @@ class AllEventsPHScraper(BaseScraper):
                     headless=True,
                     solve_cloudflare=True,
                     network_idle=True,
+                    proxy=_proxy_url,
                 )
                 html = page.html_content or ""
                 if "Just a moment" in html:
