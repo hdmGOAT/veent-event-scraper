@@ -30,6 +30,12 @@ def _org(event, attr):
     return getattr(event.organizer_ref, attr, "") or ""
 
 
+def _tsv_cell(v):
+    """Prefix formula-injection triggers so spreadsheets don't execute them."""
+    s = str(v)
+    return f"'{s}" if s and s[0] in ("=", "+", "-", "@") else s
+
+
 HEADER = [
     "__row_type",
     "export_version",
@@ -110,7 +116,7 @@ class Command(BaseCommand):
 
                 venue = event.venue if event.venue_id is not None else None
 
-                writer.writerow([
+                writer.writerow([_tsv_cell(v) for v in [
                     "veent_event_v1",
                     "1.0",
                     str(event.id),
@@ -145,7 +151,7 @@ class Command(BaseCommand):
                     venue.country or "" if venue else "",
                     _str(venue.latitude) if venue else "",
                     _str(venue.longitude) if venue else "",
-                ])
+                ]])
                 count += 1
 
         self.stdout.write(

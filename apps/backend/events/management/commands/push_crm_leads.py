@@ -103,7 +103,7 @@ def _is_valid_social_url(url: str, platform: str) -> bool:
 def _handle_from_website(url: str) -> str:
     """Extract a short slug from a website domain (strips www., uses first label)."""
     netloc = urlparse(url).netloc.lower()
-    netloc = netloc.lstrip("www.").lstrip(".")
+    netloc = netloc.removeprefix("www.")
     label = netloc.split(".")[0] if netloc else ""
     return label
 

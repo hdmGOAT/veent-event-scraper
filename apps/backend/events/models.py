@@ -210,11 +210,6 @@ class Organizer(models.Model):
         help_text="How enrichment data was gathered, e.g. 'crawler' or 'skipped_no_website'.",
     )
 
-    pushed_to_crm_at = models.DateTimeField(
-        null=True, blank=True,
-        help_text="When this organizer was last successfully pushed to the CRM ingest endpoint.",
-    )
-
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
