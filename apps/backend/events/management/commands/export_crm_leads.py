@@ -94,8 +94,10 @@ class Command(BaseCommand):
             f"veent-leads-export-{date.today().isoformat()}.tsv"
         )
 
-        qs = Event.objects.select_related("organizer_ref", "venue").order_by(
-            "organizer_ref_id", "starts_at"
+        qs = (
+            Event.objects.select_related("organizer_ref", "venue")
+            .filter(organizer_ref__isnull=False)
+            .order_by("organizer_ref_id", "starts_at")
         )
         if options["source"]:
             qs = qs.filter(source=options["source"])
