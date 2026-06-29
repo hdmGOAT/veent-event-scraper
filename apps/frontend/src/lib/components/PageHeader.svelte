@@ -17,7 +17,7 @@
 			<p class="mt-0.5 text-sm text-muted">{subtitle}</p>
 		{/if}
 	</div>
-	<div class="flex items-center gap-3">
+	<div class="flex items-center gap-4">
 		{#if action}
 			{@render action()}
 		{/if}

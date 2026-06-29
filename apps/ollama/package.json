@@ -1,0 +1,7 @@
+{
+  "name": "@veent/ollama",
+  "private": true,
+  "scripts": {
+    "dev": "ollama serve 2>&1 || (echo 'Ollama is already running' && sleep infinity)"
+  }
+}

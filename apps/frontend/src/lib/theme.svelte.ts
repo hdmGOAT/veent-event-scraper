@@ -26,7 +26,9 @@ export const themeStore = {
 		document.documentElement.classList.add('theme-transitioning');
 		_theme = next;
 		applyClass(next);
-		localStorage.setItem('veent-theme', next);
+		try {
+			localStorage.setItem('veent-theme', next);
+		} catch (_) {}
 		setTimeout(() => document.documentElement.classList.remove('theme-transitioning'), 300);
 	}
 };

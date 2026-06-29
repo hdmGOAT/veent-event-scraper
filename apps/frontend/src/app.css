@@ -68,10 +68,10 @@ body {
 /* Smooth color transition only during the ~300 ms toggle window.    */
 /* Added/removed programmatically by themeStore.toggle() to avoid    */
 /* interfering with hover and animation transitions elsewhere.        */
-.theme-transitioning,
-.theme-transitioning *,
-.theme-transitioning *::before,
-.theme-transitioning *::after {
+html.theme-transitioning,
+html.theme-transitioning *,
+html.theme-transitioning *::before,
+html.theme-transitioning *::after {
 	transition-duration: 0.2s !important;
 	transition-property: background-color, border-color, color, fill, stroke !important;
 	transition-timing-function: ease !important;

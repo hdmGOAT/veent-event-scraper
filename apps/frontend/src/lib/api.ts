@@ -140,8 +140,9 @@ export const api = {
 	stats: (f?: Fetch) => get<Stats>('/stats/', f),
 	eventsBySource: (f?: Fetch) => get<SourceCount[]>('/events/by-source/', f),
 	eventsByCategory: (f?: Fetch) => get<CategoryCount[]>('/events/by-category/', f),
+	agentCategories: (f?: Fetch) => get<string[]>('/events/agent-categories/', f),
 	events: (
-		params: { q?: string; source?: string; category?: string; ordering?: string; upcoming?: 1; page?: number } = {},
+		params: { q?: string; source?: string; category?: string; ordering?: string; upcoming?: 1; date_from?: string; date_to?: string; page?: number } = {},
 		f?: Fetch
 	) => get<Paginated<EventRow>>(`/events/${qs(params)}`, f),
 	organizers: (params: { q?: string; status?: string; page?: number } = {}, f?: Fetch) =>

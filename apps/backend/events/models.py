@@ -123,6 +123,15 @@ class Event(models.Model):
     # Stable identifier from the source, used to deduplicate on re-scrape.
     external_id = models.CharField(max_length=255, blank=True, db_index=True)
     scraped_at = models.DateTimeField(null=True, blank=True)
+    # Raw FB post caption captured at scrape time — source of truth for Ollama processing.
+    raw_text = models.TextField(blank=True, default="")
+    # Timestamp when the FB post was published (from <time datetime="..."> in DOM).
+    # Null when FB does not expose the datetime attribute (e.g. older posts).
+    post_date = models.DateTimeField(null=True, blank=True, db_index=True)
+    enriched_at = models.DateTimeField(
+        null=True, blank=True,
+        help_text="Set when the Ollama LLM successfully structured this FB post.",
+    )
     # When events are found via a search query (e.g. facebook_events scraper),
     # this links back to the SearchQuery row that produced them.
     search_query = models.ForeignKey(
@@ -362,3 +371,36 @@ class ScraperRun(models.Model):
     def is_active(self):
         """Whether the run is queued or currently running."""
         return self.status in (self.Status.QUEUED, self.Status.RUNNING)
+
+
+class BandwidthLog(models.Model):
+    """Records compressed wire bytes transferred per scrape session.
+
+    Rows are append-only. Query `Sum("bytes_transferred")` filtered by
+    `proxy_type=PROXY_DATAIMPULSE` to get cumulative quota consumption.
+    """
+
+    PROXY_DATAIMPULSE = "dataimpulse"
+    PROXY_FREE = "free"
+    PROXY_CHOICES = [
+        (PROXY_DATAIMPULSE, "DataImpulse"),
+        (PROXY_FREE, "Free proxy"),
+    ]
+
+    source = models.CharField(max_length=120, db_index=True)
+    proxy_type = models.CharField(max_length=40, choices=PROXY_CHOICES, db_index=True)
+    bytes_transferred = models.BigIntegerField(default=0)
+    scraper_run = models.ForeignKey(
+        ScraperRun,
+        null=True, blank=True,
+        on_delete=models.SET_NULL,
+        related_name="bandwidth_logs",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        mb = self.bytes_transferred / 1_048_576
+        return f"{self.source} / {self.proxy_type} / {mb:.1f} MB"

@@ -23,6 +23,7 @@ from zoneinfo import ZoneInfo
 
 from bs4 import BeautifulSoup
 
+from .proxy_manager import get_proxy_enabled, get_proxy_session
 from .base import (
     BaseScraper,
     ScrapedEvent,
@@ -57,7 +58,17 @@ _MAX_PAGES = 20  # safety cap per category URL
 # Fetch helper
 # ---------------------------------------------------------------------------
 
-def _fetch_html(url: str) -> str:
+def _resolve_proxy_url() -> str | None:
+    if not get_proxy_enabled():
+        return None
+    try:
+        sess = get_proxy_session()
+        return sess.proxies.get("https") or sess.proxies.get("http")
+    except Exception:
+        return None
+
+
+def _fetch_html(url: str, proxy: str | None = None) -> str:
     from scrapling.fetchers import StealthyFetcher
     try:
         page = StealthyFetcher.fetch(
@@ -65,6 +76,7 @@ def _fetch_html(url: str) -> str:
             headless=True,
             solve_cloudflare=True,
             network_idle=True,
+            proxy=proxy,
         )
         return page.html_content or ""
     except Exception as exc:
@@ -278,7 +290,7 @@ def _build_event_from_detail(
 # Scraper
 # ---------------------------------------------------------------------------
 
-def _collect_all_cards() -> dict[str, dict]:
+def _collect_all_cards(proxy: str | None = None) -> dict[str, dict]:
     """Paginate all category URLs and return deduped cards keyed by external_id."""
     all_cards: dict[str, dict] = {}
     for base_url in _CATEGORY_URLS:
@@ -286,7 +298,7 @@ def _collect_all_cards() -> dict[str, dict]:
         while page_num <= _MAX_PAGES:
             url = base_url if page_num == 1 else f"{base_url}?page={page_num}"
             logger.info("EventAlways: loading %s", url)
-            html = _fetch_html(url)
+            html = _fetch_html(url, proxy=proxy)
             if not html or "Just a moment" in html:
                 logger.warning("EventAlways: blocked or empty at %s — skipping", url)
                 break
@@ -305,26 +317,30 @@ def _collect_all_cards() -> dict[str, dict]:
 class EventAlwaysScraper(BaseScraper):
     source = "eventalways"
 
-    def _scrape_detail(self, card: dict) -> tuple[ScrapedEvent | None, ScrapedOrganizer | None]:
-        html = _fetch_html(card["url"])
+    def _scrape_detail(
+        self, card: dict, proxy: str | None = None
+    ) -> tuple[ScrapedEvent | None, ScrapedOrganizer | None]:
+        html = _fetch_html(card["url"], proxy=proxy)
         if not html or "Just a moment" in html:
             logger.warning("EventAlways: blocked on detail page %s", card["url"])
             return None, None
         return _build_event_from_detail(html, card["url"], card)
 
     def fetch(self) -> Iterable[ScrapedEvent]:
-        for card in _collect_all_cards().values():
-            event, _ = self._scrape_detail(card)
+        proxy = _resolve_proxy_url()
+        for card in _collect_all_cards(proxy=proxy).values():
+            event, _ = self._scrape_detail(card, proxy=proxy)
             if event:
                 yield event
 
     def run(self, **_kwargs) -> dict:
-        cards = _collect_all_cards()
+        proxy = _resolve_proxy_url()
+        cards = _collect_all_cards(proxy=proxy)
         events: list[ScrapedEvent] = []
         organizers: dict[str, ScrapedOrganizer] = {}
 
         for card in cards.values():
-            event, organizer = self._scrape_detail(card)
+            event, organizer = self._scrape_detail(card, proxy=proxy)
             if event:
                 events.append(event)
             if organizer and organizer.name not in organizers:

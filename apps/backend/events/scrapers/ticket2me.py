@@ -14,10 +14,9 @@ import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-import requests
-
 from django.utils import timezone
 
+from .proxy_manager import get_session
 from .base import BaseScraper, ScrapedEvent, ScrapedOrganizer, ScrapedVenue, save_events, save_organizers
 
 logger = logging.getLogger(__name__)
@@ -33,7 +32,7 @@ _TZ = "Asia/Manila"
 
 def _get(path: str, **params):
     try:
-        resp = requests.get(_BASE_API + path, params=params or None, headers=_HEADERS, timeout=_TIMEOUT)
+        resp = get_session().get(_BASE_API + path, params=params or None, headers=_HEADERS, timeout=_TIMEOUT)
         resp.raise_for_status()
         time.sleep(0.3)
         return resp.json()

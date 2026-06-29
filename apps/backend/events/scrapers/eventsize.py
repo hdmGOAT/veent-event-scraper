@@ -31,6 +31,7 @@ from urllib.parse import quote_plus, urlparse
 import requests
 from bs4 import BeautifulSoup
 
+from .proxy_manager import get_session, get_proxy_enabled, get_proxy_session
 from .base import (
     BaseScraper,
     ScrapedEvent,
@@ -119,7 +120,7 @@ _PH_LOCATIONS = [
 # ---------------------------------------------------------------------------
 
 def _make_session() -> requests.Session:
-    s = requests.Session()
+    s = get_session()
     s.headers.update(_SESSION_HEADERS)
     return s
 
@@ -157,6 +158,14 @@ def _google_search_urls(queries: list[str], pages_per_query: int) -> set[str]:
     """
     from scrapling.fetchers import StealthyFetcher
 
+    _proxy_url = None
+    if get_proxy_enabled():
+        try:
+            _sess = get_proxy_session()
+            _proxy_url = _sess.proxies.get("https") or _sess.proxies.get("http")
+        except Exception:
+            pass
+
     found: set[str] = set()
 
     for query in queries:
@@ -193,6 +202,7 @@ def _google_search_urls(queries: list[str], pages_per_query: int) -> set[str]:
                     headless=True,
                     network_idle=False,
                     page_action=_collect,
+                    proxy=_proxy_url,
                 )
             except Exception as exc:
                 logger.warning(
@@ -219,7 +229,7 @@ def _google_search_urls(queries: list[str], pages_per_query: int) -> set[str]:
 def _api_discover_urls(locations: list[str]) -> set[str]:
     """Hit the public offers API per location and extract event shortcodes."""
     found: set[str] = set()
-    session = requests.Session()
+    session = get_session()
     session.headers.update(_API_HEADERS)
 
     for location in locations:
@@ -435,8 +445,8 @@ def _build_venue(jsonld: dict) -> ScrapedVenue | None:
     return ScrapedVenue(
         name=name or addr_str,
         address=addr_str,
-        city=city,
-        country=country,
+        city=city[:120],
+        country=country[:120],
     )
 
 

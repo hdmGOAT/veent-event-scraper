@@ -12,6 +12,7 @@ function resolvePython() {
 
     const candidates = [
         process.env.VIRTUAL_ENV && path.join(process.env.VIRTUAL_ENV, ...bin),
+        path.resolve(__dirname, 'venv', ...bin),
         path.resolve(__dirname, '..', '..', '.venv', ...bin),
     ].filter(Boolean);
 

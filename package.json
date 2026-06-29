@@ -3,7 +3,7 @@
   "private": true,
   "packageManager": "pnpm@10.33.0",
   "scripts": {
-    "dev": "turbo dev",
+    "dev": "turbo dev --continue",
     "build": "turbo build",
     "lint": "turbo lint"
   },

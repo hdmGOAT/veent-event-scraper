@@ -12,6 +12,7 @@ from datetime import datetime, timezone as dt_timezone
 
 import requests
 
+from .proxy_manager import get_session
 from .base import BaseScraper, ScrapedEvent, ScrapedVenue, save_events
 
 logger = logging.getLogger(__name__)
@@ -36,7 +37,9 @@ def _parse_date(date_str: str) -> datetime | None:
     if not date_str:
         return None
     try:
-        dt = datetime.fromisoformat(date_str)
+        # fromisoformat() on Python <3.11 doesn't handle trailing 'Z' or '.000Z'.
+        normalized = date_str.replace("Z", "+00:00")
+        dt = datetime.fromisoformat(normalized)
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=dt_timezone.utc)
         return dt
@@ -108,7 +111,7 @@ class ClickTheCityScraper(BaseScraper):
 
     def fetch(self):
         try:
-            resp = requests.get(
+            resp = get_session().get(
                 _API,
                 params={"limit": 1000},
                 headers=_HEADERS,

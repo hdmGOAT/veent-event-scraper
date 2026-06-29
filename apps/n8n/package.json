@@ -1,0 +1,7 @@
+{
+  "name": "@veent/n8n",
+  "private": true,
+  "scripts": {
+    "dev": "n8n start 2>&1 || (echo 'n8n may already be running or failed to start' && sleep infinity)"
+  }
+}

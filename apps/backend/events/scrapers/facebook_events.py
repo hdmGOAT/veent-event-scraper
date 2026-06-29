@@ -44,6 +44,43 @@ from events.registration_patterns import find_registration_url
 
 logger = logging.getLogger(__name__)
 
+DATAIMPULSE_QUOTA_BYTES = 2_684_354_560  # 2.5 GB
+
+
+def log_bandwidth(
+    source: str,
+    bytes_transferred: int,
+    proxy_type: str,
+    scraper_run=None,
+) -> None:
+    """Persist a bandwidth record and log cumulative DataImpulse quota usage."""
+    from events.models import BandwidthLog
+    from django.db.models import Sum
+    if bytes_transferred <= 0:
+        return
+    BandwidthLog.objects.create(
+        source=source,
+        proxy_type=proxy_type,
+        bytes_transferred=bytes_transferred,
+        scraper_run=scraper_run,
+    )
+    used = BandwidthLog.objects.filter(
+        proxy_type=BandwidthLog.PROXY_DATAIMPULSE,
+    ).aggregate(total=Sum("bytes_transferred"))["total"] or 0
+    pct = 100 * used / DATAIMPULSE_QUOTA_BYTES
+    logger.info(
+        "[bandwidth] +%.2f MB (%s). DataImpulse total: %.1f MB / 2500.0 MB (%.1f%%)",
+        bytes_transferred / 1_048_576,
+        source,
+        used / 1_048_576,
+        pct,
+    )
+    if pct >= 80:
+        logger.warning(
+            "[bandwidth] DataImpulse quota at %.1f%% — consider topping up!", pct
+        )
+
+
 _FB_BASE   = "https://www.facebook.com"
 _SEARCH_URL = _FB_BASE + "/events/search?q={query}"
 _PHT        = dt_timezone(timedelta(hours=8))
@@ -288,12 +325,28 @@ _EXTRACT_DETAIL_JS = r"""
     if (!title) return { events: [], debug: { error: 'no title' } };
 
     let start_datetime = null;
-    for (const el of document.querySelectorAll('span, div, h2, strong')) {
-        if (isInSidebarNav(el)) continue;
-        const t = leafText(el);
-        if (!t || t.length < 8 || t.length > 100) continue;
-        if (FULL_MONTH_RE.test(t) && /\bat\b/i.test(t)) { start_datetime = t; break; }
-        if (FULL_MONTH_RE.test(t) && /\d{4}/.test(t))   { start_datetime = t; break; }
+    // FB injects a <time datetime="..."> with a clean ISO or locale string —
+    // prefer it over free-text scanning to avoid picking up concatenated blobs.
+    const timeEl = document.querySelector('time[datetime]');
+    if (timeEl) {
+        start_datetime = timeEl.getAttribute('datetime') || timeEl.textContent.trim();
+    }
+    if (!start_datetime) {
+        // Fallback text scan. Cap at 70 chars: real date strings fit; the
+        // concatenated title+date+venue blobs from nested elements don't.
+        // Month must appear adjacent to a day number — prevents titles with a year
+        // (e.g. 'Conference 2026 August') from being mistaken for date strings.
+        const MONTH_DAY_RE = /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|january|february|march|april|june|july|august|september|october|november|december)\s+\d{1,2}\b|\b\d{1,2}\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|january|february|march|april|june|july|august|september|october|november|december)\b/i;
+        for (const el of document.querySelectorAll('span, div, h2, strong')) {
+            if (isInSidebarNav(el)) continue;
+            if (el.children.length > 0) continue;
+            const t = (el.textContent || '').trim().replace(/ /g, ' ');
+            if (!t || t.length < 8 || t.length > 70) continue;
+            if (!MONTH_DAY_RE.test(t)) continue;
+            if (/\b(?:at|from)\s+\d{1,2}[: ]\d{0,2}/i.test(t)) { start_datetime = t; break; }
+            if (/\d{4}/.test(t)) { start_datetime = t; break; }
+            if (/^\w{3},\s/.test(t)) { start_datetime = t; break; }
+        }
     }
 
     // ── Organizer: "Event by [linked NAME]" ─────────────────────────────────
@@ -447,16 +500,94 @@ _EXTRACT_DETAIL_JS = r"""
         // Skip platform/login UI text that leaks through as standalone leaf nodes
         if (/^(facebook|instagram|twitter|tiktok|youtube|privacy|terms|cookies?|see\s+more|see\s+less)$/i.test(t)) continue;
         if (/^(log\s*in|sign\s*up|create\s*(new\s*)?account|forgot(?:ten)?\s*(account|password)\??|email\s*address|phone\s*number|password|new\s*to\s*facebook\??|advertising|sponsored|suggested\s+for\s+you|ad\s+choices?)$/i.test(t)) continue;
+        if (/^(details|overview|schedule|map|tickets?|share|more options)$/i.test(t)) continue;
+        if (/^consumer\s+health\s+privacy$/i.test(t)) continue;
+        if (/^duration:\s*\d+/i.test(t)) continue;
         if (/^[A-Z]/.test(t) && t.length >= 5) { venue_name = t; break; }
     }
 
-    let city_location = null;
-    for (const el of document.querySelectorAll('a, span, div')) {
-        if (isInSidebarNav(el)) continue;
-        const t = leafText(el);
-        if (!t || t.length > 60 || t.length < 5) continue;
-        if (CITY_RE.test(t) && !DATE_WORD_RE.test(t) && !NOISE_RE.test(t)) { city_location = t; break; }
+    // Detect location blocks that belong to sidebar related-event cards, not the main event.
+    // FB renders multiple event cards in a sidebar, each with their own location block.
+    // A location block inside a container that holds 2+ location blocks is a sidebar card;
+    // the main event's block is in its own isolated section with exactly one location block.
+    function isSidebarLocEl(el) {
+        // Heuristic 1: any close ancestor (within 8 levels) holds multiple location blocks
+        // → this element is inside an event-card list (sidebar).
+        let node = el.parentElement;
+        for (let i = 0; i < 8 && node && node !== document.body; i++) {
+            if (node.querySelectorAll('[aria-label="Location information for this event"]').length > 1) return true;
+            node = node.parentElement;
+        }
+        // Heuristic 2: ancestor's aria-label mentions related/more events.
+        node = el.parentElement;
+        while (node && node !== document.body) {
+            const lbl = (node.getAttribute('aria-label') || '').toLowerCase();
+            if (/more events|other events|related events|you may like|events you may also/i.test(lbl)) return true;
+            if (node.getAttribute('role') === 'complementary') return true;
+            node = node.parentElement;
+        }
+        return false;
     }
+
+    // Pick the first location block that is NOT in a sidebar related-events section.
+    const allLocEls = [...document.querySelectorAll('[aria-label="Location information for this event"]')];
+    const locEl = allLocEls.find(el => !isSidebarLocEl(el)) ?? null;
+
+    // mainScope: used by fallback scans when locEl is null. Anchor on h1's ancestor
+    // area to stay within the main event content rather than scanning the whole page.
+    let mainScope = document.body;
+    {
+        const h1 = document.querySelector('h1');
+        if (h1) {
+            let node = h1.parentElement;
+            for (let i = 0; i < 20 && node && node !== document.body; i++) {
+                mainScope = node;
+                node = node.parentElement;
+            }
+        }
+    }
+
+    // Street address regex — require keyword at word boundary AND not just a year + text.
+    const ADDR_RE = /^\d{1,5}\s+[\w\s.,'-]{5,80}(?:\b(?:st(?:reet)?|ave(?:nue)?|blvd|boulevard|road|rd|drive|dr|lane|ln|way|place|pl|court|ct|circle|cir|barangay|brgy|purok|highway|hwy|floor|fl|unit|suite|ste|bldg)\b)/i;
+    // GPS coordinate pattern — lat/lng pairs are not location names.
+    const GPS_RE = /^-?\d+\.\d+$/;
+
+    // Priority source: FB's "Location information for this event" aria-label block,
+    // using the non-sidebar locEl found above.
+    let city_location = null;
+    let address = null;
+    if (locEl) {
+        const lines = [];
+        for (const el of locEl.querySelectorAll('*')) {
+            if (el.children.length > 0) continue;
+            const t = (el.textContent || '').trim().replace(/\s+/g, ' ');
+            if (t && t.length > 3 && !lines.includes(t)) lines.push(t);
+        }
+        for (const line of lines) {
+            // Trusted location block — accept comma-separated strings even with leading digits.
+            // Skip GPS coordinate pairs (e.g. "1.3139, 103.8832").
+            if (!city_location && !DATE_WORD_RE.test(line) && line.includes(',') && line.split(',').length >= 2) {
+                const parts = line.split(',');
+                if (!parts.every(p => GPS_RE.test(p.trim()))) {
+                    city_location = line;
+                }
+            }
+            if (!address && ADDR_RE.test(line)) address = line;
+        }
+    }
+
+    // Fallback: scan leaf nodes within main scope for city/address patterns
+    if (!city_location) {
+        for (const el of mainScope.querySelectorAll('a, span, div')) {
+            if (isInSidebarNav(el)) continue;
+            const t = leafText(el);
+            if (!t || t.length > 60 || t.length < 5) continue;
+            if (CITY_RE.test(t) && !DATE_WORD_RE.test(t) && !NOISE_RE.test(t)) { city_location = t; break; }
+        }
+    }
+    // Address fallback scan removed: the mainScope scan was too broad and consistently
+    // picked up persistent sidebar/ad addresses (e.g. "217 Loudoun Street SE, Leesburg, VA")
+    // across unrelated events. Address is only trusted when it comes from the locEl block.
 
     let description = null;
     const DESC_SKIP_RE = /^(public|anyone|events?|about|going|interested|invited|discussion|tickets?|see\s+(more|less)|privacy|terms|log\s+in|sign\s+up)/i;
@@ -535,6 +666,7 @@ _EXTRACT_DETAIL_JS = r"""
             start_datetime,
             venue_name,
             city_location,
+            address,
             organizer_name,
             organizer_url,
             description,
@@ -657,33 +789,235 @@ def _human_scroll(page, rounds: int | None = None) -> None:
 
 # ── Date parsing ──────────────────────────────────────────────────────────────
 
+# Minutes-from-UTC for common timezone abbreviations. Used instead of
+# defaulting everything to PHT when we can identify the suffix.
+# CST is mapped to US Central (-360); China Standard (+480) loses this race
+# because FB English events that show CST are predominantly US-based.
+_TZ_OFFSETS: dict[str, int] = {
+    "NST": -210, "NDT": -150,
+    "AST": -240, "ADT": -180,
+    "EST": -300, "EDT": -240,
+    "CST": -360, "CDT": -300,
+    "MST": -420, "MDT": -360,
+    "PST": -480, "PDT": -420,
+    "AKST": -540, "AKDT": -480,
+    "HST": -600,
+    "GMT": 0, "UTC": 0, "WET": 0,
+    "WEST": 60, "BST": 60, "CET": 60,
+    "CEST": 120, "EET": 120, "CAT": 120, "SAST": 120,
+    "EEST": 180, "MSK": 180, "EAT": 180,
+    "GST": 240,
+    "PKT": 300, "IST": 330,
+    "WIB": 420,
+    "SGT": 480, "HKT": 480, "PHT": 480, "MYT": 480, "AWST": 480,
+    "JST": 540, "KST": 540, "WIT": 540,
+    "AEST": 600,
+    "AEDT": 660,
+    "NZST": 720,
+    "NZDT": 780,
+}
+
+from .geo_normalize import normalize_country as _normalize_country, has_alias as _has_alias
+
+
 _DATE_FMTS = (
-    "%A, %B %d, %Y at %I %p",
-    "%A, %B %d, %Y at %I:%M %p",
-    "%B %d, %Y at %I %p",
-    "%B %d, %Y at %I:%M %p",
-    "%A, %B %d at %I %p",
-    "%B %d at %I %p",
+    # Abbreviated weekday + day-first (from card <time> elements)
+    "%a, %d %b at %H:%M",          # "Fri, 24 Jul at 00:00"
+    "%a, %d %b at %I:%M %p",       # "Fri, 24 Jul at 8:00 PM"
+    "%a, %d %b at %I %p",          # "Fri, 24 Jul at 8 PM"
+    "%a, %d %b",                   # "Mon, 17 Aug"
+    # Abbreviated weekday + month-first (FB also uses this locale)
+    "%a, %b %d at %H:%M",          # "Fri, Jul 24 at 00:00"
+    "%a, %b %d at %I:%M %p",       # "Fri, Jul 24 at 12:00 AM"
+    "%a, %b %d at %I %p",          # "Fri, Jul 24 at 12 AM"
+    "%a, %b %d",                   # "Mon, Aug 17"
+    # Abbreviated month, no weekday (e.g. detail page range start after splitting)
+    "%b %d at %I:%M %p",           # "Jun 26 at 8:00 AM"
+    "%b %d at %I %p",              # "Jun 26 at 8 AM"
+    "%b %d at %H:%M",              # "Jun 26 at 08:00"
+    "%d %b at %I:%M %p",           # "26 Jun at 8:00 AM"
+    "%d %b at %I %p",              # "26 Jun at 8 AM"
+    "%d %b at %H:%M",              # "26 Jun at 08:00"
+    "%d %b %Y at %H:%M",           # "23 Apr 2027 at 19:00"
+    "%d %b %Y at %I:%M %p",        # "23 Apr 2027 at 8:00 PM"
+    "%d %b %Y at %I %p",           # "23 Apr 2027 at 8 PM"
+    "%d %b %Y",                    # "23 Apr 2027"
+    "%b %d, %Y at %I:%M %p",       # "Jun 26, 2026 at 8:00 AM"
+    "%b %d, %Y at %I %p",          # "Jun 26, 2026 at 8 AM"
+    "%b %d, %Y",                   # "Jun 26, 2026"
+    "%b %d",                       # "Jun 26"
+    # Day-first, full month name, 24h time (EU/PH locale)
+    "%A %d %B %Y at %H:%M",        # "Sunday 28 June 2026 at 10:00"
+    "%A, %d %B %Y at %H:%M",       # "Sunday, 28 June 2026 at 10:00"
+    "%A %d %B %Y",                 # "Sunday 28 June 2026"
+    # Full month name, month-first, with year
+    "%A, %B %d, %Y at %I:%M %p",   # "Saturday, June 28, 2025 at 8:30 PM"
+    "%A, %B %d, %Y at %I %p",      # "Saturday, June 28, 2025 at 8 PM"
+    "%B %d, %Y at %I:%M %p",       # "June 28, 2025 at 8:30 PM"
+    "%B %d, %Y at %I %p",          # "June 28, 2025 at 8 PM"
+    # Full month name, month-first, no year
+    "%A, %B %d at %I:%M %p",       # "Saturday, June 28 at 8:30 PM"
+    "%A, %B %d at %I %p",          # "Saturday, June 28 at 8 PM"
+    "%B %d at %I:%M %p",           # "June 28 at 8:30 PM"
+    "%B %d at %I %p",              # "June 28 at 8 PM"
+    # Date-only (no time) — year present or absent
+    "%B %d, %Y",                   # "June 28, 2026"
+    "%B %d",                       # "April 9"  (year inferred as current)
 )
 
+# Time-only formats used when the end portion of a range is just a clock time.
+_TIME_ONLY_FMTS = ("%I:%M %p", "%I %p", "%H:%M")
 
-def _parse_fb_date(raw: str | None) -> datetime | None:
-    if not raw:
-        return None
-    raw = raw.strip()
-    # Strip end-time suffix: "Saturday, June 28, 2025 at 8 PM – 11 PM" → "…at 8 PM"
-    # FB always shows "start – end" in the same text element.
-    raw = re.sub(r'\s*[–\-]\s*\d.*$', '', raw).strip()
+# Date-only formats used when the end portion is just a month+day (multi-day range).
+_DATE_ONLY_FMTS = ("%d %b", "%b %d")
+
+
+def _normalize_raw(raw: str) -> str:
+    raw = re.sub(r'[\u200b\u200c\u200d\ufeff]', '', raw).strip()
+    raw = re.sub(r'^[A-Za-z]+:\s*', '', raw)
+    raw = raw.replace('\u202f', ' ')
+    return raw
+
+
+def _extract_tz(raw: str) -> tuple[str, dt_timezone | None]:
+    """Pull a timezone indicator off the end of raw.
+
+    Handles:
+    - Named abbreviations: PST, CEST, PHT, \u2026
+    - Numeric offsets:  +08, +10, -05, +05:30
+    Returns (raw_without_tz, tz_or_None).
+    """
+    # Named abbreviation (e.g. " PST", " CEST")
+    m = re.search(r'\s+([A-Z]{2,5})((?:\s*[\-\u2013]\s*\S.*)?)$', raw)
+    if m:
+        abbr = m.group(1)
+        if abbr not in ('AM', 'PM') and abbr in _TZ_OFFSETS:
+            tz = dt_timezone(timedelta(minutes=_TZ_OFFSETS[abbr]))
+            raw = (raw[:m.start()] + m.group(2)).strip()
+            return raw, tz
+
+    # Numeric UTC offset (e.g. " +08", " -05", " +05:30")
+    m = re.search(r'\s+([+-]\d{2})(?::(\d{2}))?$', raw)
+    if m:
+        hours = int(m.group(1))
+        mins = int(m.group(2) or 0)
+        tz = dt_timezone(timedelta(hours=hours, minutes=mins if hours >= 0 else -mins))
+        raw = raw[:m.start()].strip()
+        return raw, tz
+
+    return raw, None
+
+
+def _strptime_dt(s: str, tz: dt_timezone | None) -> datetime | None:
+    s = re.sub(r'\bfrom\b', 'at', s, flags=re.IGNORECASE)
     for fmt in _DATE_FMTS:
         try:
-            dt = datetime.strptime(raw, fmt)
+            dt = datetime.strptime(s, fmt)
             if dt.year == 1900:
                 dt = dt.replace(year=datetime.now().year)
-            return dt.replace(tzinfo=_PHT).astimezone(dt_timezone.utc)
+            return dt.replace(tzinfo=tz or _PHT).astimezone(dt_timezone.utc)
         except ValueError:
             continue
     return None
 
+
+def _parse_end_time(end_raw: str, start_dt: datetime, tz: dt_timezone | None) -> datetime | None:
+    end_raw = end_raw.strip().replace('\u202f', ' ')
+    end_raw = re.sub(r'\s+(?!AM|PM)[A-Z]{2,5}$', '', end_raw).strip()
+
+    # Time-only end ("11 PM", "22:00") — apply to start date
+    # Work in local time so time-only and date-only overrides land on the right wall-clock value.
+    local_tz = tz or _PHT
+    start_local = start_dt.astimezone(local_tz)
+
+    for fmt in _TIME_ONLY_FMTS:
+        try:
+            t = datetime.strptime(end_raw, fmt)
+            end_dt = start_local.replace(hour=t.hour, minute=t.minute, second=0, microsecond=0)
+            if end_dt <= start_local:
+                end_dt += timedelta(days=1)
+            return end_dt.astimezone(dt_timezone.utc)
+        except ValueError:
+            continue
+
+    # Date-only end ("5 Jul", "Aug 23") — same time as start, different day
+    for fmt in _DATE_ONLY_FMTS:
+        try:
+            t = datetime.strptime(end_raw, fmt)
+            candidate = start_local.replace(month=t.month, day=t.day)
+            if candidate < start_local:
+                candidate = candidate.replace(year=start_local.year + 1)
+            return candidate.astimezone(dt_timezone.utc)
+        except ValueError:
+            continue
+
+    return _strptime_dt(end_raw, tz)
+
+
+def _parse_fb_date(raw: str | None) -> tuple[datetime | None, datetime | None]:
+    """Parse a raw FB date string into (start_dt, end_dt), both UTC.
+
+    Handles timezone abbreviations (mapped to real offsets, not defaulted to PHT),
+    time ranges ("8 PM \u2013 11 PM", "10:00-22:00", "Aug 17 - Aug 23"),
+    "from" instead of "at", zero-width spaces, and WHEN: prefixes.
+    Falls back to PHT only when no timezone can be identified.
+    """
+    if not raw:
+        return None, None
+    raw = raw.strip()
+
+    # ISO 8601 from <time datetime="..."> — clean path
+    # Replace trailing Z with +00:00 so fromisoformat treats it as UTC, not naive.
+    try:
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=_PHT)
+        return dt.astimezone(dt_timezone.utc), None
+    except ValueError:
+        pass
+
+    raw = _normalize_raw(raw)
+    raw, tz = _extract_tz(raw)
+
+    # ── Split range into start / end portions ───────────────────────────────
+
+    end_raw: str | None = None
+
+    if '\u2013' in raw:
+        # En-dash is FB's canonical range separator: "8 PM \u2013 11 PM"
+        start_part, end_part = raw.split('\u2013', 1)
+        raw, end_raw = start_part.strip(), end_part.strip()
+
+    elif re.search(r'\d{1,2}:\d{2}-\d{1,2}:\d{2}', raw):
+        # 24h time range: "10:00-22:00"
+        m = re.search(r'(\d{1,2}:\d{2})-(\d{1,2}:\d{2})', raw)
+        end_raw = m.group(2)
+        raw = raw[:m.start()] + m.group(1) + raw[m.end():]
+
+    elif re.search(r'\d{1,2}\s+[A-Za-z]{3}-\d{1,2}', raw):
+        # Compact multi-day range: "17 Aug-23 Aug", "3 Jul-5 Jul"
+        m = re.search(r'(\d{1,2}\s+[A-Za-z]{3,})-(\d{1,2}\s+[A-Za-z]{3,})', raw)
+        if m:
+            end_raw = m.group(2).strip()
+            raw = raw[:m.start()] + m.group(1) + raw[m.end():]
+
+    else:
+        # Spaced hyphen: "Aug 17 - Aug 23"
+        m = re.search(r'\s+-\s+(\S.*)$', raw)
+        if m:
+            end_raw = m.group(1).strip()
+            raw = raw[:m.start()].strip()
+
+    # Strip any remaining timezone suffix after range split
+    raw = re.sub(r'\s+(?!AM|PM)[A-Z]{2,5}$', '', raw).strip()
+
+    start_dt = _strptime_dt(raw, tz)
+    if start_dt is None:
+        logger.info("[facebook_events] _parse_fb_date: no format matched raw=%r", raw)
+        return None, None
+
+    end_dt = _parse_end_time(end_raw, start_dt, tz) if end_raw else None
+    return start_dt, end_dt
 
 # ── Scraper ───────────────────────────────────────────────────────────────────
 
@@ -692,8 +1026,10 @@ class FacebookEventsScraper(BaseScraper):
 
     Navigates public Facebook Events search pages as a guest, dismisses the
     login-gate modal, and extracts event data from the DOM — no credentials
-    required. Routes traffic through DataImpulse residential proxies when
-    configured; falls back to direct connections with a warning.
+    required. Routes all traffic through a proxy — DataImpulse residential
+    (primary) or a free public proxy (fallback) via resolve_playwright_proxy().
+    Raises RuntimeError and aborts if neither is available; never scrapes via
+    a direct connection.
     """
 
     source = "facebook_events"
@@ -708,58 +1044,15 @@ class FacebookEventsScraper(BaseScraper):
         Priority: DataImpulse residential → free proxy list.
         Raises RuntimeError if no proxy is available — never falls back to unproxied.
         """
-        import requests as _requests
-
-        # Priority 1: DataImpulse residential proxy — verify traffic isn't exhausted.
-        if social_proxy_configured():
-            user     = os.environ["DATAIMPULSE_USER"]
-            password = os.environ["DATAIMPULSE_PASS"]
-            host     = os.environ.get("DATAIMPULSE_HOST", "gw.dataimpulse.com")
-            port     = os.environ.get("DATAIMPULSE_PORT", "823")
-            proxy_url = f"http://{user}:{password}@{host}:{port}"
-            try:
-                resp = _requests.get(
-                    "https://httpbin.org/ip",
-                    proxies={"http": proxy_url, "https": proxy_url},
-                    timeout=10,
-                )
-                resp.raise_for_status()
-                logger.info("[%s] DataImpulse proxy OK — using residential proxy.", self.source)
-                # Embed credentials in the URL — Chromium headless does not reliably
-                # authenticate CONNECT tunnels when username/password are passed separately.
-                return {"server": proxy_url}
-            except Exception as exc:
-                if "TRAFFIC_EXHAUSTED" in str(exc) or "407" in str(exc):
-                    logger.warning(
-                        "[%s] DataImpulse traffic exhausted — falling back to free proxy.", self.source
-                    )
-                else:
-                    logger.warning(
-                        "[%s] DataImpulse preflight failed (%s) — falling back to free proxy.", self.source, exc
-                    )
-
-        # Priority 2: free proxy list (Scraper Center toggle).
-        if get_proxy_enabled():
-            try:
-                session = get_proxy_session()
-                proxy_url = session.proxies.get("https") or session.proxies.get("http")
-                if proxy_url:
-                    logger.info("[%s] using free proxy: %s", self.source, proxy_url)
-                    return {"server": proxy_url}
-            except Exception as exc:
-                logger.warning("[%s] free proxy election failed: %s", self.source, exc)
-
-        raise RuntimeError(
-            f"[{self.source}] No proxy available — DataImpulse traffic exhausted and "
-            "free proxy list empty or disabled. Aborting to avoid unproxied scraping."
-        )
+        from .proxy_manager import resolve_playwright_proxy
+        return resolve_playwright_proxy(self.source)
 
     def _is_free_proxy(self, proxy: dict | None) -> bool:
         """Return True if proxy came from the free list (not DataImpulse)."""
         if not proxy:
             return False
-        di_host = os.environ.get("DATAIMPULSE_HOST", "gw.dataimpulse.com")
-        return di_host not in proxy.get("server", "")
+        # DataImpulse proxy dicts have a "username" key; free proxy dicts only have "server".
+        return "username" not in proxy
 
     def _rotate_free_proxy(self) -> dict | None:
         """Force a new free-proxy election and return the updated Playwright proxy dict."""
@@ -866,6 +1159,7 @@ class FacebookEventsScraper(BaseScraper):
         )
 
         processed = 0
+        _consec_proxy_failures = 0
         for card in cards:
             if max_events is not None and processed >= max_events:
                 break
@@ -876,7 +1170,15 @@ class FacebookEventsScraper(BaseScraper):
             _pause(1.5, 3.5)
             try:
                 self._goto(page, event_url)
+                _consec_proxy_failures = 0
             except Exception as exc:
+                exc_str = str(exc)
+                if any(e in exc_str for e in ("ERR_PROXY_CONNECTION_FAILED", "ERR_TUNNEL_CONNECTION_FAILED", "ERR_SOCKS_CONNECTION_FAILED")):
+                    _consec_proxy_failures += 1
+                    if _consec_proxy_failures >= 2:
+                        raise RuntimeError(
+                            f"proxy dead: {_consec_proxy_failures} consecutive detail page connection failures"
+                        ) from exc
                 logger.warning("detail page failed for %s: %s", event_url, exc)
                 continue
             _pause(1.5, 3.5)
@@ -914,11 +1216,29 @@ class FacebookEventsScraper(BaseScraper):
             venue_name     = d.get("venue_name") or card.get("venue_name") or ""
             city_location  = d.get("city_location", "")
             loc_parts      = [p.strip() for p in city_location.split(",")] if city_location else []
-            city           = loc_parts[0] if loc_parts else ""
-            country        = loc_parts[-1] if len(loc_parts) >= 2 else ""
+            _last_seg      = loc_parts[-1] if len(loc_parts) >= 2 else ""
+            country        = _normalize_country(_last_seg) if _has_alias(_last_seg) else ""
+            # With 3+ parts (e.g. "Sub-venue, 2600 City, Country") take the second-to-last;
+            # for 2 parts where last isn't a country alias, last segment is the city.
+            if country and len(loc_parts) >= 2:
+                _city_raw = loc_parts[-2] if len(loc_parts) >= 3 else loc_parts[0]
+            else:
+                _city_raw = loc_parts[-1] if len(loc_parts) >= 2 else (loc_parts[0] if loc_parts else "")
+            city           = _city_raw.lstrip("0123456789 ").strip()
+            event_address  = d.get("address") or ""
             organizer      = d.get("organizer_name") or card.get("organizer_name") or ""
             organizer_url  = d.get("organizer_url") or ""
-            start_raw      = d.get("start_datetime") or card.get("start_datetime")
+            detail_raw = d.get("start_datetime")
+            card_raw   = card.get("start_datetime")
+            starts_at, ends_at = _parse_fb_date(detail_raw)
+            if starts_at is None and card_raw:
+                # Detail page date failed to parse — fall back to card value.
+                starts_at, ends_at = _parse_fb_date(card_raw)
+            start_raw = detail_raw or card_raw
+            logger.info(
+                "[facebook_events] start_raw: detail=%r card=%r → starts_at=%s",
+                detail_raw, card_raw, starts_at,
+            )
             external_id    = d.get("event_id") or card.get("event_id", "")
             description    = d.get("description") or card.get("short_description") or ""
             image_url      = d.get("image_url") or ""
@@ -941,13 +1261,17 @@ class FacebookEventsScraper(BaseScraper):
                 description=description,
                 image_url=image_url,
                 registration_url=registration_url,
-                starts_at=_parse_fb_date(start_raw),
+                starts_at=starts_at,
+                ends_at=ends_at,
                 url=event_url,
                 external_id=external_id,
                 source_url=search_url,
                 organizer=organizer,
                 organizer_url=organizer_url,
                 venue=venue,
+                address=event_address,
+                city=city,
+                country=country,
             )
             processed += 1
             logger.info(
@@ -1109,7 +1433,7 @@ class FacebookEventsScraper(BaseScraper):
                         try:
                             cards = list(self._fetch_for_query(page, effective_term, max_events=max_events))
                             attempt_delta = self._bytes_transferred - attempt_bytes_before
-                            if not cards and attempt_delta < 2_000_000 and using_free_proxy and _kattempt < _KEYWORD_RETRIES:
+                            if not cards and attempt_delta < 2_000_000 and using_free_proxy:
                                 # Near-zero bytes + 0 cards means the proxy swallowed the
                                 # connection silently. A real "no results" page still loads
                                 # FB's full shell (hundreds of KB). Rotate and retry.
@@ -1118,12 +1442,12 @@ class FacebookEventsScraper(BaseScraper):
                                     "[%s] search '%s': 0 cards + %.2f MB on attempt %d/%d — likely blocked proxy, retrying",
                                     self.source, effective_term, attempt_delta / 1_048_576, _kattempt, _KEYWORD_RETRIES,
                                 )
-                                if using_free_proxy:
+                                if _kattempt < _KEYWORD_RETRIES:
                                     new_proxy = self._rotate_free_proxy()
                                     if new_proxy:
                                         proxy = new_proxy
                                         failure_score = 0
-                                _pause(3.0, 6.0)
+                                    _pause(3.0, 6.0)
                             else:
                                 _fetched = True
                                 failure_score = max(0, failure_score - 1)  # ease off on success
@@ -1264,4 +1588,5 @@ class FacebookEventsScraper(BaseScraper):
             "created": total_created,
             "updated": total_updated,
             "total_bytes": self._bytes_transferred,
+            "using_free_proxy": using_free_proxy,
         }

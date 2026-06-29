@@ -6,6 +6,7 @@ unique key. The ``scrape`` management command looks scrapers up by key.
 from .allevents import AllEventsCDOScraper
 from .facebook_events import FacebookEventsScraper
 from .facebook_posts import FacebookPostsScraper
+from .instagram_posts import InstagramPostsScraper
 from .clickthecity import ClickTheCityScraper
 from .allevents_api import AllEventsAPIScraper
 from .allevents_ph import AllEventsPHScraper
@@ -28,11 +29,13 @@ from .ticketmelon import TicketmelonScraper
 from .meetup import MeetupScraper
 from .ticketspice import TicketSpiceScraper
 from .eventalways import EventAlwaysScraper
+from .tessera import TesseraScraper
 
 # key -> scraper class. Add new scrapers here.
 SCRAPERS = {
-    "facebook_events": FacebookEventsScraper,
-    "facebook_posts":  FacebookPostsScraper,
+    "facebook_events":  FacebookEventsScraper,
+    "facebook_posts":   FacebookPostsScraper,
+    "instagram_posts":  InstagramPostsScraper,
     "google_places": GooglePlacesVenueScraper,
     "allevents_cdo": AllEventsCDOScraper,
     "allevents_in": AllEventsPHScraper,
@@ -54,6 +57,7 @@ SCRAPERS = {
     "clickthecity": ClickTheCityScraper,
     "meetup": MeetupScraper,
     "eventalways": EventAlwaysScraper,
+    "tessera": TesseraScraper,
 }
 
 __all__ = ["BaseScraper", "ScrapedEvent", "ScrapedOrganizer", "ScrapedVenue", "SCRAPERS"]

@@ -15,8 +15,7 @@ import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-import requests
-
+import requests as _requests
 from .base import (
     BaseScraper,
     ScrapedEvent,
@@ -53,7 +52,7 @@ _HEADERS = {
 
 def _get(url: str, **params) -> dict | list | None:
     try:
-        resp = requests.get(url, headers=_HEADERS, params=params or None, timeout=_TIMEOUT)
+        resp = _requests.get(url, headers=_HEADERS, params=params or None, timeout=_TIMEOUT)
         resp.raise_for_status()
         time.sleep(_DELAY)
         return resp.json()

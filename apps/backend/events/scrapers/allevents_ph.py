@@ -2,12 +2,13 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Iterable
 from zoneinfo import ZoneInfo
 
 from bs4 import BeautifulSoup
 
+from .proxy_manager import get_proxy_enabled, get_proxy_session
 from .base import BaseScraper, ScrapedEvent, ScrapedVenue
 
 logger = logging.getLogger(__name__)
@@ -23,19 +24,45 @@ _CITIES = [
 
 
 def _parse_date(text: str) -> datetime | None:
-    # Format: "Sat, 27 Jun, 2026 - 08:00 PM"
     text = text.strip()
+    # Strip "+ N more" suffix (recurring events show next occurrence + count)
+    text = text.split(" + ")[0].strip()
+
+    # Format 1: "Sat, 27 Jun, 2026 - 08:00 PM"  (full year, dash separator)
     try:
-        naive = datetime.strptime(text, "%a, %d %b, %Y - %I:%M %p")
-        return naive.replace(tzinfo=_MANILA_TZ)
+        return datetime.strptime(text, "%a, %d %b, %Y - %I:%M %p").replace(tzinfo=_MANILA_TZ)
     except ValueError:
         pass
-    # Fallback: date only, no time
+    # Format 1b: date-only variant "Sat, 27 Jun, 2026"
     try:
-        naive = datetime.strptime(text.split(" - ")[0].strip(), "%a, %d %b, %Y")
-        return naive.replace(tzinfo=_MANILA_TZ)
+        return datetime.strptime(text.split(" - ")[0].strip(), "%a, %d %b, %Y").replace(tzinfo=_MANILA_TZ)
     except ValueError:
-        return None
+        pass
+
+    # Format 2: "Thu, 25 Jun • 08:30 AM"  (no year, bullet separator)
+    if "•" in text:
+        date_part, _, time_part = text.partition("•")
+        date_part = date_part.strip()
+        time_part = time_part.strip()
+        for fmt in ("%a, %d %b", "%d %b"):
+            try:
+                partial = datetime.strptime(date_part, fmt)
+                # Infer year: use current year; if date already passed, try next year
+                now = datetime.now(tz=_MANILA_TZ)
+                candidate = partial.replace(year=now.year, tzinfo=_MANILA_TZ)
+                if candidate.date() < (now - timedelta(days=1)).date():
+                    candidate = candidate.replace(year=now.year + 1)
+                if time_part:
+                    try:
+                        t = datetime.strptime(time_part, "%I:%M %p")
+                        return candidate.replace(hour=t.hour, minute=t.minute)
+                    except ValueError:
+                        pass
+                return candidate
+            except ValueError:
+                pass
+
+    return None
 
 
 def _parse_cards(html: str, city: dict) -> list[ScrapedEvent]:
@@ -91,6 +118,14 @@ class AllEventsPHScraper(BaseScraper):
     def fetch(self) -> Iterable[ScrapedEvent]:
         from scrapling.fetchers import StealthyFetcher
 
+        _proxy_url = None
+        if get_proxy_enabled():
+            try:
+                _sess = get_proxy_session()
+                _proxy_url = _sess.proxies.get("https") or _sess.proxies.get("http")
+            except Exception:
+                pass
+
         for city in _CITIES:
             url = f"https://allevents.in/{city['slug']}/all"
             logger.info("Fetching %s", url)
@@ -100,6 +135,7 @@ class AllEventsPHScraper(BaseScraper):
                     headless=True,
                     solve_cloudflare=True,
                     network_idle=True,
+                    proxy=_proxy_url,
                 )
                 html = page.html_content or ""
                 if "Just a moment" in html:
