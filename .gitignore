@@ -12,6 +12,7 @@ tmp_research/
 # Django
 *.log
 db.sqlite3
+veent-leads-export-*.tsv
 db.sqlite3-journal
 /media/
 /staticfiles/
