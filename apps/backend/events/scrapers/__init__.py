@@ -29,6 +29,7 @@ from .ticketmelon import TicketmelonScraper
 from .meetup import MeetupScraper
 from .ticketspice import TicketSpiceScraper
 from .eventalways import EventAlwaysScraper
+from .tessera import TesseraScraper
 
 # key -> scraper class. Add new scrapers here.
 SCRAPERS = {
@@ -56,6 +57,7 @@ SCRAPERS = {
     "clickthecity": ClickTheCityScraper,
     "meetup": MeetupScraper,
     "eventalways": EventAlwaysScraper,
+    "tessera": TesseraScraper,
 }
 
 __all__ = ["BaseScraper", "ScrapedEvent", "ScrapedOrganizer", "ScrapedVenue", "SCRAPERS"]
