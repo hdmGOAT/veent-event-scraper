@@ -148,8 +148,8 @@ class Command(BaseCommand):
         )
         parser.add_argument(
             "--status",
-            default="confirmed",
-            help="Filter by Organizer.status (default: confirmed).",
+            default="pending",
+            help="Filter by Organizer.status (default: pending).",
         )
         parser.add_argument(
             "--batch-size",
@@ -282,7 +282,10 @@ class Command(BaseCommand):
                 "location": location,
                 "eventName": event_name,
                 "sourceRef": str(event.id),
+                "scraperOrgId": organizer.id,
             }
+            if event.starts_at:
+                lead["eventDate"] = event.starts_at.strftime("%Y-%m-%d")
             if event.url and event.url.startswith("http"):
                 lead["eventLink"] = event.url
             # Primary URL / platform (drives dedup handle and CRM pageUrl).
