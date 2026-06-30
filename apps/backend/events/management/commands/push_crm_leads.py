@@ -222,6 +222,18 @@ class Command(BaseCommand):
                 else:
                     skipped_bad_url += 1
 
+            # Fallback: event.organizer_url may carry a clean FB page URL even when
+            # organizer.facebook_url is missing or invalid — e.g. when the organizer
+            # was matched from a non-FB source and the facebook_url field was never set,
+            # but the event card itself captured the organizer's FB page directly.
+            if url is None:
+                ev_org_url = event.organizer_url
+                if ev_org_url and ev_org_url.startswith("http") and "facebook.com" in ev_org_url:
+                    if _is_valid_social_url(ev_org_url, "Facebook"):
+                        candidate = _handle_from_url(ev_org_url)
+                        if candidate and candidate not in _GARBAGE_HANDLES and not candidate.isdigit():
+                            platform, url, handle = "Facebook", ev_org_url, candidate
+
             if url is None and organizer.instagram_url and organizer.instagram_url.startswith("http"):
                 candidate = _handle_from_url(organizer.instagram_url)
                 if candidate and candidate not in _GARBAGE_HANDLES and not candidate.isdigit():
@@ -232,9 +244,10 @@ class Command(BaseCommand):
                 if website_handle and website_handle not in _GARBAGE_HANDLES:
                     url, handle = organizer.website, website_handle
 
-            # No social URL and no website — require at least a valid email to be worth pushing
+            # No social/website URL — require at least a valid email or phone to be worth pushing.
             has_email = bool(organizer.email and re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", organizer.email))
-            if url is None and not has_email:
+            has_phone = bool(organizer.phone and organizer.phone.strip())
+            if url is None and not has_email and not has_phone:
                 skipped_no_url += 1
                 continue
 
@@ -272,14 +285,26 @@ class Command(BaseCommand):
             }
             if event.url and event.url.startswith("http"):
                 lead["eventLink"] = event.url
+            # Primary URL / platform (drives dedup handle and CRM pageUrl).
             if url:
                 lead["url"] = url
             if platform:
                 lead["platform"] = platform
-            if platform == "Facebook":
-                lead["facebookUrl"] = url
+            # Push every social URL we have — CRM stores them in separate columns.
+            _fb = organizer.facebook_url or event.organizer_url or ""
+            if _fb and _fb.startswith("http") and "facebook.com" in _fb:
+                if _is_valid_social_url(_fb, "Facebook"):
+                    candidate = _handle_from_url(_fb)
+                    if candidate and candidate not in _GARBAGE_HANDLES and not candidate.isdigit():
+                        lead["facebookUrl"] = _fb
+            if organizer.instagram_url and organizer.instagram_url.startswith("http"):
+                candidate = _handle_from_url(organizer.instagram_url)
+                if candidate and candidate not in _GARBAGE_HANDLES and not candidate.isdigit():
+                    lead["instagramUrl"] = organizer.instagram_url
             if organizer.email and re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", organizer.email):
                 lead["email"] = organizer.email
+            if organizer.phone and organizer.phone.strip():
+                lead["phone"] = organizer.phone.strip()
             batch.append(lead)
             leads_built += 1
 
