@@ -3,8 +3,12 @@
 Fetches all events from the MyRuntime JSON API in a single request.
 No authentication required; the API is publicly accessible.
 
-Organizers are derived from the regUrl subdomain (68 unique organizers across
-843 events). Each organizer accumulates social/website links from all its events.
+Organizers are derived from the regUrl subdomain for subdomain-hosted events
+(e.g. tribeevents.myruntime.com → "tribeevents"). For events hosted directly
+on myruntime.com (no subdomain), the Facebook page handle from externalLinks
+is used as the organizer key instead — 89% of direct events carry one. Events
+with no usable link are left unattributed rather than collapsed into a synthetic
+"direct" bucket.
 """
 from __future__ import annotations
 
@@ -60,10 +64,67 @@ def _event_external_id(reg_url: str, name: str) -> str:
 
 
 def _organizer_subdomain(reg_url: str) -> str:
-    """Return the subdomain from a regUrl, or 'direct' for myruntime.com-hosted ones."""
+    """Return the subdomain from a regUrl, or '' for myruntime.com-hosted ones."""
     hostname = urlparse(reg_url).hostname or ""
     subdomain = hostname.split(".")[0]
-    return subdomain if subdomain not in ("myruntime", "") else "direct"
+    return subdomain if subdomain not in ("myruntime", "") else ""
+
+
+_FB_NON_PAGE_SEGMENTS = frozenset(
+    ["events", "groups", "pages", "people", "profile.php", "watch", "marketplace"]
+)
+
+
+def _fb_handle(fb_url: str) -> str:
+    """Extract the page handle/slug from a Facebook URL path.
+
+    Returns '' for generic non-page path segments (events, groups, people, etc.).
+    """
+    parts = [p for p in urlparse(fb_url).path.split("/") if p]
+    if not parts:
+        return ""
+    handle = parts[0]
+    return "" if handle in _FB_NON_PAGE_SEGMENTS else handle
+
+
+def _direct_org_key(ext_links: dict) -> tuple[str, str, str, str] | None:
+    """For direct-hosted events, derive (key, fb_url, website, ig_url).
+
+    Priority: Facebook handle → website domain → Instagram handle.
+    Returns None when no usable link exists (event stays unattributed).
+    """
+    fb = (ext_links.get("facebook") or "").strip().rstrip("/")
+    website = (ext_links.get("website") or "").strip().rstrip("/")
+    ig = (ext_links.get("instagram") or "").strip().rstrip("/")
+
+    if fb:
+        handle = _fb_handle(fb)
+        if handle:
+            return handle, fb, website, ig
+    if website:
+        hostname = urlparse(website).hostname or website
+        key = hostname.removeprefix("www.")
+        return key, fb, website, ig
+    if ig:
+        parts = [p for p in urlparse(ig).path.split("/") if p]
+        key = parts[0] if parts else ""
+        if key:
+            return key, fb, website, ig
+    return None
+
+
+def _organizer_key(reg_url: str, ext_links: dict) -> str:
+    """Return the organizer identifier for an event.
+
+    Subdomain-hosted events use the subdomain; direct-hosted events use the
+    Facebook handle (or website domain, or IG handle). Returns '' when no
+    identity can be derived so the event is stored unattributed.
+    """
+    subdomain = _organizer_subdomain(reg_url)
+    if subdomain:
+        return subdomain
+    result = _direct_org_key(ext_links)
+    return result[0] if result else ""
 
 
 def _best_url(ext_links: dict) -> str:
@@ -77,8 +138,11 @@ def _best_url(ext_links: dict) -> str:
 
 
 def _build_organizers(items: list[dict]) -> list[ScrapedOrganizer]:
-    """Collect one ScrapedOrganizer per unique subdomain.
+    """Collect one ScrapedOrganizer per unique organizer key.
 
+    Subdomain-hosted events group by subdomain. Direct-hosted events group by
+    Facebook handle (or website domain / IG handle). Events with no usable
+    identity are skipped — they are stored unattributed on their Event row.
     Multiple events from the same organizer are merged: the first non-empty
     value wins for each link field.
     """
@@ -89,26 +153,50 @@ def _build_organizers(items: list[dict]) -> list[ScrapedOrganizer]:
         if not reg_url:
             continue
 
-        subdomain = _organizer_subdomain(reg_url)
         ext_links = item.get("externalLinks") or {}
+        subdomain = _organizer_subdomain(reg_url)
 
-        if subdomain not in seen:
-            seen[subdomain] = ScrapedOrganizer(
-                name=subdomain,
-                external_id=subdomain,
-                source_url=_EVENTS_PAGE,
-                website=ext_links.get("website") or "",
-                facebook_url=ext_links.get("facebook") or "",
-                instagram_url=ext_links.get("instagram") or "",
-            )
+        if subdomain:
+            key = subdomain
+            if key not in seen:
+                seen[key] = ScrapedOrganizer(
+                    name=key,
+                    external_id=key,
+                    source_url=_EVENTS_PAGE,
+                    website=ext_links.get("website") or "",
+                    facebook_url=ext_links.get("facebook") or "",
+                    instagram_url=ext_links.get("instagram") or "",
+                )
+            else:
+                org = seen[key]
+                if not org.website:
+                    org.website = ext_links.get("website") or ""
+                if not org.facebook_url:
+                    org.facebook_url = ext_links.get("facebook") or ""
+                if not org.instagram_url:
+                    org.instagram_url = ext_links.get("instagram") or ""
         else:
-            org = seen[subdomain]
-            if not org.website:
-                org.website = ext_links.get("website") or ""
-            if not org.facebook_url:
-                org.facebook_url = ext_links.get("facebook") or ""
-            if not org.instagram_url:
-                org.instagram_url = ext_links.get("instagram") or ""
+            result = _direct_org_key(ext_links)
+            if result is None:
+                continue
+            key, fb_url, website, ig_url = result
+            if key not in seen:
+                seen[key] = ScrapedOrganizer(
+                    name=key,
+                    external_id=key,
+                    source_url=_EVENTS_PAGE,
+                    facebook_url=fb_url,
+                    website=website,
+                    instagram_url=ig_url,
+                )
+            else:
+                org = seen[key]
+                if not org.facebook_url and fb_url:
+                    org.facebook_url = fb_url
+                if not org.website and website:
+                    org.website = website
+                if not org.instagram_url and ig_url:
+                    org.instagram_url = ig_url
 
     return list(seen.values())
 
@@ -155,7 +243,7 @@ class MyRuntimeScraper(BaseScraper):
                 )
 
             ticket_names = [t["name"] for t in tickets if t.get("name")]
-            organizer_name = _organizer_subdomain(reg_url) if reg_url else ""
+            organizer_name = _organizer_key(reg_url, ext_links) if reg_url else ""
 
             yield ScrapedEvent(
                 name=name,
@@ -197,7 +285,7 @@ class MyRuntimeScraper(BaseScraper):
                 )
 
             ticket_names = [t["name"] for t in tickets if t.get("name")]
-            organizer_name = _organizer_subdomain(reg_url) if reg_url else ""
+            organizer_name = _organizer_key(reg_url, ext_links) if reg_url else ""
 
             events.append(ScrapedEvent(
                 name=name,
