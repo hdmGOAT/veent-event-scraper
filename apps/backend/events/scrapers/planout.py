@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 
 from .proxy_manager import get_session
 from .base import BaseScraper, ScrapedEvent, ScrapedOrganizer, ScrapedVenue, save_events, save_organizers
@@ -126,6 +126,8 @@ def _category(item: dict) -> str:
 def _build_event(item: dict) -> ScrapedEvent:
     team = item.get("team") or {}
     description = re.sub(r"<[^>]+>", "", item.get("description") or "").strip()
+    created_ts = item.get("created_ts")
+    post_date = datetime.fromtimestamp(int(created_ts), tz=timezone.utc) if created_ts else None
     return ScrapedEvent(
         name=item.get("name") or "",
         description=description,
@@ -140,6 +142,7 @@ def _build_event(item: dict) -> ScrapedEvent:
         organizer=team.get("name") or "",
         organizer_url="",
         venue=_parse_venue(item),
+        post_date=post_date,
     )
 
 

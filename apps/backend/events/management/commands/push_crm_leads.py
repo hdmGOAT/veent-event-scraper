@@ -286,6 +286,8 @@ class Command(BaseCommand):
             }
             if event.starts_at:
                 lead["eventDate"] = event.starts_at.strftime("%Y-%m-%d")
+            if event.post_date:
+                lead["firstAnnouncedDate"] = event.post_date.strftime("%Y-%m-%d")
             if event.url and event.url.startswith("http"):
                 lead["eventLink"] = event.url
             # Primary URL / platform (drives dedup handle and CRM pageUrl).
@@ -308,6 +310,7 @@ class Command(BaseCommand):
                 lead["email"] = organizer.email
             if organizer.phone and organizer.phone.strip():
                 lead["phone"] = organizer.phone.strip()
+
             batch.append(lead)
             leads_built += 1
 
