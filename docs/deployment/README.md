@@ -41,16 +41,15 @@ DigitalOcean Droplet (Ubuntu 24.04, 4 GB RAM minimum)
     └── POST /api/pipeline/push/      → pushes new events to CRM
 ```
 
-**Data flow:**
+**Weekly pipeline (two separate n8n workflows):**
 
-1. n8n fires `POST /api/scrapers/run-all/` on schedule.
-2. Django spawns a `ScraperRun` per active scraper (queued → running → success/failed).
-3. Each scraper fetches posts via Playwright + DataImpulse proxy, structures them with Groq,
-   deduplicates against the Neon PostgreSQL database, and saves new `Event` rows.
-4. Categorization runs automatically after each save (`_categorize_after_save()`).
-5. n8n fires `POST /api/pipeline/push/` after scraping is done.
-6. Django pushes events where `crm_pushed_at IS NULL` (or `updated_at > crm_pushed_at`) to
-   the CRM ingest endpoint.
+| Day | Step | What happens |
+|---|---|---|
+| Monday 2 AM | Scrape | n8n → `POST /api/scrapers/run-all/` → Django spawns a `ScraperRun` per active scraper; Playwright fetches FB/IG posts via DataImpulse proxy; Groq structures + categorizes; new `Event` rows saved to Neon DB |
+| Tuesday 2 AM | Push | n8n → `POST /api/pipeline/push/` → Django sends events where `crm_pushed_at IS NULL` (or `updated_at > crm_pushed_at`) to the CRM ingest endpoint |
+
+Splitting scrape and push across days gives the Monday run time to fully complete and
+lets you review the dashboard before leads hit the CRM.
 
 ---
 
@@ -433,25 +432,46 @@ The pipeline has two trigger endpoints. n8n calls them in sequence on a schedule
 | `POST /api/scrapers/run-all/` | Queues a `ScraperRun` for every active scraper |
 | `POST /api/pipeline/push/` | Pushes unpushed/updated events to the CRM (fire-and-forget, guarded by a lock to prevent concurrent runs) |
 
+### Schedule
+
+The pipeline runs on a **weekly cadence**, split across two days:
+
+| Day | Time (UTC) | Action |
+|---|---|---|
+| Monday | 2:00 AM | Scrape — `POST /api/scrapers/run-all/` |
+| Tuesday | 2:00 AM | Push — `POST /api/pipeline/push/` |
+
+Scraping on Monday gives the scrapers the full night to finish and lets the data settle
+(dedup, categorization, any manual review). The push runs the next morning, so CRM leads
+always reflect a clean, fully-categorized dataset.
+
 ### n8n workflow structure
 
-Build a workflow in n8n with these nodes:
+Create **two separate workflows** in n8n — one for scraping, one for pushing.
+Keeping them separate makes it easy to re-trigger either step independently.
+
+**Workflow 1 — Weekly Scrape (Monday)**
 
 ```
-Schedule Trigger (e.g. daily 2 AM UTC)
+Schedule Trigger
+  Cron: 0 2 * * 1   (Monday 2 AM UTC)
         │
         ▼
 HTTP Request — Scrape
-  POST https://your-domain.com/api/scrapers/run-all/
-  Headers: X-CSRFToken: <token>   (or use session auth)
-        │
-        ▼
-Wait — 30 minutes
-  (gives scrapers time to complete; adjust based on your query count)
+  Method: POST
+  URL: https://your-domain.com/api/scrapers/run-all/
+```
+
+**Workflow 2 — Weekly Push (Tuesday)**
+
+```
+Schedule Trigger
+  Cron: 0 2 * * 2   (Tuesday 2 AM UTC)
         │
         ▼
 HTTP Request — Push
-  POST https://your-domain.com/api/pipeline/push/
+  Method: POST
+  URL: https://your-domain.com/api/pipeline/push/
 ```
 
 **Authentication:** Django's CSRF is exempt on both endpoints (`@csrf_exempt`). If you expose
@@ -459,8 +479,9 @@ these URLs without additional auth, restrict them at the nginx level to the n8n 
 or add a shared secret header check in the views.
 
 **Checking run status:** `GET /api/scrapers/runs/?limit=20` returns recent runs with
-`status`, `created_count`, and `error_message`. n8n can parse this to decide whether to
-proceed to the push step or alert on failure.
+`status`, `created_count`, and `error_message`. You can add an n8n HTTP Request node after
+the scrape trigger to poll this endpoint and send a Slack/email alert if any run failed before
+Tuesday's push.
 
 ---
 
