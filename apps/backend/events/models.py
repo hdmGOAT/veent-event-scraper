@@ -139,6 +139,12 @@ class Event(models.Model):
         null=True, blank=True, related_name="events",
     )
 
+    crm_pushed_at = models.DateTimeField(
+        null=True, blank=True, db_index=True,
+        help_text="Last time this event was successfully pushed to the CRM. "
+                  "Null = never pushed. Used to filter incremental push.",
+    )
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

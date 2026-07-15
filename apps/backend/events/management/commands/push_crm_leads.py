@@ -22,56 +22,72 @@ from urllib.parse import urlparse
 
 import requests
 from django.core.management.base import BaseCommand, CommandError
+from django.db.models import F, Q
 from django.utils import timezone
 
 from events.models import Event
 
 
+# Maps raw scraper/Groq category strings to the CRM canonical category names
+# (crm_categories table — seeded in 0026 migration + seed-scraper-categories.ts).
+# CRM canonical names are the source of truth; update this map when the CRM seed changes.
 CATEGORY_MAP = {
-    # Direct matches
-    "Concert": "Concert",
-    "Live Band": "Live Band",
-    "Music Fest": "Music Fest",
-    "Workshop": "Workshop",
-    "Theater": "Theater",
-    "Conference": "Conference",
-    "Convention": "Convention",
-    "Expo": "Expo",
-    "Competition": "Competition",
-    "Church": "Church",
-    "Fan Fair": "Fan Fair",
-    "School": "School",
-    "Film": "Film",
-    "Screening": "Screening",
-    "Bar/DJ": "Bar/DJ",
-    # Scraped variants → CRM canonical
-    "Sports": "Sports",
-    "Sports & Recreation": "Sports",
-    "Sports & Fitness": "Sports",
-    "Fun Run": "Sports",
-    "Trail Run": "Sports",
-    "Music": "Concert",
-    "Festival": "Music Fest",
-    "Theater & Performing Arts": "Theater",
-    "Performing Arts": "Theater",
-    "Arts & Culture": "Theater",
-    "Conference / Seminar": "Conference",
-    "Webinar": "Conference",
-    "Workshop / Training": "Workshop",
-    "Exhibition": "Expo",
-    "Religious": "Church",
-    "Education": "School",
-    "Camp": "School",
-    "Nightlife": "Bar/DJ",
-    # No clean CRM match — send Other
+    # --- Sports ---
+    "Fun Run / Road Race": "Fun Run / Road Race",
+    "Fun Run": "Fun Run / Road Race",
+    "Trail Run": "Trail Run",
+    "Triathlon / Duathlon": "Triathlon / Duathlon",
+    "Cycling": "Cycling",
+    "Swimming": "Swimming",
+    "Sports & Fitness": "Sports & Fitness",
+    "Sports & Recreation": "Sports & Fitness",
+    "Sports": "Sports & Fitness",
+    "Competition": "Sports & Fitness",
+    "Health": "Sports & Fitness",
+    # --- Music / Performing Arts ---
+    "Music & Concert": "Music & Concert",
+    "Concert": "Music & Concert",
+    "Live Band": "Music & Concert",
+    "Music": "Music & Concert",
+    "Festival": "Festival",
+    "Music Fest": "Festival",
+    # --- Theater ---
+    "Theater & Performing Arts": "Theater & Performing Arts",
+    "Theater": "Theater & Performing Arts",
+    "Performing Arts": "Theater & Performing Arts",
+    # --- Arts & Culture ---
+    "Arts & Culture": "Arts & Culture",
+    "Art": "Arts & Culture",
+    "Exhibition": "Arts & Culture",
+    "Expo": "Arts & Culture",
+    # --- Business / Learning ---
+    "Conference / Seminar": "Conference / Seminar",
+    "Conference": "Conference / Seminar",
+    "Convention": "Conference / Seminar",
+    "Webinar": "Conference / Seminar",
+    "Workshop / Training": "Workshop / Training",
+    "Workshop": "Workshop / Training",
+    # --- Food ---
+    "Food & Dining": "Food & Dining",
+    "Restaurant": "Food & Dining",
+    # --- Charity ---
+    "Charity / Fundraiser": "Charity / Fundraiser",
+    # --- Other (no clean canonical match) ---
+    "Church": "Other",
+    "Religious": "Other",
+    "Fan Fair": "Other",
+    "School": "Other",
+    "Education": "Other",
+    "Camp": "Other",
+    "Film": "Other",
+    "Screening": "Other",
+    "Bar/DJ": "Other",
+    "Nightlife": "Other",
     "Community": "Other",
     "Travel and Tours": "Other",
-    "Art": "Other",
-    "Health": "Other",
-    "Club": "Other",
-    "Restaurant": "Other",
     "Modelling": "Other",
     "Adventure Parks": "Other",
+    "Club": "Other",
 }
 
 
@@ -163,6 +179,13 @@ class Command(BaseCommand):
             help="Filter by Organizer.source.",
         )
         parser.add_argument(
+            "--all",
+            action="store_true",
+            default=False,
+            dest="push_all",
+            help="Push all future events regardless of crm_pushed_at (full re-push).",
+        )
+        parser.add_argument(
             "--future-only",
             action="store_true",
             default=False,
@@ -172,7 +195,7 @@ class Command(BaseCommand):
             "--repush",
             action="store_true",
             default=False,
-            help="Deprecated — CRM deduplicates by event ID; re-running is always safe.",
+            help="Deprecated — use --all instead.",
         )
 
     def handle(self, *args, **options):
@@ -187,6 +210,8 @@ class Command(BaseCommand):
             if not crm_secret:
                 raise CommandError("CRM_INGEST_SECRET environment variable is required.")
 
+        push_all = options["push_all"] or options["repush"]
+
         qs = Event.objects.filter(
             starts_at__gte=timezone.now()
         ).select_related("organizer_ref", "venue").exclude(
@@ -196,9 +221,17 @@ class Command(BaseCommand):
             qs = qs.filter(organizer_ref__status=options["status"])
         if options["source"]:
             qs = qs.filter(organizer_ref__source=options["source"])
+
+        # Delta filter: only push events not yet pushed, or updated since last push.
+        if not push_all:
+            qs = qs.filter(
+                Q(crm_pushed_at__isnull=True) | Q(updated_at__gt=F("crm_pushed_at"))
+            )
+
         qs = qs.order_by("starts_at")
 
         batch = []
+        batch_event_ids = []
         batch_num = 0
         totals = {"received": 0, "created": 0, "skipped": 0, "review": 0}
         leads_built = 0
@@ -312,16 +345,18 @@ class Command(BaseCommand):
                 lead["phone"] = organizer.phone.strip()
 
             batch.append(lead)
+            batch_event_ids.append(event.id)
             leads_built += 1
 
             if len(batch) >= batch_size:
                 batch_num += 1
-                self._flush(batch, batch_num, dry_run, crm_url, crm_secret, totals)
+                self._flush(batch, batch_event_ids, batch_num, dry_run, crm_url, crm_secret, totals)
                 batch = []
+                batch_event_ids = []
 
         if batch:
             batch_num += 1
-            self._flush(batch, batch_num, dry_run, crm_url, crm_secret, totals)
+            self._flush(batch, batch_event_ids, batch_num, dry_run, crm_url, crm_secret, totals)
 
         self.stdout.write("")
         self.stdout.write(self.style.SUCCESS(
@@ -334,7 +369,7 @@ class Command(BaseCommand):
                 f"skipped={totals['skipped']} review={totals['review']}"
             ))
 
-    def _flush(self, batch, batch_num, dry_run, crm_url, crm_secret, totals):
+    def _flush(self, batch, event_ids, batch_num, dry_run, crm_url, crm_secret, totals):
         if dry_run:
             self.stdout.write(f"--- Batch {batch_num} ({len(batch)} leads) ---")
             self.stdout.write(json.dumps({"leads": batch}, indent=2))
@@ -353,6 +388,9 @@ class Command(BaseCommand):
         data = resp.json()
         for key in totals:
             totals[key] += data.get(key, 0)
+
+        # Stamp crm_pushed_at on all events in this batch now that the POST succeeded.
+        Event.objects.filter(id__in=event_ids).update(crm_pushed_at=timezone.now())
 
         self.stdout.write(
             f"Batch {batch_num}: received={data.get('received', 0)} "

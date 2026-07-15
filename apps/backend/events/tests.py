@@ -4,7 +4,7 @@ from io import StringIO
 from unittest import mock
 
 from django.contrib.auth import get_user_model
-from django.test import TestCase, TransactionTestCase
+from django.test import TestCase, TransactionTestCase, override_settings
 from django.urls import reverse
 
 from datetime import timedelta
@@ -22,19 +22,18 @@ from events.scrapers.base import ScrapedVenue, save_venues
 from events.scrapers.places import GooglePlacesVenueScraper
 
 
-def _fake_cli(stdout):
-    """Return a mock subprocess.run result with the given stdout."""
-    completed = mock.Mock()
-    completed.stdout = stdout
-    completed.returncode = 0
-    return completed
-
-
 def _fake_response(payload):
     resp = mock.Mock()
     resp.json.return_value = payload
     resp.raise_for_status.return_value = None
     return resp
+
+
+def _fake_groq_response(content: str):
+    """Return a mock requests.post result shaped like a Groq API response."""
+    return _fake_response({
+        "choices": [{"message": {"content": content}}]
+    })
 
 
 class SaveVenuesDedupTests(TestCase):
@@ -1065,10 +1064,12 @@ class CategoryNormalizationTests(TestCase):
             self.assertGreater(entry["count"], 0)
 
 
+@override_settings(GROQ_API_KEY="test-key", GROQ_CATEGORIZE_MODEL="llama-test")
 class AiCategoriesTests(TestCase):
     """Unit tests for the AI categorization service.
 
-    All tests mock subprocess.run so no actual CLI is invoked.
+    All tests mock requests.post so no actual Groq API call is made.
+    GROQ_API_KEY is overridden at class level so the key-check passes in CI.
     """
 
     def _make_event(self, name, category="", description=""):
@@ -1083,65 +1084,58 @@ class AiCategoriesTests(TestCase):
     def test_batch_categorize_parses_valid_response(self):
         e1 = self._make_event("CDO Fun Run 5K", category="5K, 10K")
         e2 = self._make_event("Tech Summit 2026", category="")
-        payload = json.dumps({
+        content = json.dumps({
             str(e1.pk): ["Fun Run / Road Race"],
             str(e2.pk): ["Conference / Seminar"],
         })
-        with mock.patch.object(
-            ai_categories.subprocess, "run", return_value=_fake_cli(payload)
-        ) as run:
-            result = ai_categories.batch_categorize([e1, e2], cli_cmd="fake-claude")
+        with mock.patch("events.ai_categories.requests.post", return_value=_fake_groq_response(content)):
+            result = ai_categories.batch_categorize([e1, e2])
 
         self.assertEqual(result[e1.pk], ["Fun Run / Road Race"])
         self.assertEqual(result[e2.pk], ["Conference / Seminar"])
-        # The injected fake command was used.
-        self.assertEqual(run.call_args.args[0][0], "fake-claude")
 
     def test_invalid_labels_fall_back_to_other(self):
         e1 = self._make_event("Mystery Event")
-        payload = json.dumps({str(e1.pk): ["Not A Real Category"]})
-        with mock.patch.object(
-            ai_categories.subprocess, "run", return_value=_fake_cli(payload)
-        ):
-            result = ai_categories.batch_categorize([e1], cli_cmd="fake-claude")
+        content = json.dumps({str(e1.pk): ["Not A Real Category"]})
+        with mock.patch("events.ai_categories.requests.post", return_value=_fake_groq_response(content)):
+            result = ai_categories.batch_categorize([e1])
         self.assertEqual(result[e1.pk], ["Other"])
 
     def test_missing_event_in_response_falls_back_to_other(self):
         e1 = self._make_event("Ghost Event")
-        with mock.patch.object(
-            ai_categories.subprocess, "run", return_value=_fake_cli("{}")
-        ):
-            result = ai_categories.batch_categorize([e1], cli_cmd="fake-claude")
+        with mock.patch("events.ai_categories.requests.post", return_value=_fake_groq_response("{}")):
+            result = ai_categories.batch_categorize([e1])
         self.assertEqual(result[e1.pk], ["Other"])
 
     def test_malformed_json_falls_back_to_other(self):
         e1 = self._make_event("Garbled Event")
-        with mock.patch.object(
-            ai_categories.subprocess, "run", return_value=_fake_cli("not json at all")
-        ):
-            result = ai_categories.batch_categorize([e1], cli_cmd="fake-claude")
+        with mock.patch("events.ai_categories.requests.post", return_value=_fake_groq_response("not json at all")):
+            result = ai_categories.batch_categorize([e1])
         self.assertEqual(result[e1.pk], ["Other"])
 
-    def test_missing_cli_raises_helpful_error(self):
+    def test_missing_api_key_raises_helpful_error(self):
         e1 = self._make_event("Any Event")
-        with mock.patch.object(
-            ai_categories.subprocess, "run", side_effect=FileNotFoundError()
-        ):
-            with self.assertRaises(FileNotFoundError) as ctx:
-                ai_categories.batch_categorize([e1], cli_cmd="missing-claude")
-        self.assertIn("CLAUDE_CLI_CMD", str(ctx.exception))
-        self.assertIn("missing-claude", str(ctx.exception))
+        with self.settings(GROQ_API_KEY=""):
+            with self.assertRaises(RuntimeError) as ctx:
+                ai_categories.batch_categorize([e1])
+        self.assertIn("GROQ_API_KEY", str(ctx.exception))
+
+    def test_api_request_failure_raises_runtime_error(self):
+        import requests as req_lib
+        e1 = self._make_event("Any Event")
+        with mock.patch("events.ai_categories.requests.post", side_effect=req_lib.exceptions.RequestException("timeout")):
+            with self.assertRaises(RuntimeError) as ctx:
+                ai_categories.batch_categorize([e1])
+        self.assertIn("Groq API request failed", str(ctx.exception))
 
     def test_categorize_events_by_ids_persists_labels(self):
         e1 = self._make_event("CDO Marathon", category="42K")
         e2 = self._make_event("Jazz Night")
-        payload = json.dumps({
+        content = json.dumps({
             str(e1.pk): ["Fun Run / Road Race"],
             str(e2.pk): ["Music & Concert"],
         })
-        with mock.patch.object(
-            ai_categories.subprocess, "run", return_value=_fake_cli(payload)
-        ):
+        with mock.patch("events.ai_categories.requests.post", return_value=_fake_groq_response(content)):
             count = ai_categories.categorize_events_by_ids([e1.pk, e2.pk])
 
         self.assertEqual(count, 2)
@@ -1153,11 +1147,11 @@ class AiCategoriesTests(TestCase):
     def test_categorize_events_by_ids_empty_input(self):
         self.assertEqual(ai_categories.categorize_events_by_ids([]), 0)
 
-    def test_batch_categorize_empty_input_no_subprocess(self):
-        with mock.patch.object(ai_categories.subprocess, "run") as run:
-            result = ai_categories.batch_categorize([], cli_cmd="fake-claude")
+    def test_batch_categorize_empty_input_no_api_call(self):
+        with mock.patch("events.ai_categories.requests.post") as mock_post:
+            result = ai_categories.batch_categorize([])
         self.assertEqual(result, {})
-        run.assert_not_called()
+        mock_post.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -1924,3 +1918,99 @@ class ScrapersSupportsKeywordsTests(TestCase):
         by_key = {s["key"]: s for s in resp.json()}
         self.assertTrue(by_key["facebook_events"]["supports_keywords"])
         self.assertFalse(by_key["google_places"]["supports_keywords"])
+
+
+class SessionExpiredErrorTests(TestCase):
+    """SessionExpiredError is raised and propagates on auth-redirect detection."""
+
+    def _make_page(self, url):
+        """Return a minimal mock Playwright page with the given URL."""
+        page = mock.MagicMock()
+        type(page).url = mock.PropertyMock(return_value=url)
+        return page
+
+    def test_fb_raises_on_login_redirect(self):
+        from events.scrapers.facebook_posts import FacebookPostsScraper
+        from events.scrapers.base import SessionExpiredError
+
+        scraper = FacebookPostsScraper.__new__(FacebookPostsScraper)
+        scraper.source = "facebook_posts"
+        page = self._make_page("https://www.facebook.com/login/?next=...")
+
+        with mock.patch.object(scraper, "_navigate_to_query"):
+            with self.assertRaises(SessionExpiredError):
+                scraper._fetch_raw_posts(page, "test query")
+
+    def test_fb_raises_on_checkpoint_redirect(self):
+        from events.scrapers.facebook_posts import FacebookPostsScraper
+        from events.scrapers.base import SessionExpiredError
+
+        scraper = FacebookPostsScraper.__new__(FacebookPostsScraper)
+        scraper.source = "facebook_posts"
+        page = self._make_page("https://www.facebook.com/checkpoint/")
+
+        with mock.patch.object(scraper, "_navigate_to_query"):
+            with self.assertRaises(SessionExpiredError):
+                scraper._fetch_raw_posts(page, "test query")
+
+    def test_fb_no_raise_on_normal_url(self):
+        from events.scrapers.facebook_posts import FacebookPostsScraper
+        from events.scrapers.base import SessionExpiredError
+
+        scraper = FacebookPostsScraper.__new__(FacebookPostsScraper)
+        scraper.source = "facebook_posts"
+        # Normal search-results page — should NOT raise SessionExpiredError
+        page = self._make_page("https://www.facebook.com/search/posts?q=events")
+        page.evaluate.return_value = []
+
+        with mock.patch.object(scraper, "_navigate_to_query"), \
+             mock.patch("events.scrapers.facebook_posts._pause"), \
+             mock.patch("events.scrapers.facebook_posts._smart_scroll"):
+            try:
+                scraper._fetch_raw_posts(page, "events")
+            except SessionExpiredError:
+                self.fail("SessionExpiredError raised for a non-auth URL")
+
+    def test_ig_raises_on_login_redirect(self):
+        from events.scrapers.instagram_posts import InstagramPostsScraper
+        from events.scrapers.base import SessionExpiredError
+
+        scraper = InstagramPostsScraper.__new__(InstagramPostsScraper)
+        scraper.source = "instagram_posts"
+        page = self._make_page("https://www.instagram.com/accounts/login/")
+
+        with mock.patch.object(scraper, "_goto"), \
+             mock.patch("events.scrapers.instagram_posts._pause"):
+            with self.assertRaises(SessionExpiredError):
+                scraper._fetch_for_hashtag(page, "manilaevents")
+
+    def test_ig_raises_on_challenge_redirect(self):
+        from events.scrapers.instagram_posts import InstagramPostsScraper
+        from events.scrapers.base import SessionExpiredError
+
+        scraper = InstagramPostsScraper.__new__(InstagramPostsScraper)
+        scraper.source = "instagram_posts"
+        page = self._make_page("https://www.instagram.com/challenge/")
+
+        with mock.patch.object(scraper, "_goto"), \
+             mock.patch("events.scrapers.instagram_posts._pause"):
+            with self.assertRaises(SessionExpiredError):
+                scraper._fetch_for_hashtag(page, "manilaevents")
+
+    def test_ig_no_raise_on_normal_url(self):
+        from events.scrapers.instagram_posts import InstagramPostsScraper
+        from events.scrapers.base import SessionExpiredError
+
+        scraper = InstagramPostsScraper.__new__(InstagramPostsScraper)
+        scraper.source = "instagram_posts"
+        page = self._make_page("https://www.instagram.com/explore/tags/manilaevents/")
+        page.wait_for_selector.return_value = None
+        page.evaluate.return_value = []
+
+        with mock.patch.object(scraper, "_goto"), \
+             mock.patch("events.scrapers.instagram_posts._pause"), \
+             mock.patch("events.scrapers.instagram_posts._human_scroll"):
+            try:
+                scraper._fetch_for_hashtag(page, "manilaevents")
+            except SessionExpiredError:
+                self.fail("SessionExpiredError raised for a non-auth URL")

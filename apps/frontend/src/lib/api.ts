@@ -163,8 +163,8 @@ export const api = {
 	runAll: () => post<RunAllResult>('/scrapers/run-all/'),
 	deduplicate: () => post<DedupResult>('/scrapers/dedup/'),
 	runScript: (scriptName: string) => post<ScriptStartResult>(`/scripts/${scriptName}/run/`),
-	scraperRuns: (limit?: number, f?: Fetch) =>
-		get<ScraperRun[]>(`/scrapers/runs/${limit ? `?limit=${limit}` : ''}`, f),
+	scraperRuns: (params: { limit?: number; status?: string; scraper_key?: string } = {}, f?: Fetch) =>
+		get<ScraperRun[]>(`/scrapers/runs/${qs(params)}`, f),
 	activeRuns: (f?: Fetch) => get<ScraperRun[]>('/scrapers/runs/active/', f),
 	scraperRun: (id: number, f?: Fetch) => get<ScraperRun>(`/scrapers/runs/${id}/`, f),
 	cancelRun: (id: number) => post<ScraperRun>(`/scrapers/runs/${id}/cancel/`),
