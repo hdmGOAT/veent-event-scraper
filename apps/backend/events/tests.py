@@ -4,7 +4,7 @@ from io import StringIO
 from unittest import mock
 
 from django.contrib.auth import get_user_model
-from django.test import TestCase, TransactionTestCase
+from django.test import TestCase, TransactionTestCase, override_settings
 from django.urls import reverse
 
 from datetime import timedelta
@@ -1064,10 +1064,12 @@ class CategoryNormalizationTests(TestCase):
             self.assertGreater(entry["count"], 0)
 
 
+@override_settings(GROQ_API_KEY="test-key", GROQ_CATEGORIZE_MODEL="llama-test")
 class AiCategoriesTests(TestCase):
     """Unit tests for the AI categorization service.
 
-    All tests mock subprocess.run so no actual CLI is invoked.
+    All tests mock requests.post so no actual Groq API call is made.
+    GROQ_API_KEY is overridden at class level so the key-check passes in CI.
     """
 
     def _make_event(self, name, category="", description=""):
