@@ -1,15 +1,8 @@
-"""AI-assisted event categorization via the local Claude CLI.
+"""AI-assisted event categorization via the Groq API.
 
 Maps each event's raw/noisy category string (plus name and description) into the
-canonical taxonomy below by shelling out to the local Claude Code CLI. No API key
-is required — it uses the developer's Claude Code subscription.
-
-Two settings control the subprocess (both read from env vars):
-- ``CLAUDE_CLI_CMD`` (default: ``"claude"``) — the CLI binary name/path.
-- ``CLAUDE_CONFIG_DIR`` (default: ``""``) — if set, passed as the
-  ``CLAUDE_CONFIG_DIR`` env var to the subprocess so non-default Claude
-  accounts (e.g. ``claude-ojt`` which is an alias for
-  ``CLAUDE_CONFIG_DIR=~/.claude-account-ojt claude``) work correctly.
+canonical taxonomy below using a Groq-hosted LLM. Requires GROQ_API_KEY and
+GROQ_CATEGORIZE_MODEL to be set (via env vars / Django settings).
 
 Only ``categorize_events_by_ids`` writes to the DB (``Event.agent_categories``);
 no scraper upsert path touches that field.
@@ -18,10 +11,17 @@ no scraper upsert path touches that field.
 from __future__ import annotations
 
 import json
+import logging
 import os
-import subprocess
+import time
 
+import requests
 from django.conf import settings
+
+logger = logging.getLogger(__name__)
+
+_GROQ_RETRIES = 4
+_GROQ_BACKOFF_BASE = 10  # seconds; doubles each retry: 10, 20, 40, 80
 
 # The only valid values for Event.agent_categories items.
 CANONICAL_CATEGORIES = [
@@ -67,7 +67,7 @@ def _build_prompt(events) -> str:
         "Events:",
     ]
     for event in events:
-        description = (event.description or "")[:200]
+        description = (event.description or "")[:100]
         lines.append(
             json.dumps(
                 {
@@ -107,50 +107,88 @@ def _parse_response(stdout: str, event_ids: list[int]) -> dict[int, list[str]]:
     return result
 
 
-def batch_categorize(events, cli_cmd: str | None = None) -> dict[int, list[str]]:
-    """Categorize up to ~20 events in a single Claude CLI call.
+def batch_categorize(events) -> dict[int, list[str]]:
+    """Categorize up to ~20 events in a single Groq API call.
 
     Returns ``{event_id: [canonical_labels]}``. Invalid or missing labels fall
-    back to ``["Other"]``. Raises ``FileNotFoundError`` (with a helpful message)
-    when the CLI command is not found on PATH.
+    back to ``["Other"]``. Returns all-Other on any API error (non-fatal).
     """
     events = list(events)
     if not events:
         return {}
 
-    if cli_cmd is None:
-        cli_cmd = settings.CLAUDE_CLI_CMD
+    api_key = settings.GROQ_API_KEY
+    model   = settings.GROQ_CATEGORIZE_MODEL
 
-    prompt = _build_prompt(events)
+    if not api_key:
+        raise RuntimeError(
+            "GROQ_API_KEY is not set. Add it to your .env file. "
+            "Get a free key at https://console.groq.com"
+        )
+
+    prompt    = _build_prompt(events)
     event_ids = [event.pk for event in events]
 
-    # Build subprocess env: inherit current env, optionally inject CLAUDE_CONFIG_DIR.
-    # This allows non-default Claude accounts that are normally accessed via a shell
-    # alias (e.g. `claude-ojt` = `CLAUDE_CONFIG_DIR=~/.claude-account-ojt claude`)
-    # to work without needing a real binary alias on PATH.
-    sub_env = os.environ.copy()
-    config_dir = getattr(settings, "CLAUDE_CONFIG_DIR", "")
-    if config_dir:
-        sub_env["CLAUDE_CONFIG_DIR"] = os.path.expanduser(config_dir)
+    for attempt in range(_GROQ_RETRIES):
+        try:
+            resp = requests.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                json={
+                    "model": model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0,
+                    "response_format": {"type": "json_object"},
+                },
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                timeout=60,
+            )
+        except requests.exceptions.RequestException as exc:
+            raise RuntimeError(f"Groq API request failed: {exc}") from exc
 
-    try:
-        completed = subprocess.run(
-            [cli_cmd, "--model", "claude-haiku-4-5-20251001", "-p", prompt],
-            capture_output=True,
-            text=True,
-            timeout=60,
-            env=sub_env,
-        )
-    except FileNotFoundError as exc:
-        raise FileNotFoundError(
-            f"Claude CLI command '{cli_cmd}' not found on PATH. Set the "
-            f"CLAUDE_CLI_CMD setting (env var CLAUDE_CLI_CMD) to the correct "
-            f"binary name for this machine (e.g. 'claude'). If you use a named "
-            f"account alias, set CLAUDE_CONFIG_DIR to the config directory path "
-            f"(e.g. ~/.claude-account-ojt) and keep CLAUDE_CLI_CMD=claude."
-        ) from exc
+        if resp.status_code == 429:
+            retry_after = int(resp.headers.get("Retry-After", _GROQ_BACKOFF_BASE * (2 ** attempt)))
+            if attempt < _GROQ_RETRIES - 1:
+                logger.warning(
+                    "[ai_categories] Groq rate-limited (429), waiting %ds before retry %d/%d.",
+                    retry_after, attempt + 1, _GROQ_RETRIES - 1,
+                )
+                time.sleep(retry_after)
+                continue
+            logger.warning(
+                "[ai_categories] Groq rate-limited after %d retries — skipping batch of %d events, "
+                "re-run to retry them.",
+                _GROQ_RETRIES, len(event_ids),
+            )
+            return {}
 
-    return _parse_response(completed.stdout, event_ids)
+        if resp.status_code == 413:
+            # Payload too large — split batch in half and retry each half separately.
+            if len(events) == 1:
+                logger.warning(
+                    "[ai_categories] Single event too large for Groq (413) — skipping pk=%s.",
+                    events[0].pk,
+                )
+                return {}
+            mid = len(events) // 2
+            logger.warning(
+                "[ai_categories] Groq payload too large (413) — splitting batch of %d into %d + %d.",
+                len(events), mid, len(events) - mid,
+            )
+            left = batch_categorize(events[:mid])
+            right = batch_categorize(events[mid:])
+            return {**left, **right}
+
+        try:
+            resp.raise_for_status()
+        except requests.exceptions.RequestException as exc:
+            raise RuntimeError(f"Groq API request failed: {exc}") from exc
+
+        return _parse_response(resp.json()["choices"][0]["message"]["content"], event_ids)
+
+    return {}
 
 
 def categorize_events_by_ids(ids, batch_size: int = 20, skip_classified: bool = True) -> int:

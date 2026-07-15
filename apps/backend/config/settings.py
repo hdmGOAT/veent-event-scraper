@@ -64,12 +64,11 @@ PLACES_API_KEY = os.environ.get('PLACES_API_KEY', '')
 # Add ALLEVENTS_API_KEY=<your-key> to your .env file.
 ALLEVENTS_API_KEY = os.environ.get('ALLEVENTS_API_KEY', '')
 
-# Local Claude CLI command used by events.ai_categories for AI categorization.
-# Set to the real binary name (e.g. 'claude'). No API key required.
-CLAUDE_CLI_CMD = os.environ.get('CLAUDE_CLI_CMD', 'claude')
-# Optional: config dir for non-default Claude accounts (e.g. ~/.claude-account-ojt).
-# Equivalent to the CLAUDE_CONFIG_DIR env var that shell aliases like `claude-ojt` set.
-CLAUDE_CONFIG_DIR = os.environ.get('CLAUDE_CONFIG_DIR', '')
+# Groq API — used by events.ai_categories (categorization) and facebook_posts / instagram_posts
+# (FB/IG post structuring). Get a free key at https://console.groq.com
+GROQ_API_KEY = os.environ.get('GROQ_API_KEY', '')
+GROQ_MODEL = os.environ.get('GROQ_MODEL', 'llama-3.3-70b-versatile')
+GROQ_CATEGORIZE_MODEL = os.environ.get('GROQ_CATEGORIZE_MODEL', 'llama-3.1-8b-instant')
 
 # Application definition
 

@@ -24,7 +24,6 @@ import json
 import logging
 import os
 import re
-import subprocess
 import urllib.parse
 from datetime import datetime, timezone as dt_timezone
 from typing import Iterable
@@ -464,36 +463,41 @@ def _call_llm_structure(
     timestamp: str,
     raw_links: list[str],
 ) -> dict | None:
-    """Call Ollama to structure a raw FB post caption into event fields.
+    """Call Groq to structure a raw FB post caption into event fields.
 
-    Configurable via env vars (set in .env or shell):
-      OLLAMA_BASE     Ollama server URL  (default: http://localhost:11434)
-      OLLAMA_MODEL    Model to use       (default: llama3.2:3b)
-      OLLAMA_TIMEOUT  Request timeout s  (default: 90)
-
-    Returns the parsed dict on success, None if Ollama is unreachable or
-    the model returns unparseable output (caller falls back to a minimal record).
+    Reads GROQ_API_KEY and GROQ_MODEL from Django settings (set via env vars).
+    Returns the parsed dict on success, None on any error (caller falls back
+    to a minimal record).
     """
-    import urllib.request
-    import urllib.error
+    from django.conf import settings as django_settings
 
-    base    = os.environ.get("OLLAMA_BASE",    "http://localhost:11434")
-    model   = os.environ.get("OLLAMA_MODEL",   "llama3.2:3b")
-    timeout = int(os.environ.get("OLLAMA_TIMEOUT", "90"))
+    api_key = django_settings.GROQ_API_KEY
+    model   = django_settings.GROQ_MODEL
+    timeout = int(os.environ.get("GROQ_TIMEOUT", "90"))
 
-    prompt  = _build_post_prompt(raw_caption, author_name, timestamp, raw_links)
-    payload = json.dumps({"model": model, "prompt": prompt, "stream": False}).encode()
+    if not api_key:
+        logger.warning("[facebook_posts] GROQ_API_KEY not set — skipping LLM structuring")
+        return None
 
-    req = urllib.request.Request(
-        f"{base}/api/generate",
-        data=payload,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
+    prompt = _build_post_prompt(raw_caption, author_name, timestamp, raw_links)
+
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            data = json.loads(resp.read())
-        text   = data.get("response", "")
+        resp = requests.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            json={
+                "model": model,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0,
+                "response_format": {"type": "json_object"},
+            },
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            timeout=timeout,
+        )
+        resp.raise_for_status()
+        text   = resp.json()["choices"][0]["message"]["content"]
         result = _parse_structure_response(text)
         if result is not None:
             all_text = raw_caption + " " + " ".join(raw_links or [])
@@ -505,18 +509,15 @@ def _call_llm_structure(
                 result["organizer_email"] = None
         if result is None:
             logger.warning(
-                "[facebook_posts] Ollama (%s) returned unparseable output for: %s…",
+                "[facebook_posts] Groq (%s) returned unparseable output for: %s…",
                 model, raw_caption[:60],
             )
         return result
-    except urllib.error.URLError as exc:
-        logger.warning(
-            "[facebook_posts] Ollama unreachable at %s — is `ollama serve` running? (%s)",
-            base, exc.reason,
-        )
+    except requests.exceptions.RequestException as exc:
+        logger.warning("[facebook_posts] Groq request failed (%s): %s", model, exc)
         return None
     except Exception as exc:
-        logger.warning("[facebook_posts] Ollama structuring failed (%s/%s): %s", base, model, exc)
+        logger.warning("[facebook_posts] Groq structuring failed (%s): %s", model, exc)
         return None
 
 
