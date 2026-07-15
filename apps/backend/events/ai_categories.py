@@ -11,10 +11,17 @@ no scraper upsert path touches that field.
 from __future__ import annotations
 
 import json
+import logging
 import os
+import time
 
 import requests
 from django.conf import settings
+
+logger = logging.getLogger(__name__)
+
+_GROQ_RETRIES = 4
+_GROQ_BACKOFF_BASE = 10  # seconds; doubles each retry: 10, 20, 40, 80
 
 # The only valid values for Event.agent_categories items.
 CANONICAL_CATEGORIES = [
@@ -60,7 +67,7 @@ def _build_prompt(events) -> str:
         "Events:",
     ]
     for event in events:
-        description = (event.description or "")[:200]
+        description = (event.description or "")[:100]
         lines.append(
             json.dumps(
                 {
@@ -122,27 +129,66 @@ def batch_categorize(events) -> dict[int, list[str]]:
     prompt    = _build_prompt(events)
     event_ids = [event.pk for event in events]
 
-    try:
-        resp = requests.post(
-            "https://api.groq.com/openai/v1/chat/completions",
-            json={
-                "model": model,
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0,
-                "response_format": {"type": "json_object"},
-            },
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
-            timeout=60,
-        )
-        resp.raise_for_status()
-        content = resp.json()["choices"][0]["message"]["content"]
-    except requests.exceptions.RequestException as exc:
-        raise RuntimeError(f"Groq API request failed: {exc}") from exc
+    for attempt in range(_GROQ_RETRIES):
+        try:
+            resp = requests.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                json={
+                    "model": model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0,
+                    "response_format": {"type": "json_object"},
+                },
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                timeout=60,
+            )
+        except requests.exceptions.RequestException as exc:
+            raise RuntimeError(f"Groq API request failed: {exc}") from exc
 
-    return _parse_response(content, event_ids)
+        if resp.status_code == 429:
+            retry_after = int(resp.headers.get("Retry-After", _GROQ_BACKOFF_BASE * (2 ** attempt)))
+            if attempt < _GROQ_RETRIES - 1:
+                logger.warning(
+                    "[ai_categories] Groq rate-limited (429), waiting %ds before retry %d/%d.",
+                    retry_after, attempt + 1, _GROQ_RETRIES - 1,
+                )
+                time.sleep(retry_after)
+                continue
+            logger.warning(
+                "[ai_categories] Groq rate-limited after %d retries — skipping batch of %d events, "
+                "re-run to retry them.",
+                _GROQ_RETRIES, len(event_ids),
+            )
+            return {}
+
+        if resp.status_code == 413:
+            # Payload too large — split batch in half and retry each half separately.
+            if len(events) == 1:
+                logger.warning(
+                    "[ai_categories] Single event too large for Groq (413) — skipping pk=%s.",
+                    events[0].pk,
+                )
+                return {}
+            mid = len(events) // 2
+            logger.warning(
+                "[ai_categories] Groq payload too large (413) — splitting batch of %d into %d + %d.",
+                len(events), mid, len(events) - mid,
+            )
+            left = batch_categorize(events[:mid])
+            right = batch_categorize(events[mid:])
+            return {**left, **right}
+
+        try:
+            resp.raise_for_status()
+        except requests.exceptions.RequestException as exc:
+            raise RuntimeError(f"Groq API request failed: {exc}") from exc
+
+        return _parse_response(resp.json()["choices"][0]["message"]["content"], event_ids)
+
+    return {}
 
 
 def categorize_events_by_ids(ids, batch_size: int = 20, skip_classified: bool = True) -> int:

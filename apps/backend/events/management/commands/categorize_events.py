@@ -5,23 +5,21 @@ Examples:
     manage.py categorize_events --all            # re-classify everything
     manage.py categorize_events --source planout # only one scraper source
     manage.py categorize_events --limit 5 --dry-run
+    manage.py categorize_events --delay 0        # no throttle (careful)
 """
+
+import time
 
 from django.core.management.base import BaseCommand
 
-from events.ai_categories import categorize_events_by_ids
+from events.ai_categories import batch_categorize
 from events.models import Event
 
 
 class Command(BaseCommand):
-    help = "Classify events into canonical agent_categories using the Claude CLI."
+    help = "Classify events into canonical agent_categories using the Groq API."
 
     def add_arguments(self, parser):
-        parser.add_argument(
-            "--uncategorized",
-            action="store_true",
-            help="Only classify events with empty agent_categories (default behavior).",
-        )
         parser.add_argument(
             "--all",
             action="store_true",
@@ -42,6 +40,13 @@ class Command(BaseCommand):
             action="store_true",
             help="Print what would be classified without writing to the DB.",
         )
+        parser.add_argument(
+            "--delay",
+            type=float,
+            default=2.0,
+            metavar="SECONDS",
+            help="Seconds to wait between batches to stay under Groq TPM limit (default: 2).",
+        )
 
     def handle(self, *args, **options):
         batch_size = 20
@@ -50,7 +55,6 @@ class Command(BaseCommand):
         if options.get("source"):
             qs = qs.filter(source=options["source"])
 
-        # Default to uncategorized (empty agent_categories) unless --all is passed.
         if not options.get("reclassify_all"):
             qs = qs.filter(agent_categories=[])
 
@@ -59,26 +63,63 @@ class Command(BaseCommand):
         if options.get("limit"):
             qs = qs[: options["limit"]]
 
-        ids = list(qs.values_list("pk", flat=True))
-        total = len(ids)
+        events = list(qs)
+        total = len(events)
 
         if total == 0:
             self.stdout.write(self.style.WARNING("No matching events to classify."))
             return
 
+        total_batches = (total + batch_size - 1) // batch_size
+
         if options.get("dry_run"):
             self.stdout.write(
-                f"[dry-run] Would classify {total} event(s) "
-                f"in {(total + batch_size - 1) // batch_size} batch(es). No writes."
+                f"[dry-run] Would classify {total} event(s) in {total_batches} batch(es). No writes."
             )
             return
 
-        classified = categorize_events_by_ids(
-            ids,
-            batch_size=batch_size,
-            skip_classified=not options.get("reclassify_all"),
+        delay = options["delay"]
+        self.stdout.write(
+            f"Classifying {total} event(s) in {total_batches} batch(es) "
+            f"(inter-batch delay: {delay}s)..."
         )
 
-        self.stdout.write(
-            self.style.SUCCESS(f"Classified {classified}/{total} event(s).")
-        )
+        classified = 0
+        skipped = 0
+
+        for batch_num, start in enumerate(range(0, total, batch_size), 1):
+            batch = events[start: start + batch_size]
+            self.stdout.write(
+                f"  Batch {batch_num}/{total_batches} ({len(batch)} events)...",
+                ending=" ",
+            )
+            self.stdout.flush()
+
+            labels_by_id = batch_categorize(batch)
+
+            if not labels_by_id:
+                self.stdout.write(self.style.WARNING("skipped (rate-limited, re-run to retry)"))
+                skipped += len(batch)
+            else:
+                to_update = []
+                for event in batch:
+                    labels = labels_by_id.get(event.pk)
+                    if labels is None:
+                        continue
+                    event.agent_categories = labels
+                    to_update.append(event)
+
+                if to_update:
+                    Event.objects.bulk_update(to_update, ["agent_categories"])
+                    classified += len(to_update)
+
+                self.stdout.write(self.style.SUCCESS(f"done ({len(to_update)} classified, {classified} total)"))
+
+            if batch_num < total_batches and delay > 0:
+                time.sleep(delay)
+
+        self.stdout.write("")
+        summary = f"Finished. classified={classified} skipped={skipped} total={total}"
+        if skipped:
+            summary += " — re-run without --all to retry skipped batches"
+        self.stdout.write(self.style.SUCCESS(summary))
