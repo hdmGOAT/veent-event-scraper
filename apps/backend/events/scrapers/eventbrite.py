@@ -57,6 +57,15 @@ def _parse_dt(date_str: str, time_str: str, tz_str: str) -> datetime | None:
         return None
 
 
+def _parse_iso(raw: str | None) -> datetime | None:
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return None
+
+
 def _price_str(ta: dict) -> str:
     if not ta:
         return ""
@@ -212,6 +221,7 @@ class EventbriteScraper(BaseScraper):
             organizer=(org.get("name") or "")[:255],
             organizer_url=org.get("url") or "",
             venue=_build_venue(ev),
+            post_date=_parse_iso(ev.get("published")),
         )
 
     def run(self, **_kwargs) -> dict:

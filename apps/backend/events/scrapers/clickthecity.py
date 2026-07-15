@@ -103,6 +103,7 @@ def _build_event(event: dict) -> ScrapedEvent:
         source_url=_SOURCE_URL,
         organizer=(event.get("organizer") or "").strip(),
         venue=_build_venue(event),
+        post_date=_parse_date(event.get("createdAt")),
     )
 
 
