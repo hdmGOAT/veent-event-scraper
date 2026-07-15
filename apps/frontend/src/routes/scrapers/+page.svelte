@@ -98,7 +98,7 @@
 				runningMap = next;
 				if (active.value.length === 0 && (nodeActive.status !== 'fulfilled' || nodeActive.value.length === 0)) {
 					stopPolling();
-					[recentRuns, scrapers] = await Promise.all([api.scraperRuns(), api.scrapers()]);
+					[recentRuns, scrapers] = await Promise.all([api.scraperRuns({}), api.scrapers()]);
 				}
 			}
 

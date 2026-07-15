@@ -16,7 +16,7 @@ from django.views.decorators.http import require_POST
 logger = logging.getLogger(__name__)
 
 from .categories import normalize_category
-from .models import Event, Organizer, ScraperRun, SearchQuery, TrackerNote, Venue
+from .models import BandwidthLog, Event, Organizer, ScraperRun, SearchQuery, TrackerNote, Venue
 from .runner import AVAILABLE_LOCATIONS, cancel_run, trigger_scraper_run
 
 
@@ -221,6 +221,7 @@ def review_set_status(request, slug):
 
 
 def api_stats(request):
+    from django.db.models import Sum
     total_events = Event.objects.count()
     total_venues = Venue.objects.count()
     verified_venues = Venue.objects.filter(
@@ -232,6 +233,13 @@ def api_stats(request):
     active_sources = (
         Event.objects.exclude(source="").values("source").distinct().count()
     )
+    pending_push = Event.objects.filter(crm_pushed_at__isnull=True).count()
+    uncategorized = Event.objects.filter(agent_categories=[]).count()
+    bandwidth_bytes = (
+        BandwidthLog.objects.filter(proxy_type=BandwidthLog.PROXY_DATAIMPULSE)
+        .aggregate(total=Sum("bytes_transferred"))["total"]
+        or 0
+    )
     return JsonResponse(
         {
             "total_events": total_events,
@@ -241,6 +249,9 @@ def api_stats(request):
             "confirmed_organizers": confirmed_organizers,
             "pending_organizers": pending_organizers,
             "active_sources": active_sources,
+            "pending_push": pending_push,
+            "uncategorized": uncategorized,
+            "dataimpulse_mb": round(bandwidth_bytes / 1_048_576, 1),
         }
     )
 
@@ -790,12 +801,17 @@ def api_venues_map(request):
 # ---------------------------------------------------------------------------
 
 
-def _serialize_run(run):
-    """Serialise a ScraperRun to the standard dict shape used by all run endpoints."""
-    include_log = run.status in ('queued', 'running') or (
-        run.finished_at is not None
-        and (timezone.now() - run.finished_at).total_seconds() < 300
-    )
+def _serialize_run(run, *, include_log: bool | None = None):
+    """Serialise a ScraperRun to the standard dict shape used by all run endpoints.
+
+    ``include_log``: True = always include, False = always omit, None (default) =
+    include only for active runs or runs finished within 5 minutes (list view default).
+    """
+    if include_log is None:
+        include_log = run.status in ('queued', 'running') or (
+            run.finished_at is not None
+            and (timezone.now() - run.finished_at).total_seconds() < 300
+        )
     return {
         "id": run.id,
         "scraper_key": run.scraper_key,
@@ -1009,10 +1025,14 @@ def api_scraper_runs(request):
         limit = max(1, min(int(request.GET.get("limit", 50)), 200))
     except ValueError:
         limit = 50
-    runs = (
-        ScraperRun.objects.select_related("triggered_by")
-        .order_by("-created_at")[:limit]
-    )
+    qs = ScraperRun.objects.select_related("triggered_by").order_by("-created_at")
+    status_filter = request.GET.get("status", "").strip()
+    if status_filter:
+        qs = qs.filter(status=status_filter)
+    key_filter = request.GET.get("scraper_key", "").strip()
+    if key_filter:
+        qs = qs.filter(scraper_key=key_filter)
+    runs = qs[:limit]
     return JsonResponse([_serialize_run(r) for r in runs], safe=False)
 
 
@@ -1027,7 +1047,7 @@ def api_scraper_run_detail(request, run_id):
     run = get_object_or_404(
         ScraperRun.objects.select_related("triggered_by"), id=run_id
     )
-    return JsonResponse(_serialize_run(run))
+    return JsonResponse(_serialize_run(run, include_log=True))
 
 
 @csrf_exempt
@@ -1085,6 +1105,7 @@ def api_scrapers(request):
                 "status": run.status,
                 "started_at": run.started_at.isoformat() if run.started_at else None,
                 "finished_at": run.finished_at.isoformat() if run.finished_at else None,
+                "error_message": run.error_message or None,
             }
             if run
             else None
