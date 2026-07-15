@@ -226,9 +226,13 @@ def _google_search_urls(queries: list[str], pages_per_query: int) -> set[str]:
 # Discovery — Phase 2: public listing API per PH city
 # ---------------------------------------------------------------------------
 
-def _api_discover_urls(locations: list[str]) -> set[str]:
-    """Hit the public offers API per location and extract event shortcodes."""
-    found: set[str] = set()
+def _api_discover_urls(locations: list[str]) -> dict[str, str]:
+    """Hit the public offers API per location and extract event shortcodes.
+
+    Returns a dict mapping event URL → raw timestamp string (may be empty string
+    when the API offer doesn't carry one).
+    """
+    found: dict[str, str] = {}
     session = get_session()
     session.headers.update(_API_HEADERS)
 
@@ -263,7 +267,7 @@ def _api_discover_urls(locations: list[str]) -> set[str]:
                     continue
                 u = _event_url(shortcode)
                 if u not in found:
-                    found.add(u)
+                    found[u] = str(offer.get("timestamp") or "")
                     new_here += 1
 
         logger.debug("Eventsize API: location=%r -> %d new", location, new_here)
@@ -598,18 +602,21 @@ class EventsizeScraper(BaseScraper):
 
     def _collect(self) -> tuple[list[ScrapedEvent], list[ScrapedOrganizer]]:
         # --- Discovery: Google SERP + API city iteration, combined ---
-        urls = _google_search_urls(_SEARCH_QUERIES, pages_per_query=_GOOGLE_PAGES_PER_QUERY)
-        urls |= _api_discover_urls(_PH_LOCATIONS)
-        if not urls:
+        google_urls = _google_search_urls(_SEARCH_QUERIES, pages_per_query=_GOOGLE_PAGES_PER_QUERY)
+        api_url_map = _api_discover_urls(_PH_LOCATIONS)  # url -> timestamp str
+        # Merge: API map takes precedence (carries timestamps); Google-only URLs get "".
+        url_timestamps: dict[str, str] = {u: "" for u in google_urls}
+        url_timestamps.update(api_url_map)
+        if not url_timestamps:
             logger.warning("Eventsize: no event URLs discovered — check network connectivity")
             return [], []
-        logger.info("Eventsize: %d total unique event URLs", len(urls))
+        logger.info("Eventsize: %d total unique event URLs", len(url_timestamps))
 
         session = _make_session()
         events: list[ScrapedEvent] = []
         organizer_urls: dict[str, str] = {}  # org_url -> org_name (first seen)
 
-        for url in sorted(urls):
+        for url in sorted(url_timestamps):
             soup = _fetch_page(url, session)
             if not soup:
                 continue
@@ -620,6 +627,12 @@ class EventsizeScraper(BaseScraper):
                 event = None
 
             if event:
+                ts_raw = url_timestamps.get(url) or ""
+                if ts_raw:
+                    try:
+                        event.post_date = datetime.fromtimestamp(int(ts_raw), tz=dt_timezone.utc)
+                    except (ValueError, OSError):
+                        pass
                 events.append(event)
                 if event.organizer_url and event.organizer_url not in organizer_urls:
                     organizer_urls[event.organizer_url] = event.organizer
