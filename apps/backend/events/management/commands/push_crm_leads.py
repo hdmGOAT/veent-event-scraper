@@ -28,59 +28,66 @@ from django.utils import timezone
 from events.models import Event
 
 
+# Maps raw scraper/Groq category strings to the CRM canonical category names
+# (crm_categories table — seeded in 0026 migration + seed-scraper-categories.ts).
+# CRM canonical names are the source of truth; update this map when the CRM seed changes.
 CATEGORY_MAP = {
-    # Direct matches
-    "Concert": "Concert",
-    "Live Band": "Live Band",
-    "Music Fest": "Music Fest",
-    "Workshop": "Workshop",
-    "Theater": "Theater",
-    "Conference": "Conference",
-    "Convention": "Convention",
-    "Expo": "Expo",
-    "Competition": "Competition",
-    "Church": "Church",
-    "Fan Fair": "Fan Fair",
-    "School": "School",
-    "Film": "Film",
-    "Screening": "Screening",
-    "Bar/DJ": "Bar/DJ",
-    # Scraped variants → CRM canonical
-    "Sports": "Sports",
-    "Sports & Recreation": "Sports",
-    "Sports & Fitness": "Sports",
-    "Fun Run": "Sports",
-    "Trail Run": "Sports",
-    "Music": "Concert",
-    "Festival": "Music Fest",
-    "Theater & Performing Arts": "Theater",
-    "Performing Arts": "Theater",
-    "Arts & Culture": "Theater",
-    "Conference / Seminar": "Conference",
-    "Webinar": "Conference",
-    "Workshop / Training": "Workshop",
-    # Groq canonical taxonomy → CRM TEMPLATE_CATEGORIES
-    "Fun Run / Road Race": "Sports",
-    "Triathlon / Duathlon": "Sports",
-    "Cycling": "Sports",
-    "Swimming": "Sports",
-    "Music & Concert": "Concert",
-    "Food & Dining": "Other",
-    "Charity / Fundraiser": "Other",
-    "Exhibition": "Expo",
-    "Religious": "Church",
-    "Education": "School",
-    "Camp": "School",
-    "Nightlife": "Bar/DJ",
-    # No clean CRM match — send Other
+    # --- Sports ---
+    "Fun Run / Road Race": "Fun Run / Road Race",
+    "Fun Run": "Fun Run / Road Race",
+    "Trail Run": "Trail Run",
+    "Triathlon / Duathlon": "Triathlon / Duathlon",
+    "Cycling": "Cycling",
+    "Swimming": "Swimming",
+    "Sports & Fitness": "Sports & Fitness",
+    "Sports & Recreation": "Sports & Fitness",
+    "Sports": "Sports & Fitness",
+    "Competition": "Sports & Fitness",
+    "Health": "Sports & Fitness",
+    # --- Music / Performing Arts ---
+    "Music & Concert": "Music & Concert",
+    "Concert": "Music & Concert",
+    "Live Band": "Music & Concert",
+    "Music": "Music & Concert",
+    "Festival": "Festival",
+    "Music Fest": "Festival",
+    # --- Theater ---
+    "Theater & Performing Arts": "Theater & Performing Arts",
+    "Theater": "Theater & Performing Arts",
+    "Performing Arts": "Theater & Performing Arts",
+    # --- Arts & Culture ---
+    "Arts & Culture": "Arts & Culture",
+    "Art": "Arts & Culture",
+    "Exhibition": "Arts & Culture",
+    "Expo": "Arts & Culture",
+    # --- Business / Learning ---
+    "Conference / Seminar": "Conference / Seminar",
+    "Conference": "Conference / Seminar",
+    "Convention": "Conference / Seminar",
+    "Webinar": "Conference / Seminar",
+    "Workshop / Training": "Workshop / Training",
+    "Workshop": "Workshop / Training",
+    # --- Food ---
+    "Food & Dining": "Food & Dining",
+    "Restaurant": "Food & Dining",
+    # --- Charity ---
+    "Charity / Fundraiser": "Charity / Fundraiser",
+    # --- Other (no clean canonical match) ---
+    "Church": "Other",
+    "Religious": "Other",
+    "Fan Fair": "Other",
+    "School": "Other",
+    "Education": "Other",
+    "Camp": "Other",
+    "Film": "Other",
+    "Screening": "Other",
+    "Bar/DJ": "Other",
+    "Nightlife": "Other",
     "Community": "Other",
     "Travel and Tours": "Other",
-    "Art": "Other",
-    "Health": "Other",
-    "Club": "Other",
-    "Restaurant": "Other",
     "Modelling": "Other",
     "Adventure Parks": "Other",
+    "Club": "Other",
 }
 
 
