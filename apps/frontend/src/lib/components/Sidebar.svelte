@@ -1,43 +1,22 @@
 <script lang="ts">
 	// Icon convention: use lucide-svelte components.
 	// Do not add inline <svg> strings. Size: 18px, strokeWidth: 2 for nav icons.
-	import { Calendar, ChevronDown, Icon, LayoutGrid, List, Map, MapPin, Menu, Moon, Radio, Search, Sun, User, Users, X, Zap } from 'lucide-svelte';
+	import { Activity, Icon, LayoutGrid, Menu, Moon, Radio, Search, Sun, User, X, Zap } from 'lucide-svelte';
 	import { page } from '$app/state';
 	import { themeStore } from '$lib/theme.svelte';
 
 	type NavItem = { href: string; label: string; exact: boolean; icon: typeof Icon };
-	type NavGroup = { label: string; icon: typeof Icon; prefix: string; children: { href: string; label: string; icon: typeof Icon }[] };
 
 	const items: NavItem[] = [
 		{ href: '/', label: 'Dashboard', exact: true, icon: LayoutGrid },
+		{ href: '/runs', label: 'Pipeline Runs', exact: false, icon: Activity },
 		{ href: '/scrapers', label: 'Scraper Center', exact: false, icon: Radio },
 		{ href: '/search-queries', label: 'Search Queries', exact: false, icon: Search },
-		{ href: '/events', label: 'Events', exact: false, icon: Calendar },
-		{ href: '/organizers', label: 'Organizers', exact: false, icon: Users },
 	];
-
-	const venuesGroup: NavGroup = {
-		label: 'Venues',
-		icon: MapPin,
-		prefix: '/venues',
-		children: [
-			{ href: '/venues', label: 'List', icon: List },
-			{ href: '/venues/map', label: 'Map', icon: Map },
-		]
-	};
 
 	function isActive(href: string, exact: boolean): boolean {
 		const path = page.url.pathname;
 		return exact ? path === href : path === href || path.startsWith(href + '/');
-	}
-
-	function isGroupActive(prefix: string): boolean {
-		return page.url.pathname === prefix || page.url.pathname.startsWith(prefix + '/');
-	}
-
-	function isChildActive(href: string): boolean {
-		// /venues/map exact; /venues exact (don't highlight for /venues/[slug] detail pages)
-		return page.url.pathname === href;
 	}
 
 	// Mobile drawer open/close. On desktop (>= md) the sidebar is always visible
@@ -129,47 +108,6 @@
 				{item.label}
 			</a>
 		{/each}
-
-		<!-- Venues group with dropdown -->
-		{#if isGroupActive(venuesGroup.prefix)}
-			{@const GroupIcon = venuesGroup.icon}
-			<div>
-				<button
-					type="button"
-					class="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors bg-accent/10 text-accent"
-				>
-					<span class="shrink-0"><GroupIcon size={18} strokeWidth={2} /></span>
-					<span class="flex-1 text-left">{venuesGroup.label}</span>
-					<span class="rotate-180 transition-transform duration-200">
-						<ChevronDown size={14} strokeWidth={2} />
-					</span>
-				</button>
-				<div class="mt-0.5 space-y-0.5 pl-4">
-					{#each venuesGroup.children as child (child.href)}
-						{@const ChildIcon = child.icon}
-						<a
-							href={child.href}
-							class="flex items-center gap-3 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors {isChildActive(child.href)
-								? 'text-accent'
-								: 'text-muted hover:bg-surface-2 hover:text-text'}"
-						>
-							<span class="shrink-0"><ChildIcon size={15} strokeWidth={2} /></span>
-							{child.label}
-						</a>
-					{/each}
-				</div>
-			</div>
-		{:else}
-			{@const GroupIcon = venuesGroup.icon}
-			<a
-				href={venuesGroup.prefix}
-				class="flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors text-muted hover:bg-surface-2 hover:text-text"
-			>
-				<span class="shrink-0"><GroupIcon size={18} strokeWidth={2} /></span>
-				<span class="flex-1">{venuesGroup.label}</span>
-				<ChevronDown size={14} strokeWidth={2} />
-			</a>
-		{/if}
 	</nav>
 
 	<!-- User footer -->

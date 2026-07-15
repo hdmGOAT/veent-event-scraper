@@ -11,6 +11,9 @@ export interface Stats {
 	confirmed_organizers: number;
 	pending_organizers: number;
 	active_sources: number;
+	pending_push: number;
+	uncategorized: number;
+	dataimpulse_mb: number;
 }
 
 export interface SourceCount {
@@ -143,6 +146,7 @@ export interface ScraperLastRun {
 	status: ScraperRunStatus;
 	started_at: string | null;
 	finished_at: string | null;
+	error_message: string | null;
 }
 
 export interface Scraper {
