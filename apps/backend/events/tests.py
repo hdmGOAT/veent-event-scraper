@@ -1918,3 +1918,99 @@ class ScrapersSupportsKeywordsTests(TestCase):
         by_key = {s["key"]: s for s in resp.json()}
         self.assertTrue(by_key["facebook_events"]["supports_keywords"])
         self.assertFalse(by_key["google_places"]["supports_keywords"])
+
+
+class SessionExpiredErrorTests(TestCase):
+    """SessionExpiredError is raised and propagates on auth-redirect detection."""
+
+    def _make_page(self, url):
+        """Return a minimal mock Playwright page with the given URL."""
+        page = mock.MagicMock()
+        type(page).url = mock.PropertyMock(return_value=url)
+        return page
+
+    def test_fb_raises_on_login_redirect(self):
+        from events.scrapers.facebook_posts import FacebookPostsScraper
+        from events.scrapers.base import SessionExpiredError
+
+        scraper = FacebookPostsScraper.__new__(FacebookPostsScraper)
+        scraper.source = "facebook_posts"
+        page = self._make_page("https://www.facebook.com/login/?next=...")
+
+        with mock.patch.object(scraper, "_navigate_to_query"):
+            with self.assertRaises(SessionExpiredError):
+                scraper._fetch_raw_posts(page, "test query")
+
+    def test_fb_raises_on_checkpoint_redirect(self):
+        from events.scrapers.facebook_posts import FacebookPostsScraper
+        from events.scrapers.base import SessionExpiredError
+
+        scraper = FacebookPostsScraper.__new__(FacebookPostsScraper)
+        scraper.source = "facebook_posts"
+        page = self._make_page("https://www.facebook.com/checkpoint/")
+
+        with mock.patch.object(scraper, "_navigate_to_query"):
+            with self.assertRaises(SessionExpiredError):
+                scraper._fetch_raw_posts(page, "test query")
+
+    def test_fb_no_raise_on_normal_url(self):
+        from events.scrapers.facebook_posts import FacebookPostsScraper
+        from events.scrapers.base import SessionExpiredError
+
+        scraper = FacebookPostsScraper.__new__(FacebookPostsScraper)
+        scraper.source = "facebook_posts"
+        # Normal search-results page — should NOT raise SessionExpiredError
+        page = self._make_page("https://www.facebook.com/search/posts?q=events")
+        page.evaluate.return_value = []
+
+        with mock.patch.object(scraper, "_navigate_to_query"), \
+             mock.patch("events.scrapers.facebook_posts._pause"), \
+             mock.patch("events.scrapers.facebook_posts._smart_scroll"):
+            try:
+                scraper._fetch_raw_posts(page, "events")
+            except SessionExpiredError:
+                self.fail("SessionExpiredError raised for a non-auth URL")
+
+    def test_ig_raises_on_login_redirect(self):
+        from events.scrapers.instagram_posts import InstagramPostsScraper
+        from events.scrapers.base import SessionExpiredError
+
+        scraper = InstagramPostsScraper.__new__(InstagramPostsScraper)
+        scraper.source = "instagram_posts"
+        page = self._make_page("https://www.instagram.com/accounts/login/")
+
+        with mock.patch.object(scraper, "_goto"), \
+             mock.patch("events.scrapers.instagram_posts._pause"):
+            with self.assertRaises(SessionExpiredError):
+                scraper._fetch_for_hashtag(page, "manilaevents")
+
+    def test_ig_raises_on_challenge_redirect(self):
+        from events.scrapers.instagram_posts import InstagramPostsScraper
+        from events.scrapers.base import SessionExpiredError
+
+        scraper = InstagramPostsScraper.__new__(InstagramPostsScraper)
+        scraper.source = "instagram_posts"
+        page = self._make_page("https://www.instagram.com/challenge/")
+
+        with mock.patch.object(scraper, "_goto"), \
+             mock.patch("events.scrapers.instagram_posts._pause"):
+            with self.assertRaises(SessionExpiredError):
+                scraper._fetch_for_hashtag(page, "manilaevents")
+
+    def test_ig_no_raise_on_normal_url(self):
+        from events.scrapers.instagram_posts import InstagramPostsScraper
+        from events.scrapers.base import SessionExpiredError
+
+        scraper = InstagramPostsScraper.__new__(InstagramPostsScraper)
+        scraper.source = "instagram_posts"
+        page = self._make_page("https://www.instagram.com/explore/tags/manilaevents/")
+        page.wait_for_selector.return_value = None
+        page.evaluate.return_value = []
+
+        with mock.patch.object(scraper, "_goto"), \
+             mock.patch("events.scrapers.instagram_posts._pause"), \
+             mock.patch("events.scrapers.instagram_posts._human_scroll"):
+            try:
+                scraper._fetch_for_hashtag(page, "manilaevents")
+            except SessionExpiredError:
+                self.fail("SessionExpiredError raised for a non-auth URL")

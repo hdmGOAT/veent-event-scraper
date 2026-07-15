@@ -43,7 +43,7 @@ from urllib.parse import quote as _urlquote
 from playwright.sync_api import sync_playwright
 from playwright_stealth import Stealth
 
-from .base import BaseScraper, ScrapedEvent, ScrapedOrganizer, ScrapedVenue, save_events, save_organizers
+from .base import BaseScraper, ScrapedEvent, ScrapedOrganizer, ScrapedVenue, SessionExpiredError, save_events, save_organizers
 from .facebook_posts import (
     _call_llm_structure,
     _is_eligible,
@@ -402,6 +402,12 @@ class InstagramPostsScraper(BaseScraper):
         self._goto(page, url)
         _pause(2.5, 5.0)
 
+        # Detect session expiry: IG redirects to /accounts/login/ when cookies are expired.
+        if "accounts/login" in page.url or "challenge" in page.url:
+            raise SessionExpiredError(
+                f"session_expired:{self.source} — redirected to {page.url[:120]}"
+            )
+
         # Wait for the first post thumbnail or article to appear.
         try:
             page.wait_for_selector(
@@ -495,6 +501,8 @@ class InstagramPostsScraper(BaseScraper):
                     if max_events is not None:
                         raw_posts = raw_posts[:max_events]
                     raw_by_query[sq.pk] = (raw_posts, hashtag, source_url)
+                except SessionExpiredError:
+                    raise
                 except Exception as exc:
                     logger.warning(
                         "[%s] #%s failed: %s — skipping this query.",
