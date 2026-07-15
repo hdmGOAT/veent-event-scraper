@@ -22,6 +22,7 @@ from urllib.parse import urlparse
 
 import requests
 from django.core.management.base import BaseCommand, CommandError
+from django.db.models import F, Q
 from django.utils import timezone
 
 from events.models import Event
@@ -171,6 +172,13 @@ class Command(BaseCommand):
             help="Filter by Organizer.source.",
         )
         parser.add_argument(
+            "--all",
+            action="store_true",
+            default=False,
+            dest="push_all",
+            help="Push all future events regardless of crm_pushed_at (full re-push).",
+        )
+        parser.add_argument(
             "--future-only",
             action="store_true",
             default=False,
@@ -180,7 +188,7 @@ class Command(BaseCommand):
             "--repush",
             action="store_true",
             default=False,
-            help="Deprecated — CRM deduplicates by event ID; re-running is always safe.",
+            help="Deprecated — use --all instead.",
         )
 
     def handle(self, *args, **options):
@@ -195,6 +203,8 @@ class Command(BaseCommand):
             if not crm_secret:
                 raise CommandError("CRM_INGEST_SECRET environment variable is required.")
 
+        push_all = options["push_all"] or options["repush"]
+
         qs = Event.objects.filter(
             starts_at__gte=timezone.now()
         ).select_related("organizer_ref", "venue").exclude(
@@ -204,9 +214,17 @@ class Command(BaseCommand):
             qs = qs.filter(organizer_ref__status=options["status"])
         if options["source"]:
             qs = qs.filter(organizer_ref__source=options["source"])
+
+        # Delta filter: only push events not yet pushed, or updated since last push.
+        if not push_all:
+            qs = qs.filter(
+                Q(crm_pushed_at__isnull=True) | Q(updated_at__gt=F("crm_pushed_at"))
+            )
+
         qs = qs.order_by("starts_at")
 
         batch = []
+        batch_event_ids = []
         batch_num = 0
         totals = {"received": 0, "created": 0, "skipped": 0, "review": 0}
         leads_built = 0
@@ -320,16 +338,18 @@ class Command(BaseCommand):
                 lead["phone"] = organizer.phone.strip()
 
             batch.append(lead)
+            batch_event_ids.append(event.id)
             leads_built += 1
 
             if len(batch) >= batch_size:
                 batch_num += 1
-                self._flush(batch, batch_num, dry_run, crm_url, crm_secret, totals)
+                self._flush(batch, batch_event_ids, batch_num, dry_run, crm_url, crm_secret, totals)
                 batch = []
+                batch_event_ids = []
 
         if batch:
             batch_num += 1
-            self._flush(batch, batch_num, dry_run, crm_url, crm_secret, totals)
+            self._flush(batch, batch_event_ids, batch_num, dry_run, crm_url, crm_secret, totals)
 
         self.stdout.write("")
         self.stdout.write(self.style.SUCCESS(
@@ -342,7 +362,7 @@ class Command(BaseCommand):
                 f"skipped={totals['skipped']} review={totals['review']}"
             ))
 
-    def _flush(self, batch, batch_num, dry_run, crm_url, crm_secret, totals):
+    def _flush(self, batch, event_ids, batch_num, dry_run, crm_url, crm_secret, totals):
         if dry_run:
             self.stdout.write(f"--- Batch {batch_num} ({len(batch)} leads) ---")
             self.stdout.write(json.dumps({"leads": batch}, indent=2))
@@ -361,6 +381,9 @@ class Command(BaseCommand):
         data = resp.json()
         for key in totals:
             totals[key] += data.get(key, 0)
+
+        # Stamp crm_pushed_at on all events in this batch now that the POST succeeded.
+        Event.objects.filter(id__in=event_ids).update(crm_pushed_at=timezone.now())
 
         self.stdout.write(
             f"Batch {batch_num}: received={data.get('received', 0)} "
