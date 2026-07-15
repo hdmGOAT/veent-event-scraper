@@ -81,6 +81,14 @@ class ScrapedEvent:
     post_date: datetime | None = None
 
 
+class SessionExpiredError(RuntimeError):
+    """Raised when a scraper detects its session cookies have expired.
+
+    Propagates unhandled through run_scraper_job so ScraperRun.status is set
+    to FAILED with error_message containing "session_expired:<source>".
+    """
+
+
 class BaseScraper:
     """Subclass this and implement ``fetch``.
 

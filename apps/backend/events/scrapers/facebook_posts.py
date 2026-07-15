@@ -31,7 +31,7 @@ from typing import Iterable
 from playwright.sync_api import sync_playwright
 from playwright_stealth import Stealth
 
-from .base import ScrapedEvent, ScrapedOrganizer, ScrapedVenue, save_events, save_organizers
+from .base import ScrapedEvent, ScrapedOrganizer, ScrapedVenue, SessionExpiredError, save_events, save_organizers
 from .facebook_events import (
     FacebookEventsScraper,
     _DISMISS_MODAL_JS,
@@ -979,6 +979,13 @@ class FacebookPostsScraper(FacebookEventsScraper):
         self._navigate_to_query(page, query)
         _pause(3.0, 5.0)
 
+        # Detect session expiry: FB redirects to login/checkpoint when cookies are expired.
+        _auth_markers = {"login", "two_step_verification", "checkpoint", "about:blank"}
+        if any(m in page.url for m in _auth_markers):
+            raise SessionExpiredError(
+                f"session_expired:{self.source} — redirected to {page.url[:120]}"
+            )
+
         page.evaluate(_DISMISS_MODAL_JS)
         _pause(1.0, 2.0)
 
@@ -1100,6 +1107,8 @@ class FacebookPostsScraper(FacebookEventsScraper):
                             max_posts=max_events if max_events is not None else self.MAX_POSTS_PER_QUERY,
                             known_urls=known_urls_by_query.get(sq.id, set()),
                         )
+                    except SessionExpiredError:
+                        raise
                     except Exception as exc:
                         logger.warning("[%s] query '%s' failed: %s", self.source, sq.query, exc)
                         raw_by_query[sq.id] = []
