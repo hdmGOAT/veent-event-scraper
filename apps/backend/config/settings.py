@@ -70,6 +70,11 @@ GROQ_API_KEY = os.environ.get('GROQ_API_KEY', '')
 GROQ_MODEL = os.environ.get('GROQ_MODEL', 'llama-3.3-70b-versatile')
 GROQ_CATEGORIZE_MODEL = os.environ.get('GROQ_CATEGORIZE_MODEL', 'llama-3.1-8b-instant')
 
+# Discord webhook for scraper lifecycle notifications (opt-in). Empty string
+# disables all Discord activity (silent no-op). Set via .env; never commit a real
+# webhook URL. Format: https://discord.com/api/webhooks/{id}/{token}
+DISCORD_WEBHOOK_URL = os.environ.get('DISCORD_WEBHOOK_URL', '')
+
 # Application definition
 
 INSTALLED_APPS = [

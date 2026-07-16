@@ -15,7 +15,7 @@ import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-import requests as _requests
+from .proxy_manager import get_session as _get_session
 from .base import (
     BaseScraper,
     ScrapedEvent,
@@ -52,7 +52,7 @@ _HEADERS = {
 
 def _get(url: str, **params) -> dict | list | None:
     try:
-        resp = _requests.get(url, headers=_HEADERS, params=params or None, timeout=_TIMEOUT)
+        resp = _get_session().get(url, headers=_HEADERS, params=params or None, timeout=_TIMEOUT)
         resp.raise_for_status()
         time.sleep(_DELAY)
         return resp.json()

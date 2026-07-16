@@ -7,6 +7,12 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase, TransactionTestCase, override_settings
 from django.urls import reverse
 
+# Prevent any test from firing real Discord webhooks.
+# Patch urlopen (not _webhook_url) so tests_notifications.py's per-test
+# @patch("events.notifications.urllib.request.urlopen") decorators can override
+# this correctly — they stack on the same target and win during each test.
+mock.patch("events.notifications.urllib.request.urlopen").start()
+
 from datetime import timedelta
 
 from django.utils import timezone
@@ -881,8 +887,9 @@ class RunEndpointTests(TestCase):
         self.assertEqual(resp.status_code, 200)
 
     def test_run_all_triggers_all_scrapers(self):
-        from events.scrapers import SCRAPERS as REAL_SCRAPERS
+        from events.scrapers import RUN_ALL_EXCLUDED, SCRAPERS as REAL_SCRAPERS
 
+        expected_triggered = len(REAL_SCRAPERS) - len(RUN_ALL_EXCLUDED)
         mock_run = mock.Mock(id=1, status="queued")
         with mock.patch(
             "events.views.trigger_scraper_run", return_value=(mock_run, False)
@@ -890,9 +897,9 @@ class RunEndpointTests(TestCase):
             resp = self.client.post("/api/scrapers/run-all/")
         self.assertEqual(resp.status_code, 200)
         body = resp.json()
-        self.assertEqual(len(body["created"]), len(REAL_SCRAPERS))
-        self.assertEqual(body["skipped"], [])
-        self.assertEqual(mock_trigger.call_count, len(REAL_SCRAPERS))
+        self.assertEqual(len(body["created"]), expected_triggered)
+        self.assertEqual(sorted(body["skipped"]), sorted(RUN_ALL_EXCLUDED))
+        self.assertEqual(mock_trigger.call_count, expected_triggered)
 
     def test_run_all_skips_active_scrapers(self):
         # Restrict SCRAPERS to 2 keys so side_effect list matches exactly.
