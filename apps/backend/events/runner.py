@@ -29,6 +29,7 @@ from django.db import IntegrityError, transaction
 from django.utils import timezone
 
 from .models import ScraperRun
+from .notifications import notify_scraper_event
 from .scrapers import SCRAPERS  # noqa: F401  (used by callers/tests via runner.SCRAPERS)
 
 AVAILABLE_LOCATIONS = ["philippines", "singapore"]
@@ -116,6 +117,7 @@ def trigger_scraper_run(
         run.status = ScraperRun.Status.FAILED
         run.finished_at = timezone.now()
         run.save(update_fields=["status", "finished_at", "updated_at"])
+        notify_scraper_event("failed", scraper_key=key, run_id=run.id)
         raise
 
     # Store the pid synchronously so cancel_run has a target even for QUEUED runs.

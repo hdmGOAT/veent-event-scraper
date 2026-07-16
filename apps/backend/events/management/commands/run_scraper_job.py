@@ -13,11 +13,12 @@ from collections import deque
 
 from django.core.management.base import BaseCommand
 from django.db import connection
-from django.db.models import F, Value
+from django.db.models import F, Sum, Value
 from django.db.models.functions import Concat
 from django.utils import timezone
 
-from events.models import ScraperRun
+from events.models import BandwidthLog, ScraperRun
+from events.notifications import notify_scraper_event, patch_run_all_progress
 from events.runner import _map_result
 from events.scrapers import SCRAPERS
 
@@ -112,6 +113,44 @@ class Command(BaseCommand):
             help="Comma-separated location suffixes to append to each search query.",
         )
 
+    def _patch_batch_scoreboard(self, run) -> None:
+        """Rebuild and PATCH the shared run-all scoreboard for this batch."""
+        all_runs = list(
+            ScraperRun.objects.filter(discord_message_id=run.discord_message_id)
+        )
+        run_ids = [r.id for r in all_runs]
+        totals = (
+            BandwidthLog.objects.filter(scraper_run_id__in=run_ids)
+            .values("scraper_run_id")
+            .annotate(total=Sum("bytes_transferred"))
+        )
+        bw_by_run = {r.id: 0 for r in all_runs}
+        for row in totals:
+            bw_by_run[row["scraper_run_id"]] = row["total"] or 0
+        patch_run_all_progress(run.discord_message_id, all_runs, bw_by_run)
+
+    def _notify_terminal(self, run, event_type: str, **kwargs) -> None:
+        """Notify Discord for a terminal-status run.
+
+        Batch runs (discord_message_id set): always patch the scoreboard.
+        Errors/failures in a batch also fire an individual embed so they stand
+        out in the channel. Non-batch runs get only individual embeds.
+
+        Never raises — notification failures must not affect the worker exit.
+        """
+        try:
+            run.refresh_from_db(fields=["discord_message_id"])
+            if run.discord_message_id:
+                self._patch_batch_scoreboard(run)
+                if event_type in ("failed", "session_expired"):
+                    notify_scraper_event(event_type, scraper_key=run.scraper_key,
+                                         run_id=run.id, **kwargs)
+            else:
+                notify_scraper_event(event_type, scraper_key=run.scraper_key,
+                                     run_id=run.id, **kwargs)
+        except Exception:  # noqa: BLE001 — notifications never break the worker
+            traceback.print_exc()
+
     def handle(self, *args, **options):
         # This worker is a dedicated OS subprocess — no actual async code runs here.
         # Playwright's sync API leaves a stopped (not running) event loop in the thread,
@@ -144,6 +183,7 @@ class Command(BaseCommand):
             run.save(update_fields=[
                 "status", "finished_at", "error_message", "updated_at",
             ])
+            self._notify_terminal(run, "failed", error_message=run.error_message)
             return
 
         # Conditional update: only transition QUEUED → RUNNING. If the run was
@@ -156,13 +196,31 @@ class Command(BaseCommand):
             return  # Already cancelled — exit without doing any work.
         run.refresh_from_db()
 
+        # views.py writes discord_message_id after post_run_all_start() returns,
+        # which can be a few seconds after subprocesses have already started.
+        # Wait up to 10s for it to appear before deciding this is a solo run.
+        if not run.discord_message_id:
+            import time
+            for _ in range(10):
+                time.sleep(1)
+                run.refresh_from_db(fields=["discord_message_id"])
+                if run.discord_message_id:
+                    break
+
+        if run.discord_message_id:
+            self._patch_batch_scoreboard(run)  # show this scraper as "running" in scoreboard
+        else:
+            notify_scraper_event("started", scraper_key=run.scraper_key, run_id=run.id)
+
         def flush_progress(data: dict) -> None:
             """Write incremental progress keys into extra_counts without clobbering other keys."""
             try:
-                run.refresh_from_db(fields=["extra_counts"])
+                run.refresh_from_db(fields=["extra_counts", "discord_message_id"])
                 merged = {**run.extra_counts, **data}
                 ScraperRun.objects.filter(pk=run.pk).update(extra_counts=merged)
                 run.extra_counts = merged  # keep in-memory copy in sync
+                if "keyword_index" in data and run.discord_message_id:
+                    self._patch_batch_scoreboard(run)
             except Exception:
                 traceback.print_exc()
 
@@ -195,7 +253,7 @@ class Command(BaseCommand):
                     else scraper.run(on_progress=flush_progress)
                 )
             )
-        except Exception:
+        except Exception as exc:
             tb = traceback.format_exc()
             handler.stop()
             root_logger.removeHandler(handler)
@@ -207,6 +265,13 @@ class Command(BaseCommand):
             run.save(update_fields=[
                 "status", "finished_at", "error_message", "updated_at",
             ])
+            exc_str = str(exc)
+            if exc_str.startswith("session_expired:"):
+                # error_message form: "session_expired:<source> — <reason>"
+                source = exc_str.split(":", 1)[1].split(" ", 1)[0].strip()
+                self._notify_terminal(run, "session_expired", source=source)
+            else:
+                self._notify_terminal(run, "failed", error_message=tb)
             return
 
         # Final flush before status transition — frontend sees complete logs
@@ -240,3 +305,12 @@ class Command(BaseCommand):
             "status", "finished_at", "created_count",
             "updated_count", "extra_counts", "updated_at",
         ])
+
+        duration_s = (
+            (run.finished_at - run.started_at).total_seconds()
+            if run.started_at else 0
+        )
+        self._notify_terminal(
+            run, "success",
+            created_count=created, updated_count=updated, duration_s=duration_s,
+        )
