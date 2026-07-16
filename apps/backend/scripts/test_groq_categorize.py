@@ -69,4 +69,5 @@ for ev in EVENTS:
     print(f"{tag}[{ev.pk:2d}] {ev.name:<35} → {', '.join(labels)}")
 
 print("─" * 60)
-print(f"Other: {other_count}/{len(EVENTS)}  |  Canonical categories hit: {len(CANONICAL_CATEGORIES)}")
+unique_hits = {label for labels in results.values() for label in labels} - {"Other", "(missing)"}
+print(f"Other: {other_count}/{len(EVENTS)}  |  Canonical categories hit: {len(unique_hits)}/{len(CANONICAL_CATEGORIES)}")

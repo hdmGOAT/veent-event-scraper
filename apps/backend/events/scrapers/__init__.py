@@ -63,4 +63,4 @@ SCRAPERS = {
     "tessera": TesseraScraper,
 }
 
-__all__ = ["BaseScraper", "ScrapedEvent", "ScrapedOrganizer", "ScrapedVenue", "SCRAPERS", "RUN_ALL_EXCLUDED"]
+__all__ = ["BaseScraper", "RUN_ALL_EXCLUDED", "SCRAPERS", "ScrapedEvent", "ScrapedOrganizer", "ScrapedVenue"]

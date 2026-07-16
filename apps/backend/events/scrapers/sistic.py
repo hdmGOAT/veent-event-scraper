@@ -56,6 +56,8 @@ def _get(url: str, **params) -> dict | list | None:
         resp.raise_for_status()
         time.sleep(_DELAY)
         return resp.json()
+    except RuntimeError:
+        raise
     except Exception as exc:
         logger.error("sistic: GET failed for %s: %s", url, exc)
         return None

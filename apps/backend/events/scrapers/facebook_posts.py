@@ -1020,7 +1020,7 @@ class FacebookPostsScraper(FacebookEventsScraper):
 
     supports_keywords = False
 
-    def run(self, query_id: int | None = None, max_events: int | None = None, locations=None, query_ids=None, on_progress=None) -> dict:
+    def run(self, query_id: int | None = None, query_ids=None, locations=None, max_events: int | None = None, on_progress=None) -> dict:
         from django.db import models as dj_models
         from django.utils import timezone
         from events.models import Event, SearchQuery

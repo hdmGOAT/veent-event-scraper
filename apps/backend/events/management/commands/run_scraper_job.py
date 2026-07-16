@@ -118,15 +118,15 @@ class Command(BaseCommand):
         all_runs = list(
             ScraperRun.objects.filter(discord_message_id=run.discord_message_id)
         )
-        bw_by_run = {
-            r.id: (
-                BandwidthLog.objects.filter(scraper_run=r).aggregate(
-                    total=Sum("bytes_transferred")
-                )["total"]
-                or 0
-            )
-            for r in all_runs
-        }
+        run_ids = [r.id for r in all_runs]
+        totals = (
+            BandwidthLog.objects.filter(scraper_run_id__in=run_ids)
+            .values("scraper_run_id")
+            .annotate(total=Sum("bytes_transferred"))
+        )
+        bw_by_run = {r.id: 0 for r in all_runs}
+        for row in totals:
+            bw_by_run[row["scraper_run_id"]] = row["total"] or 0
         patch_run_all_progress(run.discord_message_id, all_runs, bw_by_run)
 
     def _notify_terminal(self, run, event_type: str, **kwargs) -> None:
@@ -253,7 +253,7 @@ class Command(BaseCommand):
                     else scraper.run(on_progress=flush_progress)
                 )
             )
-        except Exception:
+        except Exception as exc:
             tb = traceback.format_exc()
             handler.stop()
             root_logger.removeHandler(handler)
@@ -265,9 +265,10 @@ class Command(BaseCommand):
             run.save(update_fields=[
                 "status", "finished_at", "error_message", "updated_at",
             ])
-            if tb.startswith("session_expired:"):
-                # error_message form: "session_expired:<source>\n<traceback>"
-                source = tb.split(":", 1)[1].split("\n", 1)[0].strip()
+            exc_str = str(exc)
+            if exc_str.startswith("session_expired:"):
+                # error_message form: "session_expired:<source> — <reason>"
+                source = exc_str.split(":", 1)[1].split(" ", 1)[0].strip()
                 self._notify_terminal(run, "session_expired", source=source)
             else:
                 self._notify_terminal(run, "failed", error_message=tb)

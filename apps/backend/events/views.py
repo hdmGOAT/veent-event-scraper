@@ -944,7 +944,7 @@ def api_scraper_run_all(request):
     # id so each worker patches the shared message instead of posting its own.
     # No-op (message_id is None) when DISCORD_WEBHOOK_URL is unset.
     run_ids = [r.id for r in runs_created]
-    message_id = post_run_all_start(list(SCRAPERS.keys()))
+    message_id = post_run_all_start([r.scraper_key for r in runs_created])
     if message_id and run_ids:
         ScraperRun.objects.filter(id__in=run_ids).update(discord_message_id=message_id)
 

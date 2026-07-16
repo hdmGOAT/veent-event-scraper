@@ -255,6 +255,9 @@ def _build_scoreboard_embed(runs: list, bandwidth_by_run: dict) -> dict:
 
     for run in runs:
         status = run.status
+        err_msg = run.error_message or ""
+        if status == "failed" and err_msg.startswith("session_expired:"):
+            status = "session_expired"
         emoji = _STATUS_EMOJI.get(status, "❓")
         key = run.scraper_key
         if status == "queued":
@@ -270,7 +273,7 @@ def _build_scoreboard_embed(runs: list, bandwidth_by_run: dict) -> dict:
         elif status == "failed":
             any_failed = True
             done += 1
-            err = (run.error_message or "").splitlines()[0] if run.error_message else ""
+            err = err_msg.splitlines()[0] if err_msg else ""
             lines.append(f"{emoji} {key:<16} FAILED — {err[:60]}")
         else:
             # success or session_expired (both terminal / non-failed)
@@ -374,7 +377,7 @@ def _patch_scoreboard(message_id: str, payload: dict) -> None:
 
 
 def patch_run_all_progress(message_id: str, runs: list, bandwidth_by_run: dict) -> None:
-    """Rebuild the scoreboard embed and PATCH it in a daemon thread. Never raises."""
+    """Rebuild the scoreboard embed and PATCH it in a non-daemon thread. Never raises."""
     if not _webhook_url() or not message_id:
         return
     try:
