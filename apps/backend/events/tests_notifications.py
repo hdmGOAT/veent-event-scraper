@@ -125,6 +125,7 @@ class _StubRun:
         self.status = "running"
         self.scraper_key = scraper_key
         self.extra_counts = extra_counts
+        self.error_message = None
 
 
 class ScoreboardKeywordProgressTests(TestCase):
