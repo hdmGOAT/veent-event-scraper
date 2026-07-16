@@ -349,6 +349,12 @@ class ScraperRun(models.Model):
         "auth.User", on_delete=models.SET_NULL, null=True, blank=True,
         related_name="scraper_runs",
     )
+    # Discord message ID of the live run-all scoreboard this run belongs to.
+    # Set only for runs launched as part of a `run-all` batch; NULL for
+    # individual runs (which post their own standalone Discord message instead).
+    discord_message_id = models.CharField(
+        max_length=30, null=True, blank=True, db_index=True,
+    )
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

@@ -1574,7 +1574,13 @@ class FacebookEventsScraper(BaseScraper):
                 )
                 if on_progress is not None:
                     try:
-                        on_progress({"total_bytes": self._bytes_transferred})
+                        on_progress({
+                            "total_bytes": self._bytes_transferred,
+                            "keyword_index": i,
+                            "keyword_total": len(work_items),
+                            "keyword_created": result["created"],
+                            "keyword_updated": result["updated"],
+                        })
                     except Exception:
                         pass
                 _pause(3.0, 6.0)

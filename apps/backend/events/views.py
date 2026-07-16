@@ -919,17 +919,34 @@ def api_scraper_trigger(request, key):
 def api_scraper_run_all(request):
     # SECURITY NOTE: Same posture as api_scraper_trigger above — unauthenticated
     # intentionally for the same reasons. Revisit when real auth is added.
-    from .scrapers import SCRAPERS
+    from .models import ScraperRun
+    from .notifications import post_run_all_start
+    from .scrapers import RUN_ALL_EXCLUDED, SCRAPERS
 
     triggered_by = request.user if request.user.is_authenticated else None
     created = []
     skipped = []
+    runs_created = []
     for key in SCRAPERS:
-        run, already_active = trigger_scraper_run(key, triggered_by=triggered_by)
+        if key in RUN_ALL_EXCLUDED:
+            skipped.append(key)
+            continue
+        scraper_cls = SCRAPERS[key]
+        locations = AVAILABLE_LOCATIONS if getattr(scraper_cls, "supports_keywords", False) else None
+        run, already_active = trigger_scraper_run(key, triggered_by=triggered_by, locations=locations)
         if already_active:
             skipped.append(key)
         else:
+            runs_created.append(run)
             created.append({"key": key, "id": run.id, "status": run.status})
+
+    # Post the initial live scoreboard and tag every batch run with its message
+    # id so each worker patches the shared message instead of posting its own.
+    # No-op (message_id is None) when DISCORD_WEBHOOK_URL is unset.
+    run_ids = [r.id for r in runs_created]
+    message_id = post_run_all_start([r.scraper_key for r in runs_created])
+    if message_id and run_ids:
+        ScraperRun.objects.filter(id__in=run_ids).update(discord_message_id=message_id)
 
     return JsonResponse({"created": created, "skipped": skipped}, status=200)
 

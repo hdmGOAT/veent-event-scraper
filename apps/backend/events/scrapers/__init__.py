@@ -31,6 +31,9 @@ from .ticketspice import TicketSpiceScraper
 from .eventalways import EventAlwaysScraper
 from .tessera import TesseraScraper
 
+# Scrapers excluded from run-all (still triggerable individually).
+RUN_ALL_EXCLUDED = {"google_places"}
+
 # key -> scraper class. Add new scrapers here.
 SCRAPERS = {
     "facebook_events":  FacebookEventsScraper,
@@ -60,4 +63,4 @@ SCRAPERS = {
     "tessera": TesseraScraper,
 }
 
-__all__ = ["BaseScraper", "ScrapedEvent", "ScrapedOrganizer", "ScrapedVenue", "SCRAPERS"]
+__all__ = ["BaseScraper", "RUN_ALL_EXCLUDED", "SCRAPERS", "ScrapedEvent", "ScrapedOrganizer", "ScrapedVenue"]

@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 
-import requests as _requests
+from .proxy_manager import get_session as _get_session
 from .base import (
     BaseScraper,
     ScrapedEvent,
@@ -114,9 +114,11 @@ class LumaScraper(BaseScraper):
             if cursor:
                 params["pagination_cursor"] = cursor
             try:
-                resp = _requests.get(_API_URL, headers=_HEADERS, params=params, timeout=_TIMEOUT)
+                resp = _get_session().get(_API_URL, headers=_HEADERS, params=params, timeout=_TIMEOUT)
                 resp.raise_for_status()
                 data = resp.json()
+            except RuntimeError:
+                raise
             except Exception as exc:
                 logger.error("Luma: request failed lat=%s lon=%s: %s", lat, lon, exc)
                 break

@@ -1,0 +1,267 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 770" width="1000" height="770">
+  <defs>
+    <marker id="arr-blue"    markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#2563EB"/></marker>
+    <marker id="arr-green"   markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#10B981"/></marker>
+    <marker id="arr-red"     markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#EF4444"/></marker>
+    <marker id="arr-amber"   markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#F59E0B"/></marker>
+    <marker id="arr-indigo"  markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#6366F1"/></marker>
+    <marker id="arr-gray"    markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#94A3B8"/></marker>
+    <marker id="arr-discord" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#5865F2"/></marker>
+  </defs>
+
+  <style>
+    text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    .title         { font-size: 21px; font-weight: 700; fill: #0F172A; }
+    .subtitle      { font-size: 12px; fill: #64748B; }
+    .node-lbl      { font-size: 13px; font-weight: 700; fill: #FFFFFF; }
+    .node-sub      { font-size: 10px; fill: rgba(255,255,255,0.85); }
+    .node-amber    { font-size: 13px; font-weight: 700; fill: #92400E; }
+    .node-amber-s  { font-size: 10px; fill: #B45309; }
+    .section-lbl   { font-size: 10px; font-weight: 600; fill: #94A3B8; letter-spacing: 1px; }
+    .container-lbl { font-size: 13px; font-weight: 700; fill: #1D4ED8; }
+    .arrow-lbl     { font-size: 10px; fill: #475569; }
+    .legend-title  { font-size: 10px; font-weight: 700; fill: #64748B; }
+    .legend-text   { font-size: 10px; fill: #475569; }
+    .badge         { font-size: 9px;  font-weight: 700; fill: #FFFFFF; }
+    .note-title    { font-size: 10px; font-weight: 700; fill: #64748B; }
+    .note-body     { font-size: 9px;  fill: #94A3B8; }
+  </style>
+
+  <!-- Background -->
+  <rect width="1000" height="770" fill="#F8FAFC"/>
+
+  <!-- Title -->
+  <text x="500" y="30"  text-anchor="middle" class="title">Discord Notification Architecture</text>
+  <text x="500" y="47"  text-anchor="middle" class="subtitle">Veent Event Scraper — Outbound Status Alerts via Discord Webhook</text>
+
+  <!-- ═══════════════════════════════════════════════════════════════
+       LAYER 1  ·  TRIGGERS / CLIENTS
+       ═══════════════════════════════════════════════════════════════ -->
+
+  <!-- n8n Scheduler -->
+  <rect x="50"  y="65" width="168" height="78" rx="10" fill="#7C3AED"/>
+  <text x="134" y="90"  text-anchor="middle" class="node-lbl">n8n Scheduler</text>
+  <text x="134" y="106" text-anchor="middle" class="node-sub">DigitalOcean Droplet</text>
+  <text x="134" y="120" text-anchor="middle" class="node-sub">Mon 2 AM UTC cron</text>
+  <text x="134" y="134" text-anchor="middle" class="node-sub">POST /webhooks/scrape/</text>
+
+  <!-- SvelteKit Dashboard -->
+  <rect x="782" y="65" width="168" height="78" rx="10" fill="#EA580C"/>
+  <text x="866" y="90"  text-anchor="middle" class="node-lbl">SvelteKit Dashboard</text>
+  <text x="866" y="106" text-anchor="middle" class="node-sub">Scraper Center UI</text>
+  <text x="866" y="120" text-anchor="middle" class="node-sub">Manual trigger</text>
+  <text x="866" y="134" text-anchor="middle" class="node-sub">Polls scraper status</text>
+
+  <!-- ═══════════════════════════════════════════════════════════════
+       LAYER 2  ·  DJANGO BACKEND CONTAINER
+       ═══════════════════════════════════════════════════════════════ -->
+  <rect x="35" y="158" width="930" height="430" rx="14" fill="#EFF6FF" stroke="#BFDBFE" stroke-width="2"/>
+  <text x="88"  y="178" class="container-lbl">Django 6 Backend</text>
+  <text x="957" y="178" text-anchor="end" font-size="10" fill="#93C5FD">apps/backend/</text>
+
+  <!-- ── API LAYER ── -->
+  <text x="52"  y="207" class="section-lbl">API LAYER</text>
+
+  <!-- POST /api/scrapers/run-all/ -->
+  <rect x="68"  y="213" width="218" height="64" rx="8" fill="#1D4ED8"/>
+  <text x="177" y="234" text-anchor="middle" class="node-lbl">POST /api/scrapers/run-all/</text>
+  <text x="177" y="250" text-anchor="middle" class="node-sub">api_scraper_run_all()</text>
+  <text x="177" y="265" text-anchor="middle" class="node-sub">@csrf_exempt · @require_POST</text>
+
+  <!-- GET /api/scrapers/ -->
+  <rect x="714" y="213" width="218" height="64" rx="8" fill="#1D4ED8"/>
+  <text x="823" y="234" text-anchor="middle" class="node-lbl">GET /api/scrapers/</text>
+  <text x="823" y="250" text-anchor="middle" class="node-sub">api_scrapers() · api_scraper_runs()</text>
+  <text x="823" y="265" text-anchor="middle" class="node-sub">Returns ScraperRun history</text>
+
+  <!-- ── PROCESSING LAYER ── -->
+  <text x="52" y="305" class="section-lbl">PROCESSING LAYER</text>
+
+  <!-- runner.py -->
+  <rect x="68"  y="311" width="170" height="64" rx="8" fill="#0369A1"/>
+  <text x="153" y="333" text-anchor="middle" class="node-lbl">runner.py</text>
+  <text x="153" y="349" text-anchor="middle" class="node-sub">trigger_scraper_run()</text>
+  <text x="153" y="364" text-anchor="middle" class="node-sub">subprocess.Popen()</text>
+
+  <!-- run_scraper_job.py (subprocess worker) -->
+  <rect x="330" y="311" width="228" height="64" rx="8" fill="#0891B2"/>
+  <text x="444" y="331" text-anchor="middle" class="node-lbl">run_scraper_job.py</text>
+  <text x="444" y="347" text-anchor="middle" class="node-sub">subprocess worker</text>
+  <text x="444" y="362" text-anchor="middle" class="node-sub">BaseScraper.run() → saves status</text>
+
+  <!-- ScraperRun model -->
+  <rect x="652" y="311" width="185" height="64" rx="8" fill="#6366F1"/>
+  <text x="744" y="331" text-anchor="middle" class="node-lbl">ScraperRun</text>
+  <text x="744" y="347" text-anchor="middle" class="node-sub">status · error_message</text>
+  <text x="744" y="362" text-anchor="middle" class="node-sub">created_count · log_output</text>
+
+  <!-- ── NOTIFICATION LAYER ── -->
+  <text x="52"  y="408" class="section-lbl">NOTIFICATION LAYER  (NEW)</text>
+
+  <!-- notifications.py (NEW — amber highlight) -->
+  <rect x="330" y="414" width="228" height="64" rx="8" fill="#FFFBEB" stroke="#F59E0B" stroke-width="2.5"/>
+  <rect x="530" y="416" width="30" height="16" rx="4" fill="#F59E0B"/>
+  <text x="545" y="428" text-anchor="middle" class="badge">NEW</text>
+  <text x="444" y="436" text-anchor="middle" class="node-amber">notifications.py</text>
+  <text x="444" y="451" text-anchor="middle" class="node-amber-s">send_discord_notification(run)</text>
+  <text x="444" y="466" text-anchor="middle" class="node-amber-s">DISCORD_WEBHOOK_URL env var</text>
+
+  <!-- ═══════════════════════════════════════════════════════════════
+       LAYER 3  ·  EXTERNAL SERVICES
+       ═══════════════════════════════════════════════════════════════ -->
+
+  <!-- Discord -->
+  <rect x="35"  y="618" width="188" height="80" rx="10" fill="#5865F2"/>
+  <text x="129" y="643" text-anchor="middle" class="node-lbl">Discord</text>
+  <text x="129" y="659" text-anchor="middle" class="node-sub">#scraper-status channel</text>
+  <text x="129" y="674" text-anchor="middle" class="node-sub">Embedded webhook messages</text>
+  <text x="129" y="689" text-anchor="middle" class="node-sub">green · red · yellow embeds</text>
+
+  <!-- Neon PostgreSQL -->
+  <rect x="390" y="618" width="200" height="80" rx="10" fill="#059669"/>
+  <text x="490" y="643" text-anchor="middle" class="node-lbl">Neon PostgreSQL</text>
+  <text x="490" y="659" text-anchor="middle" class="node-sub">ScraperRun rows persisted</text>
+  <text x="490" y="674" text-anchor="middle" class="node-sub">created_count · error_message</text>
+  <text x="490" y="689" text-anchor="middle" class="node-sub">DATABASE_URL env var</text>
+
+  <!-- Optional n8n fallback note -->
+  <rect x="630" y="618" width="330" height="80" rx="8" fill="#F1F5F9" stroke="#CBD5E1" stroke-width="1.5" stroke-dasharray="5,3"/>
+  <text x="795" y="641" text-anchor="middle" class="note-title">Optional: n8n Fallback (belt-and-suspenders)</text>
+  <text x="795" y="657" text-anchor="middle" class="note-body">n8n polls GET /api/scrapers/runs/ after cron run</text>
+  <text x="795" y="671" text-anchor="middle" class="note-body">→ n8n Discord HTTP node fires on failures found</text>
+  <text x="795" y="685" text-anchor="middle" class="note-body">No backend changes needed for this layer</text>
+
+  <!-- ═══════════════════════════════════════════════════════════════
+       ARROWS  ·  render z-order: paths → label rects → label text
+       ═══════════════════════════════════════════════════════════════ -->
+
+  <!-- 1. n8n → POST /run-all/ -->
+  <path d="M134,143 L134,175 L177,175 L177,213"
+        fill="none" stroke="#2563EB" stroke-width="2" marker-end="url(#arr-blue)"/>
+
+  <!-- 2. POST /run-all/ → runner.py -->
+  <path d="M177,277 L177,293 L153,293 L153,311"
+        fill="none" stroke="#2563EB" stroke-width="2" marker-end="url(#arr-blue)"/>
+
+  <!-- 3. runner.py → run_scraper_job.py ("spawns") -->
+  <path d="M238,343 L330,343"
+        fill="none" stroke="#2563EB" stroke-width="2" marker-end="url(#arr-blue)"/>
+
+  <!-- 4. run_scraper_job.py → ScraperRun ("writes") -->
+  <path d="M558,343 L652,343"
+        fill="none" stroke="#6366F1" stroke-width="2" marker-end="url(#arr-indigo)"/>
+
+  <!-- 5. ScraperRun → Neon PostgreSQL ("stores") -->
+  <path d="M744,375 L744,575 L490,575 L490,618"
+        fill="none" stroke="#6366F1" stroke-width="2" marker-end="url(#arr-indigo)"/>
+
+  <!-- 6. SvelteKit → GET /api/scrapers/ (polls, dashed) -->
+  <path d="M866,143 L866,175 L823,175 L823,213"
+        fill="none" stroke="#94A3B8" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#arr-gray)"/>
+
+  <!-- 7. GET /api/scrapers/ → ScraperRun (reads, dashed) -->
+  <path d="M823,277 L823,293 L744,293 L744,311"
+        fill="none" stroke="#94A3B8" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#arr-gray)"/>
+
+  <!-- 8. run_scraper_job.py → notifications.py  SUCCESS (green) -->
+  <path d="M425,375 L425,414"
+        fill="none" stroke="#10B981" stroke-width="2.5" marker-end="url(#arr-green)"/>
+
+  <!-- 9. run_scraper_job.py → notifications.py  FAILED (red) -->
+  <path d="M452,375 L452,414"
+        fill="none" stroke="#EF4444" stroke-width="2.5" marker-end="url(#arr-red)"/>
+
+  <!-- 10. run_scraper_job.py → notifications.py  SESSION EXPIRED (amber, exits right) -->
+  <path d="M558,336 L592,336 L592,449 L558,449"
+        fill="none" stroke="#F59E0B" stroke-width="2" marker-end="url(#arr-amber)"/>
+
+  <!-- 11. runner.py → notifications.py  LAUNCH FAIL (red dashed) -->
+  <path d="M153,375 L153,440 L330,440"
+        fill="none" stroke="#EF4444" stroke-width="2" stroke-dasharray="6,3" marker-end="url(#arr-red)"/>
+
+  <!-- 12. notifications.py → Discord  WEBHOOK POST (discord purple) -->
+  <path d="M444,478 L444,542 L129,542 L129,618"
+        fill="none" stroke="#5865F2" stroke-width="2.5" marker-end="url(#arr-discord)"/>
+
+  <!-- ── ARROW LABEL RECTS (drawn above paths, below components) ── -->
+
+  <!-- 1: POST (on first horizontal segment y=175) -->
+  <rect x="130" y="165" width="38" height="16" rx="3" fill="#EFF6FF" opacity="0.95"/>
+  <text x="149" y="177" text-anchor="middle" class="arrow-lbl" fill="#2563EB">POST</text>
+
+  <!-- 3: spawns -->
+  <rect x="250" y="334" width="58" height="16" rx="3" fill="#EFF6FF" opacity="0.95"/>
+  <text x="279" y="346" text-anchor="middle" class="arrow-lbl" fill="#2563EB">spawns</text>
+
+  <!-- 4: writes -->
+  <rect x="574" y="334" width="46" height="16" rx="3" fill="#EFF6FF" opacity="0.95"/>
+  <text x="597" y="346" text-anchor="middle" class="arrow-lbl" fill="#6366F1">writes</text>
+
+  <!-- 5: stores (on vertical, right of path) -->
+  <rect x="748" y="466" width="42" height="16" rx="3" fill="#EFF6FF" opacity="0.95"/>
+  <text x="769" y="478" text-anchor="middle" class="arrow-lbl" fill="#6366F1">stores</text>
+
+  <!-- 6: polls -->
+  <rect x="830" y="165" width="38" height="16" rx="3" fill="#EFF6FF" opacity="0.95"/>
+  <text x="849" y="177" text-anchor="middle" class="arrow-lbl" fill="#94A3B8">polls</text>
+
+  <!-- 7: reads -->
+  <rect x="756" y="283" width="40" height="16" rx="3" fill="#EFF6FF" opacity="0.95"/>
+  <text x="776" y="295" text-anchor="middle" class="arrow-lbl" fill="#94A3B8">reads</text>
+
+  <!-- 8: ✓ success (left of green arrow at x=425) -->
+  <rect x="376" y="388" width="46" height="16" rx="3" fill="#EFF6FF" opacity="0.95"/>
+  <text x="399" y="400" text-anchor="middle" class="arrow-lbl" fill="#10B981">✓ success</text>
+
+  <!-- 9: ✗ failed (right of red arrow at x=452) -->
+  <rect x="456" y="388" width="40" height="16" rx="3" fill="#EFF6FF" opacity="0.95"/>
+  <text x="476" y="400" text-anchor="middle" class="arrow-lbl" fill="#EF4444">✗ failed</text>
+
+  <!-- 10: ⚠ session (right of amber path at x=592) -->
+  <rect x="596" y="383" width="70" height="16" rx="3" fill="#EFF6FF" opacity="0.95"/>
+  <text x="631" y="395" text-anchor="middle" class="arrow-lbl" fill="#F59E0B">⚠ session exp.</text>
+
+  <!-- 11: launch fail (midpoint of horizontal at y=440) -->
+  <rect x="192" y="431" width="70" height="16" rx="3" fill="#EFF6FF" opacity="0.95"/>
+  <text x="227" y="443" text-anchor="middle" class="arrow-lbl" fill="#EF4444">launch fail</text>
+
+  <!-- 12: webhook POST (midpoint of horizontal at y=542) -->
+  <rect x="240" y="533" width="82" height="16" rx="3" fill="#F8FAFC" opacity="0.95"/>
+  <text x="281" y="545" text-anchor="middle" class="arrow-lbl" fill="#5865F2">webhook POST</text>
+
+  <!-- ═══════════════════════════════════════════════════════════════
+       LEGEND
+       ═══════════════════════════════════════════════════════════════ -->
+  <rect x="35" y="714" width="930" height="46" rx="8" fill="#F1F5F9" stroke="#E2E8F0" stroke-width="1"/>
+  <text x="52" y="730" class="legend-title">LEGEND</text>
+
+  <!-- Row 1 -->
+  <line x1="102" y1="727" x2="128" y2="727" stroke="#2563EB" stroke-width="2"   marker-end="url(#arr-blue)"/>
+  <text x="133" y="730" class="legend-text">Normal data flow</text>
+
+  <line x1="252" y1="727" x2="278" y2="727" stroke="#10B981" stroke-width="2.5" marker-end="url(#arr-green)"/>
+  <text x="283" y="730" class="legend-text">Success notification</text>
+
+  <line x1="402" y1="727" x2="428" y2="727" stroke="#EF4444" stroke-width="2.5" marker-end="url(#arr-red)"/>
+  <text x="433" y="730" class="legend-text">Failure notification</text>
+
+  <line x1="552" y1="727" x2="578" y2="727" stroke="#F59E0B" stroke-width="2"   marker-end="url(#arr-amber)"/>
+  <text x="583" y="730" class="legend-text">Session expired</text>
+
+  <line x1="682" y1="727" x2="708" y2="727" stroke="#6366F1" stroke-width="2"   marker-end="url(#arr-indigo)"/>
+  <text x="713" y="730" class="legend-text">DB write / store</text>
+
+  <!-- Row 2 -->
+  <line x1="102" y1="751" x2="128" y2="751" stroke="#EF4444" stroke-width="2"   stroke-dasharray="5,3" marker-end="url(#arr-red)"/>
+  <text x="133" y="754" class="legend-text">Launch failure (subprocess)</text>
+
+  <line x1="302" y1="751" x2="328" y2="751" stroke="#94A3B8" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#arr-gray)"/>
+  <text x="333" y="754" class="legend-text">Read / polling</text>
+
+  <line x1="432" y1="751" x2="458" y2="751" stroke="#5865F2" stroke-width="2.5" marker-end="url(#arr-discord)"/>
+  <text x="463" y="754" class="legend-text">Discord webhook delivery</text>
+
+  <rect x="612" y="744" width="16" height="12" rx="2" fill="#FFFBEB" stroke="#F59E0B" stroke-width="1.5"/>
+  <text x="633" y="754" class="legend-text">New module (notifications.py)</text>
+
+</svg>
