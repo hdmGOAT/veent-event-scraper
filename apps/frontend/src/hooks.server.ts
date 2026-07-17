@@ -109,7 +109,17 @@ export const handle: Handle = async ({ event, resolve }) => {
 			let meStatus: number;
 			try {
 				const meRes = await fetch(`${DJANGO_URL}/api/auth/me/`, {
-					headers: { Cookie: event.request.headers.get('Cookie') ?? '' },
+					headers: {
+						Cookie: event.request.headers.get('Cookie') ?? '',
+						// Tell Django the original request was HTTPS. Without this the
+						// server-to-server call is plain HTTP, so with DEBUG=false
+						// SECURE_SSL_REDIRECT would 301-redirect it — the gate would then
+						// read a non-200/401 status and fail closed, blocking every login.
+						// The edge proxy (Caddy/nginx) sets X-Forwarded-Proto on browser
+						// traffic; relay it, defaulting to https for the container network
+						// where this server-to-server call originates.
+						'X-Forwarded-Proto': event.request.headers.get('X-Forwarded-Proto') ?? 'https'
+					},
 					signal: AbortSignal.timeout(AUTH_FETCH_TIMEOUT_MS)
 				});
 				meStatus = meRes.status;
