@@ -20,7 +20,9 @@ export const POST: RequestHandler = async ({ request, cookies }) => {
 				'Content-Type': 'application/json',
 				Cookie: request.headers.get('Cookie') ?? '',
 				'X-CSRFToken': csrfToken
-			}
+			},
+			// Bound the call so local cookie deletion always proceeds promptly.
+			signal: AbortSignal.timeout(5_000)
 		});
 	} catch {
 		// Ignore backend errors — still clear local cookies and redirect below.

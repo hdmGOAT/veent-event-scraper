@@ -4,7 +4,13 @@ import type { Actions } from './$types';
 import type { Cookies } from '@sveltejs/kit';
 
 const DJANGO_URL = (env.DJANGO_API_URL ?? 'http://localhost:8000').replace(/\/$/, '');
-const IS_PRODUCTION = env.ENVIRONMENT === 'production';
+// Fail closed: treat every environment except an explicit `development` as
+// production so cookie security (Secure flag) is never silently downgraded by a
+// missing/misspelled ENVIRONMENT value. Matches hooks.server.ts.
+const IS_PRODUCTION = env.ENVIRONMENT !== 'development';
+
+// Bound the server-to-Django auth calls so a stalled backend can't hang login.
+const AUTH_FETCH_TIMEOUT_MS = 5_000;
 
 /**
  * Extract the value of a named cookie from an array of raw `Set-Cookie` header
@@ -89,7 +95,9 @@ export const actions: Actions = {
 		// Step 1: obtain a CSRF token from Django (sets the csrftoken cookie).
 		let csrfToken = '';
 		try {
-			const csrfRes = await fetch(`${DJANGO_URL}/api/auth/csrf/`);
+			const csrfRes = await fetch(`${DJANGO_URL}/api/auth/csrf/`, {
+				signal: AbortSignal.timeout(AUTH_FETCH_TIMEOUT_MS)
+			});
 			csrfToken = readSetCookieValue(csrfRes.headers.getSetCookie(), 'csrftoken');
 		} catch {
 			throw error(502, 'Login service unavailable');
@@ -105,7 +113,8 @@ export const actions: Actions = {
 					'X-CSRFToken': csrfToken,
 					Cookie: `csrftoken=${csrfToken}`
 				},
-				body: JSON.stringify({ username, password })
+				body: JSON.stringify({ username, password }),
+				signal: AbortSignal.timeout(AUTH_FETCH_TIMEOUT_MS)
 			});
 		} catch {
 			throw error(502, 'Login service unavailable');

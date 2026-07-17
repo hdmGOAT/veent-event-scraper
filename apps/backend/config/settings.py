@@ -49,14 +49,21 @@ _load_dotenv(BASE_DIR / ".env")
 
 # SECURITY WARNING: don't run with debug turned on in production!
 # DEBUG defaults to False (safe production default); set DEBUG=true in .env for dev.
-DEBUG = os.environ.get('DEBUG', 'False').lower() not in ('false', '0', 'no')
+# Parse against explicit allowlists so a typo (e.g. DEBUG=flase) fails loudly
+# instead of silently enabling debug mode + disabling the prod security block/Axes.
+_debug_raw = os.environ.get('DEBUG', 'false').strip().lower()
+_DEBUG_TRUE = {'true', '1', 'yes', 'on'}
+_DEBUG_FALSE = {'false', '0', 'no', 'off', ''}
+if _debug_raw not in _DEBUG_TRUE | _DEBUG_FALSE:
+    raise ImproperlyConfigured(f"DEBUG must be a boolean-like value, got {_debug_raw!r}")
+DEBUG = _debug_raw in _DEBUG_TRUE
 
 # SECURITY WARNING: keep the secret key used in production secret!
 # The key that was here is burned — generate a new one with:
 #   python -c "import secrets; print(secrets.token_urlsafe(50))"
 SECRET_KEY = os.environ.get('SECRET_KEY')
-if not DEBUG and not SECRET_KEY:
-    raise ImproperlyConfigured("SECRET_KEY must be set in production")
+if not SECRET_KEY:
+    raise ImproperlyConfigured("SECRET_KEY must be set")
 
 # Fallback host list applies only when the ALLOWED_HOSTS env var is absent (dev convenience).
 _hosts_env = os.environ.get('ALLOWED_HOSTS', '')

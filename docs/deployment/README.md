@@ -607,8 +607,13 @@ Django session — they are guarded by per-user auth at both the SvelteKit gate 
 the Django layer. All public `/api/*` traffic reaches Django only through the SvelteKit
 reverse proxy (see §7.3). For machine-to-machine automation, point n8n at Django on
 `127.0.0.1:8000` directly (localhost-only, never exposed by nginx) and log in with a
-dedicated operator account — create one with `create_user` (see §5), obtain a `sessionid`
-cookie via `POST /api/auth/login/`, and reuse it on the HTTP Request nodes. Do not add a
+dedicated operator account — create one with `create_user` (see §5). Log in via
+`POST /api/auth/login/` and capture **both** cookies from the response's `Set-Cookie`
+headers: `sessionid` **and** `csrftoken`. Django session auth enforces CSRF on every
+mutating request, so each POST HTTP Request node must send the `sessionid` cookie **and**
+the `csrftoken` value in an `X-CSRFToken` header — without the header,
+`POST /api/scrapers/run-all/` and `POST /api/pipeline/push/` return **403 Forbidden**.
+GET polling (e.g. run status) needs only the `sessionid` cookie. Do not add a
 public nginx `/api/` → Django route; that would re-open the auth bypass this deployment
 closes.
 

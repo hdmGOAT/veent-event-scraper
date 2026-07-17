@@ -8,7 +8,7 @@ certifi==2026.5.20
 charset-normalizer==3.4.7
 dj-database-url
 Django
-django-axes
+django-axes[ipware]
 gunicorn
 idna==3.18
 lxml==6.1.1

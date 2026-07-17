@@ -52,6 +52,8 @@ def api_auth_login(request):
         payload = json.loads(request.body or b"{}")
     except (json.JSONDecodeError, ValueError):
         return JsonResponse({"error": "invalid JSON body"}, status=400)
+    if not isinstance(payload, dict):
+        return JsonResponse({"error": "JSON body must be an object"}, status=400)
 
     username = (payload.get("username") or "").strip()
     password = payload.get("password") or ""

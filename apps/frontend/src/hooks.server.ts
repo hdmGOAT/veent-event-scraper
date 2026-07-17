@@ -7,7 +7,15 @@ import { env } from '$env/dynamic/private';
 // environment in production (adapter-node).
 const DJANGO_URL = (env.DJANGO_API_URL ?? 'http://localhost:8000').replace(/\/$/, '');
 const NODE_URL = (env.NODE_API_URL ?? 'http://localhost:8001').replace(/\/$/, '');
-const IS_PRODUCTION = env.ENVIRONMENT === 'production';
+
+// Fail closed: the auth gate is active for EVERY environment except an explicit
+// `ENVIRONMENT=development`. A missing or misspelled value therefore keeps auth
+// ON rather than silently disabling the gate (and secure cookies).
+const IS_PRODUCTION = env.ENVIRONMENT !== 'development';
+
+// Short deadline for the per-request session check so a stalled Django can't hang
+// protected requests indefinitely.
+const AUTH_FETCH_TIMEOUT_MS = 5_000;
 
 // Paths that never require an authenticated Django session. `/_app/`
 // (SvelteKit static chunks) is matched by prefix below.
@@ -30,6 +38,13 @@ const isPublicPath = (pathname: string): boolean =>
 
 const redirectToLogin = (): Response =>
 	new Response(null, { status: 302, headers: { Location: '/login' } });
+
+// Returned when the session check cannot be completed (Django down / timeout /
+// unexpected status). Fail closed — the Node upstream (/node-api/*) has no auth
+// of its own, so letting requests through on a backend outage would bypass the
+// gate entirely.
+const authUnavailable = (): Response =>
+	new Response('Authentication service unavailable', { status: 503 });
 
 const proxyRequest = async (targetUrl: string, request: Request): Promise<Response> => {
 	const headers = new Headers(request.headers);
@@ -91,25 +106,25 @@ export const handle: Handle = async ({ event, resolve }) => {
 			// host — acceptable for this admin dashboard's traffic. Forward ONLY
 			// the browser's Cookie header (a simple HEAD-style check); do not
 			// forward the body or content-type.
+			let meStatus: number;
 			try {
 				const meRes = await fetch(`${DJANGO_URL}/api/auth/me/`, {
-					headers: { Cookie: event.request.headers.get('Cookie') ?? '' }
+					headers: { Cookie: event.request.headers.get('Cookie') ?? '' },
+					signal: AbortSignal.timeout(AUTH_FETCH_TIMEOUT_MS)
 				});
-				if (meRes.status === 401) {
-					return redirectToLogin();
-				}
-				// Any non-200/401 status (502/503) means the backend is
-				// temporarily unavailable — let the request through with a warning
-				// rather than locking users out of a down backend.
-				if (meRes.status !== 200) {
-					console.warn(
-						`[auth] /api/auth/me returned ${meRes.status}; allowing request through (backend may be unavailable).`
-					);
-				}
+				meStatus = meRes.status;
 			} catch (err) {
-				// Network error reaching Django — fail open rather than lock users
-				// out of a temporarily unreachable backend.
-				console.warn('[auth] /api/auth/me check failed (network error); allowing request through.', err);
+				// Network error / timeout reaching Django — fail CLOSED (block).
+				console.warn('[auth] /api/auth/me check failed; blocking request (fail-closed).', err);
+				return authUnavailable();
+			}
+			if (meStatus === 401) {
+				return redirectToLogin();
+			}
+			if (meStatus !== 200) {
+				// Unexpected upstream status — fail closed rather than allow through.
+				console.warn(`[auth] /api/auth/me returned ${meStatus}; blocking request (fail-closed).`);
+				return authUnavailable();
 			}
 		}
 	}
