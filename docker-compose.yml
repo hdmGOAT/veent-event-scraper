@@ -1,0 +1,85 @@
+# Veent Event Scraper — full stack in four containers.
+#
+#   caddy     → TLS termination + reverse proxy (automatic Let's Encrypt)
+#   frontend  → SvelteKit dashboard: auth gate + /api proxy to Django
+#   backend   → Django (gunicorn) + Playwright/Chromium scrapers
+#   n8n       → pipeline scheduler (calls backend directly on the internal net)
+#
+# The database is external (Neon) — set DATABASE_URL in .env.
+#
+# Quickstart:
+#   cp .env.example .env      # then fill in secrets
+#   docker compose up -d --build
+
+services:
+  backend:
+    build:
+      context: ./apps/backend
+    # required:false so compose commands work before .env exists; if it is still
+    # missing at `up` time Django fails fast with a clear "SECRET_KEY must be set".
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      # `backend` (the internal service hostname) must be an allowed host so the
+      # frontend's server-to-server auth check and proxied /api/* calls — which
+      # arrive with Host: backend:8000 — are accepted by Django.
+      ALLOWED_HOSTS: "${ALLOWED_HOSTS:-localhost,127.0.0.1},backend"
+    volumes:
+      # FB/IG session cookie files referenced by FB_COOKIES_FILE / IG_COOKIES_FILE.
+      # Point those vars at /cookies/... in .env.
+      - ./cookies:/cookies:ro
+    expose:
+      - "8000"
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: .
+      dockerfile: apps/frontend/Dockerfile
+    environment:
+      # `production` enables the per-user auth gate; any other value = dev (no gate).
+      ENVIRONMENT: "${ENVIRONMENT:-production}"
+      # Django reached over the internal Docker network, never exposed publicly.
+      DJANGO_API_URL: "http://backend:8000"
+    depends_on:
+      - backend
+    expose:
+      - "3000"
+    restart: unless-stopped
+
+  n8n:
+    image: docker.n8n.io/n8nio/n8n
+    environment:
+      N8N_HOST: "${DOMAIN:-localhost}"
+      N8N_PORT: "5678"
+      N8N_PROTOCOL: "https"
+      N8N_PATH: "/n8n/"
+      WEBHOOK_URL: "https://${DOMAIN:-localhost}/n8n/"
+    volumes:
+      - n8n_data:/home/node/.n8n
+    expose:
+      - "5678"
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: "${DOMAIN:-localhost}"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - frontend
+      - backend
+      - n8n
+    restart: unless-stopped
+
+volumes:
+  n8n_data:
+  caddy_data:
+  caddy_config:
