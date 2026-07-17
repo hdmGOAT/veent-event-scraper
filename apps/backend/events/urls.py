@@ -15,6 +15,11 @@ urlpatterns = [
     path("review/", views.review_dashboard, name="review_dashboard"),
     path("review/venues/<slug:slug>/", views.review_venue_detail, name="review_venue_detail"),
     path("review/venues/<slug:slug>/status/", views.review_set_status, name="review_set_status"),
+    # Auth — per-user Django session endpoints (consumed by the SvelteKit gate)
+    path("api/auth/csrf/", views.api_auth_csrf, name="api_auth_csrf"),
+    path("api/auth/login/", views.api_auth_login, name="api_auth_login"),
+    path("api/auth/logout/", views.api_auth_logout, name="api_auth_logout"),
+    path("api/auth/me/", views.api_auth_me, name="api_auth_me"),
     # JSON API — consumed by the SvelteKit frontend
     path("api/stats/", views.api_stats, name="api_stats"),
     path("api/events/by-source/", views.api_events_by_source, name="api_events_by_source"),
@@ -44,9 +49,6 @@ urlpatterns = [
     path("api/search-queries/<int:pk>/run/", views.api_search_query_run, name="api_search_query_run"),
     path("api/search-queries/<int:pk>/", views.api_search_query_detail, name="api_search_query_detail"),
     path("api/search-queries/", views.api_search_queries, name="api_search_queries"),
-    # Tracker notes
-    path("api/tracker-notes/", views.api_tracker_notes, name="api_tracker_notes"),
-    path("api/tracker-notes/<int:pk>/", views.api_tracker_note_detail, name="api_tracker_note_detail"),
     # n8n automation webhooks
     path("webhooks/scrape/", views.scraper_webhook, name="scraper_webhook"),
     path("webhooks/ingest-events/", views.ingest_events_webhook, name="ingest_events_webhook"),
