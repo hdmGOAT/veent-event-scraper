@@ -306,7 +306,6 @@ def api_stats(request):
     ).count()
     total_organizers = Organizer.objects.count()
     confirmed_organizers = Organizer.objects.filter(status="confirmed").count()
-    pending_organizers = Organizer.objects.filter(status="pending").count()
     active_sources = (
         Event.objects.exclude(source="").values("source").distinct().count()
     )
@@ -324,7 +323,6 @@ def api_stats(request):
             "verified_venues": verified_venues,
             "total_organizers": total_organizers,
             "confirmed_organizers": confirmed_organizers,
-            "pending_organizers": pending_organizers,
             "active_sources": active_sources,
             "pending_push": pending_push,
             "uncategorized": uncategorized,

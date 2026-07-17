@@ -9,7 +9,6 @@ export interface Stats {
 	verified_venues: number;
 	total_organizers: number;
 	confirmed_organizers: number;
-	pending_organizers: number;
 	active_sources: number;
 	pending_push: number;
 	uncategorized: number;
