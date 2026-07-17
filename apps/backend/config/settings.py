@@ -172,7 +172,12 @@ DATABASES = {
     'default': dj_database_url.config(
         default=_db_url,
         conn_max_age=600,
-        ssl_require=not _db_url.startswith('sqlite'),
+        # Require SSL only for a real (non-sqlite) database in production.
+        # Gated on `not DEBUG` so dev/CI Postgres (which may not support SSL —
+        # e.g. the plain postgres service in CI) still connects. Production runs
+        # with DEBUG=False against a TLS-capable managed DB (Neon), so SSL is
+        # enforced there. Consistent with the other `not DEBUG` security gates.
+        ssl_require=not _db_url.startswith('sqlite') and not DEBUG,
     )
 }
 
