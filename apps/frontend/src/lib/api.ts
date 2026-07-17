@@ -19,7 +19,6 @@ import type {
 	SearchQuery,
 	SourceCount,
 	Stats,
-	TrackerNote,
 	VenueDetail,
 	VenueMapPin,
 	VenueRow
@@ -28,7 +27,7 @@ import type {
 type Fetch = typeof fetch;
 
 async function get<T>(path: string, fetchFn: Fetch = fetch): Promise<T> {
-	const res = await fetchFn(`/api${path}`);
+	const res = await fetchFn(`/api${path}`, { credentials: 'include' });
 	if (!res.ok) {
 		throw new Error(`API ${path} failed: ${res.status} ${res.statusText}`);
 	}
@@ -178,9 +177,5 @@ export const api = {
 	runSearchQuery: (id: number) =>
 		post<{ id: number; status: ScraperRunStatus; scraper_key: string }>(`/search-queries/${id}/run/`),
 	getProxySetting: (f?: Fetch) => get<{ enabled: boolean }>('/settings/proxy/', f),
-	setProxySetting: (enabled: boolean) => postJson<{ enabled: boolean }>('/settings/proxy/', { enabled }),
-	trackerNotes: (f?: Fetch) => get<TrackerNote[]>('/tracker-notes/', f),
-	upsertNote: (entity_type: 'event' | 'organizer', entity_slug: string, content: string) =>
-		postJson<TrackerNote>('/tracker-notes/', { entity_type, entity_slug, content }),
-	deleteNote: (id: number) => del(`/tracker-notes/${id}/`)
+	setProxySetting: (enabled: boolean) => postJson<{ enabled: boolean }>('/settings/proxy/', { enabled })
 };

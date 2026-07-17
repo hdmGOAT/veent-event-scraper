@@ -11,11 +11,12 @@ SvelteKit (Node adapter), and n8n as the pipeline scheduler.
 2. [How the Scrapers Work](#2-how-the-scrapers-work)
 3. [System Requirements](#3-system-requirements)
 4. [Environment Variables](#4-environment-variables)
-5. [One-Time Server Setup](#5-one-time-server-setup)
-6. [Application Deployment](#6-application-deployment)
-7. [n8n Pipeline Automation](#7-n8n-pipeline-automation)
-8. [Session Cookie Renewal](#8-session-cookie-renewal)
-9. [Monitoring & Maintenance](#9-monitoring--maintenance)
+5. [Auth Model & User Management](#5-auth-model--user-management)
+6. [One-Time Server Setup](#6-one-time-server-setup)
+7. [Application Deployment](#7-application-deployment)
+8. [n8n Pipeline Automation](#8-n8n-pipeline-automation)
+9. [Session Cookie Renewal](#9-session-cookie-renewal)
+10. [Monitoring & Maintenance](#10-monitoring--maintenance)
 
 ---
 
@@ -26,15 +27,18 @@ DigitalOcean Droplet (Ubuntu 24.04, 4 GB RAM minimum)
 │
 ├── nginx  (port 80 / 443, TLS via certbot)
 │   ├── /          → SvelteKit Node server  (port 3000)
-│   ├── /api/*     → Django gunicorn        (port 8000)
+│   ├── /api/*     → SvelteKit Node server  (port 3000, proxied → Django)
 │   └── /n8n/*     → n8n web UI             (port 5678)
 │
-├── gunicorn       — Django app server (WSGI)
+├── gunicorn       — Django app server (WSGI, 127.0.0.1:8000, localhost-only)
 │   └── apps/backend/   Django project
 │       ├── Playwright + Chromium  (headless, via scraper jobs)
 │       └── Groq API calls         (categorization + structuring)
 │
-├── SvelteKit      — operational dashboard (Node.js, port 3000)
+├── SvelteKit      — operational dashboard + reverse proxy (Node.js, port 3000)
+│   └── hooks.server.ts enforces per-user Django session auth on EVERY request
+│       (validates the sessionid cookie against Django /api/auth/me/),
+│       then proxies /api/* → Django (8000) and /node-api/* → Node (8001)
 │
 └── n8n            — pipeline scheduler / webhook automator
     ├── POST /api/scrapers/run-all/   → triggers all active scrapers
@@ -153,8 +157,8 @@ npm install -g pnpm
 | DataImpulse | Residential proxy for FB/IG | dataimpulse.com |
 | Google Places API | Venue enrichment (optional) | console.cloud.google.com |
 | AllEvents API | Event discovery API | allevents.developer.azure-api.net |
-| Facebook cookies | FB scraper auth | Exported from your browser (see §8) |
-| Instagram cookies | IG scraper auth | Exported from your browser (see §8) |
+| Facebook cookies | FB scraper auth | Exported from your browser (see §9) |
+| Instagram cookies | IG scraper auth | Exported from your browser (see §9) |
 
 ---
 
@@ -164,8 +168,13 @@ Copy `apps/backend/.env.example` to `apps/backend/.env` and fill in every value.
 
 ```bash
 # ── Django ────────────────────────────────────────────────────────────────────
-SECRET_KEY=<long random string — use: python -c "import secrets; print(secrets.token_urlsafe(50))">
+# SECRET_KEY MUST be a freshly generated value. The key previously committed to
+# git history is permanently burned — do NOT reuse it. Generate a new one:
+#   python -c "import secrets; print(secrets.token_urlsafe(50))"
+SECRET_KEY=<long random string — see command above>
 DEBUG=false
+ALLOWED_HOSTS=your-domain.com
+PROD_ORIGIN=https://your-domain.com
 DATABASE_URL=postgresql://user:pass@host/dbname?sslmode=require
 
 # ── Groq ──────────────────────────────────────────────────────────────────────
@@ -196,14 +205,107 @@ PLACES_API_KEY=AIza...
 ALLEVENTS_API_KEY=your-key
 ```
 
+### Frontend (SvelteKit) env vars
+
+The SvelteKit process reads these at start-up (copy `apps/frontend/.env.example` →
+`apps/frontend/.env`, or export them in the PM2 / systemd unit):
+
+```bash
+# ── SvelteKit ─────────────────────────────────────────────────────────────────
+ENVIRONMENT=production          # enables per-user auth (validates against Django); anything else = dev (no gate)
+DJANGO_API_URL=http://localhost:8000   # Django target the auth gate + proxy call
+NODE_API_URL=http://localhost:8001
+```
+
+The old shared-password vars `DASHBOARD_PASSWORD` and `SESSION_SECRET` are **retired** —
+the auth gate now validates each request against a per-user Django session (see §5). No
+frontend password secret is required; the gate calls Django's `/api/auth/me/` using
+`DJANGO_API_URL`.
+
 **Do not commit `.env`** — it is in `.gitignore`. Store it in DigitalOcean's droplet directly
 or use a secrets manager.
 
 ---
 
-## 5. One-Time Server Setup
+## 5. Auth Model & User Management
 
-### 5.1 Create a deploy user
+### Auth model
+
+The dashboard uses **per-user Django session authentication**. Each operator logs in with
+their own username and password on `/login`; on success Django issues a `sessionid` cookie
+that the SvelteKit proxy relays to the browser. `hooks.server.ts` gates every request by
+validating that cookie against Django's `/api/auth/me/` endpoint.
+
+The previous **shared-password gate** (`DASHBOARD_PASSWORD` + `SESSION_SECRET`, HMAC `sess`
+cookie) is **removed**. There is no shared password anymore — you must create user accounts
+before the first production deploy or no one will be able to log in.
+
+Auth is only enforced when `ENVIRONMENT=production`. Any other value runs in dev mode with
+no auth gate.
+
+### First-time setup (run once, before first deploy)
+
+django-axes ships its own tables for brute-force logging. Apply its migration:
+
+```bash
+cd apps/backend
+python manage.py migrate axes   # creates axes_accesslog + axes_accessfailurelog
+```
+
+(The main `python manage.py migrate` in §6.3 also applies this; running `migrate axes`
+explicitly is only needed if you are adding auth to an already-migrated database.)
+
+### Creating users
+
+There is no automatic user seeding — create accounts manually.
+
+**Staff user** (can also reach Django `/admin/` and the `/review/` moderation UI):
+
+```bash
+cd apps/backend
+python manage.py createsuperuser
+```
+
+**Regular operator** (dashboard access only — no `/admin/` or `/review/`):
+
+```bash
+cd apps/backend
+python manage.py shell -c "from django.contrib.auth.models import User; User.objects.create_user('ops', '', 'securepassword')"
+```
+
+**Staff vs. regular:** the dashboard's `/api/*` guards check `is_authenticated`, not
+`is_staff`, so both account types can use the SvelteKit dashboard. Only staff users
+(`is_staff=True`, created via `createsuperuser`) can additionally reach `/admin/` and
+`/review/`, which are protected by `@staff_member_required`.
+
+### Brute-force lockout (django-axes)
+
+After **5 failed login attempts** from the same username + IP, that combination is locked
+for **1 hour**. Both tunables are overridable via env (`AXES_FAILURE_LIMIT`,
+`AXES_COOLOFF_HOURS`; see `apps/backend/.env.example`).
+
+To unlock a user early:
+
+```bash
+cd apps/backend
+python manage.py axes_reset --username <name>   # unlock one username
+python manage.py axes_reset_logs                # clear all lockout records
+```
+
+### Belt-and-suspenders enforcement
+
+All `/api/*` endpoints enforce session auth at the **Django layer** as well as at the
+SvelteKit gate. A direct unauthenticated hit to Django (`http://localhost:8000/api/events/`)
+returns JSON `{"error": "authentication required"}` with HTTP 401 — never a redirect. Even
+if nginx or the SvelteKit proxy were misconfigured, Django rejects unauthenticated `/api/*`
+requests on its own. Webhook endpoints (`/webhooks/*`) are unaffected — they authenticate
+via `X-Scraper-Key`, not sessions.
+
+---
+
+## 6. One-Time Server Setup
+
+### 6.1 Create a deploy user
 
 ```bash
 adduser veent
@@ -211,14 +313,14 @@ usermod -aG sudo veent
 su - veent
 ```
 
-### 5.2 Clone the repo
+### 6.2 Clone the repo
 
 ```bash
 git clone https://github.com/<your-org>/veent-event-scraper.git /home/veent/app
 cd /home/veent/app
 ```
 
-### 5.3 Backend (Django)
+### 6.3 Backend (Django)
 
 ```bash
 cd apps/backend
@@ -234,11 +336,17 @@ playwright install chromium
 # Copy and fill in environment variables
 cp .env.example .env
 nano .env
+# IMPORTANT: SECRET_KEY must be a freshly generated value (see §4). The key that
+# was previously committed to git is burned — reusing it is insecure. Generate:
+#   python -c "import secrets; print(secrets.token_urlsafe(50))"
+# With DEBUG=false, Django refuses to start unless SECRET_KEY is set.
 
-# Run database migrations
+# Run database migrations (includes django-axes lockout tables)
 python manage.py migrate
 
-# Create a superuser for Django admin
+# Create the first login account. createsuperuser makes a staff user (dashboard +
+# /admin/ + /review/). For dashboard-only operators, use create_user instead —
+# see §5 for user management and the staff-vs-regular distinction.
 python manage.py createsuperuser
 
 # Backfill: push all existing events to CRM (first deploy only)
@@ -248,7 +356,7 @@ python manage.py push_crm_leads --all
 python manage.py collectstatic --noinput
 ```
 
-### 5.4 Frontend (SvelteKit)
+### 6.4 Frontend (SvelteKit)
 
 ```bash
 cd /home/veent/app
@@ -263,21 +371,21 @@ The build output lands in `apps/frontend/.svelte-kit/output/`. For production, u
 node apps/frontend/build/index.js
 ```
 
-Or use PM2 to manage the process (see §6.3).
+Or use PM2 to manage the process (see §7.2).
 
-### 5.5 Create cookie directories
+### 6.5 Create cookie directories
 
 ```bash
 mkdir -p /home/veent/cookies
 chmod 700 /home/veent/cookies
-# Upload your exported cookie files here (see §8)
+# Upload your exported cookie files here (see §9)
 ```
 
 ---
 
-## 6. Application Deployment
+## 7. Application Deployment
 
-### 6.1 Gunicorn (Django)
+### 7.1 Gunicorn (Django)
 
 Create `/etc/systemd/system/veent-backend.service`:
 
@@ -311,7 +419,7 @@ systemctl start veent-backend
 
 The `--timeout 300` is important — scraper jobs can run for several minutes.
 
-### 6.2 PM2 (SvelteKit)
+### 7.2 PM2 (SvelteKit)
 
 ```bash
 npm install -g pm2
@@ -320,7 +428,7 @@ pm2 save
 pm2 startup   # follow the printed systemd command
 ```
 
-### 6.3 nginx
+### 7.3 nginx
 
 Create `/etc/nginx/sites-available/veent`:
 
@@ -340,13 +448,33 @@ server {
 
     client_max_body_size 10M;
 
-    # Django API
+    # Django API — routed THROUGH SvelteKit, not directly to Django.
+    #
+    # /api/* is proxied to the SvelteKit Node server (port 3000), NOT to Django
+    # (port 8000). This is deliberate: every /api/* request passes through
+    # apps/frontend/src/hooks.server.ts, which enforces per-user Django session
+    # auth (validates the sessionid cookie against /api/auth/me/) and then
+    # proxies the request onward to Django.
+    #
+    # Belt-and-suspenders: Django ALSO enforces session auth on every /api/*
+    # view (JSON 401 for unauthenticated requests — see §5), so even a direct
+    # hit to port 8000 is rejected. The SvelteKit gate is the first line; the
+    # Django guard is the backstop.
+    #
+    # Django's gunicorn is bound to 127.0.0.1:8000 (see §7.1) and is NEVER
+    # exposed by nginx directly — it is reachable only via the SvelteKit proxy.
+    # Keep it bound to localhost so it cannot be hit from outside the droplet.
+    #
+    # NOTE: this block is technically redundant with the catch-all `location /`
+    # below (both forward to port 3000); it is kept explicit so the longer
+    # read timeout for slow scraper endpoints is documented and obvious.
     location /api/ {
-        proxy_pass http://127.0.0.1:8000;
+        proxy_pass http://127.0.0.1:3000;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_http_version 1.1;
         proxy_read_timeout 300s;
     }
 
@@ -388,7 +516,7 @@ certbot --nginx -d your-domain.com
 nginx -t && systemctl reload nginx
 ```
 
-### 6.4 n8n
+### 7.4 n8n
 
 ```bash
 npm install -g n8n
@@ -421,7 +549,7 @@ systemctl start veent-n8n
 
 ---
 
-## 7. n8n Pipeline Automation
+## 8. n8n Pipeline Automation
 
 The pipeline has two trigger endpoints. n8n calls them in sequence on a schedule.
 
@@ -474,9 +602,20 @@ HTTP Request — Push
   URL: https://your-domain.com/api/pipeline/push/
 ```
 
-**Authentication:** Django's CSRF is exempt on both endpoints (`@csrf_exempt`). If you expose
-these URLs without additional auth, restrict them at the nginx level to the n8n server's IP,
-or add a shared secret header check in the views.
+**Authentication:** these trigger endpoints (`run-all`, `pipeline/push`) now require a
+Django session — they are guarded by per-user auth at both the SvelteKit gate (see §5) and
+the Django layer. All public `/api/*` traffic reaches Django only through the SvelteKit
+reverse proxy (see §7.3). For machine-to-machine automation, point n8n at Django on
+`127.0.0.1:8000` directly (localhost-only, never exposed by nginx) and log in with a
+dedicated operator account — create one with `create_user` (see §5). Log in via
+`POST /api/auth/login/` and capture **both** cookies from the response's `Set-Cookie`
+headers: `sessionid` **and** `csrftoken`. Django session auth enforces CSRF on every
+mutating request, so each POST HTTP Request node must send the `sessionid` cookie **and**
+the `csrftoken` value in an `X-CSRFToken` header — without the header,
+`POST /api/scrapers/run-all/` and `POST /api/pipeline/push/` return **403 Forbidden**.
+GET polling (e.g. run status) needs only the `sessionid` cookie. Do not add a
+public nginx `/api/` → Django route; that would re-open the auth bypass this deployment
+closes.
 
 **Checking run status:** `GET /api/scrapers/runs/?limit=20` returns recent runs with
 `status`, `created_count`, and `error_message`. You can add an n8n HTTP Request node after
@@ -485,7 +624,7 @@ Tuesday's push.
 
 ---
 
-## 8. Session Cookie Renewal
+## 9. Session Cookie Renewal
 
 Facebook and Instagram session cookies expire roughly every 60 days. When they do,
 the scraper raises `SessionExpiredError` and the run shows a red "Session Expired" badge
@@ -516,7 +655,7 @@ on the dashboard.
 
 ---
 
-## 9. Monitoring & Maintenance
+## 10. Monitoring & Maintenance
 
 ### Dashboard
 

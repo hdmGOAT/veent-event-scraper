@@ -5,9 +5,11 @@ import os
 import threading
 
 from django.contrib.admin.views.decorators import staff_member_required
+from django.contrib.auth import authenticate, login, logout
 from django.core.paginator import Paginator
 from django.db.models import Count, Max, Q
 from django.http import HttpResponse, HttpResponseBadRequest, JsonResponse
+from django.middleware.csrf import get_token
 from django.shortcuts import get_object_or_404, render
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
@@ -16,8 +18,84 @@ from django.views.decorators.http import require_POST
 logger = logging.getLogger(__name__)
 
 from .categories import normalize_category
-from .models import BandwidthLog, Event, Organizer, ScraperRun, SearchQuery, TrackerNote, Venue
+from .models import BandwidthLog, Event, Organizer, ScraperRun, SearchQuery, Venue
 from .runner import AVAILABLE_LOCATIONS, cancel_run, trigger_scraper_run
+
+
+def api_login_required(view_func):
+    """Return JSON 401 for unauthenticated requests; otherwise run the view.
+
+    Defense-in-depth guard for the JSON API: a direct hit to Django:8000 from an
+    unauthenticated client is rejected even if the SvelteKit proxy is bypassed.
+    """
+
+    def _wrapped(request, *args, **kwargs):
+        if not request.user.is_authenticated:
+            return JsonResponse({"error": "authentication required"}, status=401)
+        return view_func(request, *args, **kwargs)
+
+    return _wrapped
+
+
+# ── Auth endpoints ───────────────────────────────────────────────────────────
+
+def api_auth_csrf(request):
+    """Ensure the ``csrftoken`` cookie is set. Reachable pre-auth."""
+    get_token(request)
+    return JsonResponse({}, status=204)
+
+
+@require_POST
+def api_auth_login(request):
+    """Authenticate a user and start a Django session. CSRF-protected."""
+    try:
+        payload = json.loads(request.body or b"{}")
+    except (json.JSONDecodeError, ValueError):
+        return JsonResponse({"error": "invalid JSON body"}, status=400)
+    if not isinstance(payload, dict):
+        return JsonResponse({"error": "JSON body must be an object"}, status=400)
+
+    username = (payload.get("username") or "").strip()
+    password = payload.get("password") or ""
+    if not username or not password:
+        return JsonResponse({"error": "username and password required"}, status=400)
+
+    user = authenticate(request, username=username, password=password)
+    if user is None:
+        # authenticate() returns None for both bad credentials and an axes lockout.
+        # Distinguish so the UI can show the right message. axes 8.x exposes the
+        # lockout check via AxesProxyHandler.is_locked (the older is_already_locked
+        # helper was removed).
+        from axes.handlers.proxy import AxesProxyHandler
+
+        if AxesProxyHandler().is_locked(request, credentials={"username": username}):
+            return JsonResponse(
+                {"error": "account locked — too many failed attempts"}, status=423
+            )
+        return JsonResponse({"error": "invalid credentials"}, status=401)
+
+    login(request, user)  # creates session + cycles the session key
+    return JsonResponse(
+        {"user": {"id": user.id, "username": user.username, "email": user.email}},
+        status=200,
+    )
+
+
+@require_POST
+def api_auth_logout(request):
+    """Flush the session. Safe to call when anonymous. CSRF-protected."""
+    logout(request)
+    return JsonResponse({}, status=204)
+
+
+def api_auth_me(request):
+    """Return the current user, or JSON 401 for anonymous (the gate behavior)."""
+    if request.user.is_authenticated:
+        user = request.user
+        return JsonResponse(
+            {"id": user.id, "username": user.username, "email": user.email}, status=200
+        )
+    return JsonResponse({"error": "not authenticated"}, status=401)
 
 
 def event_list(request):
@@ -220,6 +298,7 @@ def review_set_status(request, slug):
 # ---------------------------------------------------------------------------
 
 
+@api_login_required
 def api_stats(request):
     from django.db.models import Sum
     total_events = Event.objects.count()
@@ -229,7 +308,6 @@ def api_stats(request):
     ).count()
     total_organizers = Organizer.objects.count()
     confirmed_organizers = Organizer.objects.filter(status="confirmed").count()
-    pending_organizers = Organizer.objects.filter(status="pending").count()
     active_sources = (
         Event.objects.exclude(source="").values("source").distinct().count()
     )
@@ -247,7 +325,6 @@ def api_stats(request):
             "verified_venues": verified_venues,
             "total_organizers": total_organizers,
             "confirmed_organizers": confirmed_organizers,
-            "pending_organizers": pending_organizers,
             "active_sources": active_sources,
             "pending_push": pending_push,
             "uncategorized": uncategorized,
@@ -256,6 +333,7 @@ def api_stats(request):
     )
 
 
+@api_login_required
 def api_events_by_source(request):
     data = list(
         Event.objects.exclude(source="")
@@ -266,6 +344,7 @@ def api_events_by_source(request):
     return JsonResponse(data, safe=False)
 
 
+@api_login_required
 def api_events_by_category(request):
     # Prefer the AI-assigned agent_categories. Events not yet classified
     # (agent_categories == []) gracefully fall back to the rule-based
@@ -305,6 +384,7 @@ def api_events_by_category(request):
     return JsonResponse(data, safe=False)
 
 
+@api_login_required
 def api_agent_categories(request):
     """Return all distinct agent_categories values sorted alphabetically."""
     cats: set[str] = set()
@@ -315,6 +395,7 @@ def api_agent_categories(request):
     return JsonResponse(sorted(cats), safe=False)
 
 
+@api_login_required
 def api_events(request):
     q = request.GET.get("q", "").strip()
     source = request.GET.get("source", "").strip()
@@ -424,6 +505,7 @@ def api_events(request):
     )
 
 
+@api_login_required
 def api_organizers(request):
     q = request.GET.get("q", "").strip()
     status = request.GET.get("status", "").strip()
@@ -468,6 +550,7 @@ def api_organizers(request):
     )
 
 
+@api_login_required
 def api_organizers_export(request):
     """Export all organizers matching the current filters as a CSV download.
 
@@ -524,6 +607,7 @@ def api_organizers_export(request):
     return response
 
 
+@api_login_required
 def api_leads(request):
     if request.method != "GET":
         return JsonResponse({"error": "Method not allowed"}, status=405)
@@ -629,7 +713,7 @@ def api_leads(request):
     })
 
 
-@csrf_exempt
+@api_login_required
 def api_organizer_detail(request, slug):
     import json as _json
     organizer = get_object_or_404(Organizer, slug=slug)
@@ -684,6 +768,7 @@ def api_organizer_detail(request, slug):
     )
 
 
+@api_login_required
 def api_venue_detail(request, slug):
     venue = get_object_or_404(Venue, slug=slug)
     events = list(venue.events.select_related("organizer_ref").order_by("-starts_at")[:50])
@@ -717,6 +802,7 @@ def api_venue_detail(request, slug):
     )
 
 
+@api_login_required
 def api_venue_types(request):
     types = list(
         Venue.objects.exclude(primary_type_display="")
@@ -727,6 +813,7 @@ def api_venue_types(request):
     return JsonResponse(types, safe=False)
 
 
+@api_login_required
 def api_venues(request):
     q = request.GET.get("q", "").strip()
     status = request.GET.get("status", "").strip()
@@ -781,6 +868,7 @@ def api_venues(request):
     )
 
 
+@api_login_required
 def api_venues_map(request):
     pins = (
         Venue.objects.filter(latitude__isnull=False, longitude__isnull=False)
@@ -829,7 +917,7 @@ def _serialize_run(run, *, include_log: bool | None = None):
     }
 
 
-@csrf_exempt
+@api_login_required
 def api_proxy_setting(request):
     """GET current proxy-enabled state; POST to toggle it.
 
@@ -856,16 +944,13 @@ def api_proxy_setting(request):
     return JsonResponse({"error": "Method not allowed"}, status=405)
 
 
-@csrf_exempt
+@api_login_required
 @require_POST
 def api_scraper_trigger(request, key):
-    # SECURITY NOTE: This endpoint is unauthenticated intentionally. The
-    # SvelteKit frontend has no Django session (the "Admin User" in the sidebar
-    # is static UI, not a real session), and the Vite proxy makes all /api/*
-    # calls same-origin in dev, so there is no CSRF surface from a browser
-    # cross-site attack on this internal-only tool. @csrf_exempt is consistent
-    # with all other JSON API endpoints in this file. Re-evaluate when real
-    # auth is added (Phase 2 roadmap).
+    # SECURITY NOTE: This endpoint requires an authenticated Django session
+    # (@api_login_required) and is CSRF-protected (CsrfViewMiddleware — the SPA
+    # sends X-CSRFToken via api.ts). ScraperRun.triggered_by is populated from
+    # the authenticated request.user below.
     from .scrapers import SCRAPERS
 
     if key not in SCRAPERS:
@@ -914,7 +999,7 @@ def api_scraper_trigger(request, key):
     return JsonResponse({"id": run.id, "status": run.status}, status=200)
 
 
-@csrf_exempt
+@api_login_required
 @require_POST
 def api_scraper_run_all(request):
     # SECURITY NOTE: Same posture as api_scraper_trigger above — unauthenticated
@@ -951,7 +1036,7 @@ def api_scraper_run_all(request):
     return JsonResponse({"created": created, "skipped": skipped}, status=200)
 
 
-@csrf_exempt
+@api_login_required
 @require_POST
 def api_dedup_trigger(request):
     # SECURITY NOTE: Intentionally unauthenticated — same posture as
@@ -999,7 +1084,7 @@ _ALLOWED_SCRIPTS = {
 }
 
 
-@csrf_exempt
+@api_login_required
 @require_POST
 def api_script_trigger(request, script_name: str):
     """Fire-and-forget trigger for long-running AI scripts in scripts/.
@@ -1037,6 +1122,7 @@ def api_script_trigger(request, script_name: str):
         return JsonResponse({"error": "Failed to start script"}, status=500)
 
 
+@api_login_required
 def api_scraper_runs(request):
     try:
         limit = max(1, min(int(request.GET.get("limit", 50)), 200))
@@ -1053,6 +1139,7 @@ def api_scraper_runs(request):
     return JsonResponse([_serialize_run(r) for r in runs], safe=False)
 
 
+@api_login_required
 def api_scraper_runs_active(request):
     runs = ScraperRun.objects.filter(
         status__in=[ScraperRun.Status.QUEUED, ScraperRun.Status.RUNNING]
@@ -1060,6 +1147,7 @@ def api_scraper_runs_active(request):
     return JsonResponse([_serialize_run(r) for r in runs], safe=False)
 
 
+@api_login_required
 def api_scraper_run_detail(request, run_id):
     run = get_object_or_404(
         ScraperRun.objects.select_related("triggered_by"), id=run_id
@@ -1067,7 +1155,7 @@ def api_scraper_run_detail(request, run_id):
     return JsonResponse(_serialize_run(run, include_log=True))
 
 
-@csrf_exempt
+@api_login_required
 @require_POST
 def api_scraper_run_cancel(request, run_id):
     # SECURITY NOTE: same posture as api_scraper_trigger — unauthenticated
@@ -1083,6 +1171,7 @@ def api_scraper_run_cancel(request, run_id):
     return JsonResponse(_serialize_run(run), status=200)
 
 
+@api_login_required
 def api_scrapers(request):
     from .scrapers import SCRAPERS
 
@@ -1161,7 +1250,7 @@ def _serialize_search_query(sq) -> dict:
     }
 
 
-@csrf_exempt
+@api_login_required
 def api_search_queries(request):
     """GET list / POST create search queries."""
     if request.method == "GET":
@@ -1194,7 +1283,7 @@ def api_search_queries(request):
     return JsonResponse({"error": "Method not allowed"}, status=405)
 
 
-@csrf_exempt
+@api_login_required
 @require_POST
 def api_search_query_run(request, pk):
     """Trigger a single SearchQuery through its scraper.
@@ -1217,7 +1306,7 @@ def api_search_query_run(request, pk):
     return JsonResponse({"id": run.id, "status": run.status, "scraper_key": run.scraper_key})
 
 
-@csrf_exempt
+@api_login_required
 def api_search_query_detail(request, pk):
     """PATCH update / DELETE a single search query."""
     sq = get_object_or_404(SearchQuery, pk=pk)
@@ -1362,75 +1451,3 @@ def ingest_events_webhook(request):
 
     result = save_events(source, scraped_events)
     return JsonResponse({"success": True, **result})
-
-
-# ---------------------------------------------------------------------------
-# Tracker notes — lightweight note attached to one event or organizer.
-# ---------------------------------------------------------------------------
-
-def _serialize_note(note):
-    return {
-        "id": note.id,
-        "content": note.content,
-        "updated_at": note.updated_at.isoformat(),
-        "event_slug": note.event.slug if note.event_id else None,
-        "organizer_slug": note.organizer.slug if note.organizer_id else None,
-    }
-
-
-@csrf_exempt
-def api_tracker_notes(request):
-    if request.method == "GET":
-        notes = TrackerNote.objects.select_related("event", "organizer").all()
-        return JsonResponse([_serialize_note(n) for n in notes], safe=False)
-
-    if request.method == "POST":
-        try:
-            data = json.loads(request.body)
-        except (json.JSONDecodeError, ValueError):
-            return JsonResponse({"error": "Invalid JSON"}, status=400)
-
-        entity_type = (data.get("entity_type") or "").strip()
-        entity_slug = (data.get("entity_slug") or "").strip()
-        content = (data.get("content") or "").strip()
-
-        if entity_type not in ("event", "organizer") or not entity_slug:
-            return JsonResponse({"error": "entity_type and entity_slug required"}, status=400)
-
-        if entity_type == "event":
-            entity = get_object_or_404(Event, slug=entity_slug)
-            note, created = TrackerNote.objects.update_or_create(
-                event=entity,
-                defaults={"content": content, "organizer": None},
-            )
-        else:
-            entity = get_object_or_404(Organizer, slug=entity_slug)
-            note, created = TrackerNote.objects.update_or_create(
-                organizer=entity,
-                defaults={"content": content, "event": None},
-            )
-
-        note.refresh_from_db()
-        return JsonResponse(_serialize_note(note), status=201 if created else 200)
-
-    return JsonResponse({"error": "Method not allowed"}, status=405)
-
-
-@csrf_exempt
-def api_tracker_note_detail(request, pk):
-    note = get_object_or_404(TrackerNote.objects.select_related("event", "organizer"), pk=pk)
-
-    if request.method == "PATCH":
-        try:
-            data = json.loads(request.body)
-        except (json.JSONDecodeError, ValueError):
-            return JsonResponse({"error": "Invalid JSON"}, status=400)
-        note.content = (data.get("content") or "").strip()
-        note.save(update_fields=["content", "updated_at"])
-        return JsonResponse(_serialize_note(note))
-
-    if request.method == "DELETE":
-        note.delete()
-        return JsonResponse({}, status=204)
-
-    return JsonResponse({"error": "Method not allowed"}, status=405)

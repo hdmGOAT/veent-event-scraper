@@ -52,8 +52,6 @@ Every state-mutating API endpoint is decorated with `@csrf_exempt` and has no au
 | `PATCH /api/organizers/<slug>/` | Change any organizer's status |
 | `POST /api/search-queries/` | Create search queries |
 | `PATCH/DELETE /api/search-queries/<pk>/` | Modify/delete any search query |
-| `POST /api/tracker-notes/` | Create notes on any entity |
-| `PATCH/DELETE /api/tracker-notes/<pk>/` | Mutate/delete any note |
 
 The comments in views.py acknowledge this (`# SECURITY NOTE: This endpoint is unauthenticated intentionally`) and defer to a "Phase 2 roadmap." That deferral is appropriate for an internal dev tool, but it must be documented and the tool must remain strictly internal.
 

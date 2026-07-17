@@ -1,0 +1,111 @@
+{
+  "plan": "process/general-plans/active/deploy-readiness_PLAN_16-07-26.md",
+  "area": "D — SvelteKit shared-password auth",
+  "risk": "high",
+  "riskClasses": ["auth", "trust-boundary", "deploy/runtime/proxy"],
+  "date": "2026-07-16",
+  "verificationMode": "runtime (adapter-node production build exercised locally via curl)",
+  "server": {
+    "entrypoint": "apps/frontend/build/index.js",
+    "adapter": "@sveltejs/adapter-node@^5",
+    "envForTest": {
+      "ENVIRONMENT": "production",
+      "DASHBOARD_PASSWORD": "correct-horse (test only)",
+      "SESSION_SECRET": "64-hex test value",
+      "ORIGIN": "matches test host so SvelteKit CSRF origin check passes"
+    }
+  },
+  "checks": [
+    {
+      "id": "unauth-root-redirect",
+      "desc": "Unauthenticated GET / redirects to /login",
+      "expected": "302 Location: /login",
+      "actual": "302 Location: /login",
+      "pass": true
+    },
+    {
+      "id": "unauth-api-redirect",
+      "desc": "Unauthenticated GET /api/stats/ gated BEFORE the Django proxy",
+      "expected": "302 Location: /login (not a proxied Django response)",
+      "actual": "302 Location: /login",
+      "pass": true
+    },
+    {
+      "id": "login-page-reachable",
+      "desc": "GET /login is reachable unauthenticated (no /login <-> /tracker loop)",
+      "expected": "200",
+      "actual": "200",
+      "pass": true,
+      "note": "Required a fix: public paths must bypass the pre-existing production tracker redirect, or /login looped to /tracker."
+    },
+    {
+      "id": "login-asset-allowlist",
+      "desc": "Unauthenticated /_app/ chunk referenced by the login page loads",
+      "expected": "200",
+      "actual": "200",
+      "pass": true
+    },
+    {
+      "id": "favicon-allowlist",
+      "desc": "Unauthenticated /favicon.ico is not redirected to /login",
+      "expected": "not 302 to /login",
+      "actual": "404 (no favicon at that path; NOT redirected)",
+      "pass": true
+    },
+    {
+      "id": "wrong-password",
+      "desc": "POST /login wrong password (browser form nav: Accept text/html)",
+      "expected": "303 Location: /login?error=1, no sess cookie",
+      "actual": "303 Location: /login?error=1, no Set-Cookie",
+      "pass": true
+    },
+    {
+      "id": "correct-password",
+      "desc": "POST /login correct password (Accept text/html)",
+      "expected": "303 Location: /, Set-Cookie sess=<token>.<sig>; HttpOnly; Secure; SameSite=Lax; Max-Age=2592000",
+      "actual": "303 Location: /, Set-Cookie sess=...; Max-Age=2592000; Path=/; HttpOnly; Secure; SameSite=Lax",
+      "pass": true
+    },
+    {
+      "id": "valid-cookie-passthrough",
+      "desc": "Request with valid sess cookie passes the auth gate",
+      "expected": "not 302 to /login; reaches app (tracker redirect for authenticated user is pre-existing behavior)",
+      "actual": "GET / -> 302 /tracker (auth gate passed); GET /tracker -> 200",
+      "pass": true
+    },
+    {
+      "id": "tampered-cookie-appended",
+      "desc": "Cookie with extra bytes appended",
+      "expected": "302 Location: /login",
+      "actual": "302 Location: /login",
+      "pass": true
+    },
+    {
+      "id": "tampered-signature-flip",
+      "desc": "Cookie with last signature char flipped (timing-safe verify must reject)",
+      "expected": "302 Location: /login",
+      "actual": "302 Location: /login",
+      "pass": true
+    },
+    {
+      "id": "logout",
+      "desc": "GET /logout clears the cookie and redirects",
+      "expected": "303 Location: /login, Set-Cookie sess=; Max-Age=0",
+      "actual": "303 Location: /login, Set-Cookie sess=; Max-Age=0; Path=/; HttpOnly; Secure; SameSite=Lax",
+      "pass": true
+    },
+    {
+      "id": "dev-mode-bypass",
+      "desc": "ENVIRONMENT unset -> no auth gate",
+      "expected": "/tracker and / return 200 without any cookie; no SESSION_SECRET warning",
+      "actual": "/tracker -> 200, / -> 200, no warning logged",
+      "pass": true
+    }
+  ],
+  "mustStopBeforeFinalize": false,
+  "outcome": "All auth-gate runtime checks passed against the production adapter-node build.",
+  "residualNotes": [
+    "SvelteKit CSRF origin check requires the deployed nginx to pass a correct Host/Origin (standard reverse-proxy setup already documented). Direct-IP POSTs without a matching Origin get 403, which is additional protection, not a regression.",
+    "The nginx /api/ block bypasses this gate entirely (see Area D-7 / E-4 doc note). Ops must remove or IP-restrict that block."
+  ]
+}

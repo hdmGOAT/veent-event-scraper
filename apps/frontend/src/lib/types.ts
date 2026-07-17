@@ -9,7 +9,6 @@ export interface Stats {
 	verified_venues: number;
 	total_organizers: number;
 	confirmed_organizers: number;
-	pending_organizers: number;
 	active_sources: number;
 	pending_push: number;
 	uncategorized: number;
@@ -194,12 +193,4 @@ export interface SearchQuery {
 	events_found_count: number;
 	created_at: string;
 	updated_at: string;
-}
-
-export interface TrackerNote {
-	id: number;
-	content: string;
-	updated_at: string;
-	event_slug: string | null;
-	organizer_slug: string | null;
 }

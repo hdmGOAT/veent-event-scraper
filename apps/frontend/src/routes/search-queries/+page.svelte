@@ -28,7 +28,9 @@
 	let pollTimer: ReturnType<typeof setInterval> | null = null;
 
 	// ── Derived ───────────────────────────────────────────────────────────────
-	const sources = $derived([...new Set(queries.map((q) => q.source))].sort());
+	// Sources are optional/decoupled per query, so filter out empty/blank values
+	// to avoid rendering an empty filter chip for source-less queries.
+	const sources = $derived([...new Set(queries.map((q) => q.source).filter(Boolean))].sort());
 	const filtered = $derived(
 		sourceFilter ? queries.filter((q) => q.source === sourceFilter) : queries
 	);
