@@ -18,6 +18,10 @@ jobs:
     env:
       SECRET_KEY: "ci-only-insecure-secret-key-do-not-use-in-production"
       DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/test_db"
+      # DEBUG=true keeps the production-only security block (SECURE_SSL_REDIRECT)
+      # in settings.py disabled. With DEBUG=False, SECURE_SSL_REDIRECT=True makes
+      # the Django test client receive 301 redirects, breaking ~48 view/API tests.
+      DEBUG: "true"
 
     services:
       postgres:

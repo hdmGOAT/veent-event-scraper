@@ -42,6 +42,22 @@ def _fake_groq_response(content: str):
     })
 
 
+class AuthenticatedApiTestCase(TestCase):
+    """Base class for tests that exercise guarded /api/* endpoints.
+
+    Every /api/* view now carries @api_login_required (returns JSON 401 for
+    anonymous requests). Functional/happy-path tests must therefore run behind
+    an authenticated test client. Subclasses that need extra setUp logic should
+    call super().setUp() to keep the login in place.
+    """
+
+    def setUp(self):
+        super().setUp()
+        User = get_user_model()
+        self.api_user = User.objects.create_user("apitester", password="pw12345")
+        self.client.force_login(self.api_user)
+
+
 class SaveVenuesDedupTests(TestCase):
     def test_same_place_id_upserts_not_duplicates(self):
         source = "google_places"
@@ -736,7 +752,7 @@ class RunnerMappingTests(TestCase):
         self.assertNotIn("source", extra)
 
 
-class CancelEndpointTests(TestCase):
+class CancelEndpointTests(AuthenticatedApiTestCase):
     """HTTP-level coverage for POST /api/scrapers/runs/<id>/cancel/."""
 
     def _finished_run(self):
@@ -771,14 +787,14 @@ class CancelEndpointTests(TestCase):
         resp = self.client.get("/api/scrapers/runs/1/cancel/")
         self.assertEqual(resp.status_code, 405)
 
-    @mock.patch("events.views.cancel_run")
-    def test_cancel_is_public(self, mock_cancel):
+    def test_cancel_requires_auth(self):
+        # Anonymous requests are rejected with JSON 401 by @api_login_required.
         run = ScraperRun.objects.create(
             scraper_key="myruntime", status=ScraperRun.Status.CANCELLED
         )
-        mock_cancel.return_value = (run, "ok")
+        self.client.logout()
         resp = self.client.post(f"/api/scrapers/runs/{run.id}/cancel/")
-        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.status_code, 401)
 
 
 class RunEndpointTests(TestCase):
@@ -812,9 +828,9 @@ class RunEndpointTests(TestCase):
             resp = self.client.post("/api/scrapers/myruntime/run/")
         self.assertEqual(resp.status_code, 409)
 
-    def test_trigger_is_public_for_any_user(self):
-        # The trigger endpoint is unauthenticated — the SvelteKit frontend has
-        # no Django session. Non-staff users (and anonymous) can trigger runs.
+    def test_trigger_allowed_for_any_authenticated_user(self):
+        # The trigger endpoint requires authentication but not staff status —
+        # any logged-in operator (staff or not) can trigger runs.
         self.client.force_login(self.nonstaff)
         mock_run = mock.Mock(id=99, status="queued")
         with mock.patch(
@@ -858,33 +874,32 @@ class RunEndpointTests(TestCase):
         resp = self.client.get("/api/scrapers/runs/99999/")
         self.assertEqual(resp.status_code, 404)
 
-    def test_run_list_endpoints_are_public(self):
-        # GET read endpoints are unauthenticated — the SvelteKit client has no
-        # session cookie, mirroring the existing /api/scrapers/ convention.
+    def test_run_list_endpoints_require_auth(self):
+        # GET read endpoints now enforce session auth (defense-in-depth):
+        # anonymous requests receive JSON 401.
         self.client.logout()
         for url in (
             "/api/scrapers/runs/",
             "/api/scrapers/runs/active/",
         ):
             resp = self.client.get(url)
-            self.assertEqual(resp.status_code, 200, url)
+            self.assertEqual(resp.status_code, 401, url)
 
-    def test_run_detail_endpoint_is_public(self):
+    def test_run_detail_endpoint_requires_auth(self):
         run = ScraperRun.objects.create(scraper_key="myruntime")
         self.client.logout()
         resp = self.client.get(f"/api/scrapers/runs/{run.id}/")
-        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.status_code, 401)
 
-    def test_trigger_is_public_for_anonymous(self):
-        # Anonymous users can trigger runs — the endpoint is intentionally
-        # unauthenticated (internal-only admin tool; no real session bridge).
+    def test_trigger_requires_auth_for_anonymous(self):
+        # Anonymous requests are rejected with JSON 401 by @api_login_required.
         self.client.logout()
         mock_run = mock.Mock(id=77, status="queued")
         with mock.patch(
             "events.views.trigger_scraper_run", return_value=(mock_run, False)
         ):
             resp = self.client.post("/api/scrapers/myruntime/run/")
-        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.status_code, 401)
 
     def test_run_all_triggers_all_scrapers(self):
         from events.scrapers import RUN_ALL_EXCLUDED, SCRAPERS as REAL_SCRAPERS
@@ -914,17 +929,17 @@ class RunEndpointTests(TestCase):
         self.assertEqual(len(body["created"]), 1)
         self.assertEqual(len(body["skipped"]), 1)
 
-    def test_run_all_is_public(self):
+    def test_run_all_requires_auth(self):
         self.client.logout()
         mock_run = mock.Mock(id=3, status="queued")
         with mock.patch(
             "events.views.trigger_scraper_run", return_value=(mock_run, False)
         ):
             resp = self.client.post("/api/scrapers/run-all/")
-        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.status_code, 401)
 
 
-class ApiScrapersLastRunTests(TestCase):
+class ApiScrapersLastRunTests(AuthenticatedApiTestCase):
     """GET /api/scrapers/ must annotate each scraper with its latest ScraperRun."""
 
     def _payload_for(self, key):
@@ -1055,6 +1070,9 @@ class CategoryNormalizationTests(TestCase):
                 source="test",
             )
 
+        # /api/events/by-category/ is guarded by @api_login_required.
+        user = get_user_model().objects.create_user("catuser", password="pw12345")
+        self.client.force_login(user)
         resp = self.client.get(reverse("events:api_events_by_category"))
         self.assertEqual(resp.status_code, 200)
         data = resp.json()
@@ -1486,7 +1504,7 @@ class DedupCommandTests(TestCase):
 
         # Unknown entity is silently ignored (no dispatch), never raises.
         _dedup_after_save("nonexistent", [1, 2, 3])
-class OrganizerExportTests(TestCase):
+class OrganizerExportTests(AuthenticatedApiTestCase):
     def test_export_all(self):
         Organizer.objects.create(
             name="Alpha Events",
@@ -1815,7 +1833,7 @@ class DeduplicateOrganizersCommandTests(TestCase):
         self.assertIn("Awesome Events PHL", names)
 
 
-class SearchQueryDecoupledSourceTests(TestCase):
+class SearchQueryDecoupledSourceTests(AuthenticatedApiTestCase):
     """POST /api/search-queries/ no longer requires a source (decoupled keywords)."""
 
     def test_create_without_source_succeeds(self):
@@ -1859,7 +1877,7 @@ class SearchQueryDecoupledSourceTests(TestCase):
             SearchQuery.objects.create(query="kw", source="other_source")
 
 
-class ScraperTriggerQueryIdsTests(TestCase):
+class ScraperTriggerQueryIdsTests(AuthenticatedApiTestCase):
     """POST /api/scrapers/<key>/run/ accepts an optional query_ids list."""
 
     def test_run_with_query_ids_creates_plain_keyed_run(self):
@@ -1916,7 +1934,7 @@ class ScraperTriggerQueryIdsTests(TestCase):
         self.assertEqual(resp.status_code, 400)
 
 
-class ScrapersSupportsKeywordsTests(TestCase):
+class ScrapersSupportsKeywordsTests(AuthenticatedApiTestCase):
     """GET /api/scrapers/ exposes supports_keywords per scraper."""
 
     def test_facebook_events_supports_keywords_true(self):

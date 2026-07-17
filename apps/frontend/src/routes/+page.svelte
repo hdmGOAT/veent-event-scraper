@@ -94,7 +94,6 @@
 					<span class="text-lg font-semibold text-heading">{data.stats.uncategorized.toLocaleString()}</span>
 					<span class="text-xs text-muted">uncategorized</span>
 				</div>
-				<div class="mt-1 text-xs text-muted">{data.stats.pending_organizers.toLocaleString()} organizers pending review</div>
 				<a href="/scrapers" class="mt-2 block text-xs text-accent hover:underline">Run categorize →</a>
 			</div>
 		</div>

@@ -1,0 +1,63 @@
+{
+  "plan": "process/general-plans/active/deploy-readiness_PLAN_16-07-26.md",
+  "area": "D — SvelteKit shared-password auth",
+  "date": "2026-07-16",
+  "attacks": [
+    {
+      "id": "timing-attack-password",
+      "vector": "Attacker measures response time of POST /login to infer password length/prefix.",
+      "mitigation": "Password compared with crypto.timingSafeEqual over equal-length buffers. On length mismatch a dummy timingSafeEqual(expected, expected) runs, then returns false, so wrong-length and wrong-content both consume comparison time.",
+      "code": "apps/frontend/src/routes/login/+page.server.ts (safeEqual)",
+      "validated": true,
+      "evidence": "Wrong password (any length) -> 303 /login?error=1 with no cookie; no early-exit branch on length."
+    },
+    {
+      "id": "cookie-forgery",
+      "vector": "Attacker crafts sess=<token>.<sig> without knowing SESSION_SECRET.",
+      "mitigation": "verifyToken recomputes HMAC-SHA256(secret, token) and timingSafeEqual-compares the signature. Length guard prevents Buffer length-mismatch throw.",
+      "code": "apps/frontend/src/lib/session.ts (verifyToken)",
+      "validated": true,
+      "evidence": "sess=abc.def and signature-flip both -> 302 /login."
+    },
+    {
+      "id": "cookie-tampering",
+      "vector": "Attacker takes a valid cookie and mutates it.",
+      "mitigation": "Any mutation to token or signature invalidates the HMAC.",
+      "validated": true,
+      "evidence": "Appended bytes -> 302 /login; last-char flip -> 302 /login."
+    },
+    {
+      "id": "missing-session-secret-fail-open",
+      "vector": "Operator forgets SESSION_SECRET in production; system silently allows access.",
+      "mitigation": "SESSION_SECRET defaults to '' -> every verifyToken returns false -> all requests 302 /login (fail closed). Startup console.warn is emitted.",
+      "code": "apps/frontend/src/hooks.server.ts",
+      "validated": true,
+      "evidence": "Production, no SESSION_SECRET: startup warning logged; / -> 302 /login; fabricated cookie -> 302 /login."
+    },
+    {
+      "id": "missing-dashboard-password-fail-open",
+      "vector": "Operator forgets DASHBOARD_PASSWORD; login accepts empty/any password.",
+      "mitigation": "Login action throws 500 when DASHBOARD_PASSWORD or SESSION_SECRET is missing (fail closed); it never issues a cookie.",
+      "code": "apps/frontend/src/routes/login/+page.server.ts",
+      "validated": "static-trace",
+      "evidence": "Code path: if (!password || !secret) throw error(500). Not exercised at runtime because the fail-closed gate already blocks unauthenticated access; verified by reading."
+    },
+    {
+      "id": "api-gate-bypass-via-proxy-order",
+      "vector": "Attacker hits /api/* hoping the SvelteKit proxy forwards to Django before auth runs.",
+      "mitigation": "Auth gate runs FIRST in handle(), before the /api/ and /node-api/ proxy blocks.",
+      "validated": true,
+      "evidence": "Unauthenticated /api/stats/ -> 302 /login (Django not even contacted; Django was not running during the test)."
+    },
+    {
+      "id": "login-redirect-loop-dos",
+      "vector": "Auth gate + pre-existing tracker redirect create an infinite /login <-> /tracker loop, denying all access.",
+      "mitigation": "Public paths (/login, /logout, /_app/, /favicon.ico) return resolve(event) immediately, before the tracker redirect.",
+      "validated": true,
+      "evidence": "GET /login -> 200 (was 302 /tracker before the fix)."
+    }
+  ],
+  "openItems": [
+    "nginx /api/ location routes directly to Django, bypassing this gate. Documented in docs/deployment/README.md (auth-gate bypass warning). Ops must remove or IP-restrict it — outside this plan's code scope."
+  ]
+}

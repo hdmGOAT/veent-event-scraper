@@ -1,6 +1,6 @@
 # Veent Event Scraper - All Tests
 
-Last updated: 2026-06-17
+Last updated: 2026-07-16
 
 Attach this file first when the task involves testing, verification, or test debugging.
 
@@ -41,11 +41,15 @@ if browser tests are added.)
 ### Backend: Django's test runner
 
 The backend uses **Django's built-in test framework** (`unittest`-based, via `manage.py test`).
-There is no pytest, no separate e2e runner, and no CI yet. Tests live next to the app at
-`apps/backend/events/tests.py` — **97 tests as of 2026-06-17**, covering: scraper upsert/dedup,
-venue dedup, `verification_status` re-scrape preservation, `Organizer.status` re-scrape
-preservation, category normalization (`normalize_category`), the `/review/` UI views, and the
-scraper run-jobs subsystem (`runner.py` — trigger/cancel/run-all).
+There is no pytest and no separate e2e runner. CI is configured (`.github/workflows/ci.yml`).
+Tests live next to the app at `apps/backend/events/tests.py` — **197 tests as of 2026-07-16**,
+covering: scraper upsert/dedup, venue dedup, `verification_status` re-scrape preservation,
+`Organizer.status` re-scrape preservation, category normalization (`normalize_category`), the
+`/review/` UI views, and the scraper run-jobs subsystem (`runner.py` — trigger/cancel/run-all).
+
+**Important:** backend tests must be run with `DEBUG=true`. With `DEBUG=False`, the production
+`SECURE_SSL_REDIRECT=True` block issues 301 redirects that break ~48 view and API tests.
+CI sets `DEBUG: "true"` in the backend job env to enforce this.
 
 ### Frontend: svelte-check + build (no unit tests yet)
 
@@ -53,8 +57,8 @@ The frontend has no Vitest or Playwright tests. The two automated checks are:
 - `pnpm --filter frontend check` — runs svelte-check + tsc (type errors, Svelte compiler warnings)
 - `pnpm --filter frontend build` — full Vite production build (catches import errors, missing modules)
 
-CI is planned but not yet set up. When added it should run `manage.py test`, a migration
-check, and `pnpm --filter frontend check` on push/PR.
+CI runs these checks: `.github/workflows/ci.yml` backend job (with `DEBUG: "true"`) +
+migration check + `pnpm --filter frontend check` on push/PR.
 
 ### TestCase vs. TransactionTestCase
 
@@ -86,8 +90,8 @@ it with `source apps/backend/venv/bin/activate`, or prefix each command with `./
 
 | Purpose | Command | Notes |
 |---|---|---|
-| Run all backend tests | `cd apps/backend && ./venv/bin/python manage.py test events` | runs the full 97-test suite |
-| Run all (discovery) | `cd apps/backend && ./venv/bin/python manage.py test` | discovers `events/tests.py` |
+| Run all backend tests | `cd apps/backend && DEBUG=true ./venv/bin/python manage.py test events` | runs the full 197-test suite; DEBUG=true required |
+| Run all (discovery) | `cd apps/backend && DEBUG=true ./venv/bin/python manage.py test` | discovers `events/tests.py` |
 | Run one test class | `cd apps/backend && ./venv/bin/python manage.py test events.tests.RunnerTests` | dotted path |
 | Run one test method | `cd apps/backend && ./venv/bin/python manage.py test events.tests.RunnerTests.test_trigger_creates_run_row` | |
 | Verbose | `cd apps/backend && ./venv/bin/python manage.py test events -v 2` | |
@@ -124,14 +128,22 @@ it with `source apps/backend/venv/bin/activate`, or prefix each command with `./
   Svelte 5 runes, ensure the file is not in `node_modules` (runes are forced for all project
   files via `vite.config.ts`).
 
+## Debugging Quick Reference — DEBUG=true requirement
+
+**Backend tests require `DEBUG=true`.** With `DEBUG=False`, `settings.py` activates
+`SECURE_SSL_REDIRECT=True` (production hardening block). Django's test client then receives
+`301 Moved Permanently` on view and API requests instead of the expected `200`/`302`, causing
+~48 test failures. Always prefix backend test commands with `DEBUG=true` or set it in
+`apps/backend/.env`. CI enforces this via `DEBUG: "true"` in the backend job environment.
+
 ## Known Gaps
 
 - **No frontend (Svelte) tests.** Highest-value first tests: organizer table sort logic
   (`sort.ts`), `normalize_category` end-to-end via the `/api/events/by-category/` response
   shape, and the `StatCard` / `Badge` component rendering.
-- **No CI** is configured yet (planned). No coverage measurement.
+- **No coverage measurement.** CI runs tests but does not measure or enforce coverage thresholds.
 - **No e2e tests.** No Playwright suite exists. The `/review/` HTMX flow and the SvelteKit
-  routes (including the Scraper Center) have no browser-level automated coverage.
+  routes (including the Scraper Center and auth gate) have no browser-level automated coverage.
 - **Playwright scrapers are not tested end-to-end.** `allevents_cdo` and `happeningnext_cdo`
   require a live Playwright session; they are excluded from automated tests.
 - **No view/template tests for the Django-rendered list/detail pages** (event_list, venue_list,

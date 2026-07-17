@@ -10,10 +10,12 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/6.0/ref/settings/
 """
 
+import datetime
 import os
 from pathlib import Path
 
 import dj_database_url
+from django.core.exceptions import ImproperlyConfigured
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -45,15 +47,32 @@ _load_dotenv(BASE_DIR / ".env")
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/6.0/howto/deployment/checklist/
 
-# SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-xnjav(kkizi)fm)3&#v9%tk15#zcue(%f5n0t9x5i8szb9sc7y'
-
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+# DEBUG defaults to False (safe production default); set DEBUG=true in .env for dev.
+# Parse against explicit allowlists so a typo (e.g. DEBUG=flase) fails loudly
+# instead of silently enabling debug mode + disabling the prod security block/Axes.
+_debug_raw = os.environ.get('DEBUG', 'false').strip().lower()
+_DEBUG_TRUE = {'true', '1', 'yes', 'on'}
+_DEBUG_FALSE = {'false', '0', 'no', 'off', ''}
+if _debug_raw not in _DEBUG_TRUE | _DEBUG_FALSE:
+    raise ImproperlyConfigured(f"DEBUG must be a boolean-like value, got {_debug_raw!r}")
+DEBUG = _debug_raw in _DEBUG_TRUE
 
-ALLOWED_HOSTS = ['localhost', '127.0.0.1', 'testserver']
+# SECURITY WARNING: keep the secret key used in production secret!
+# The key that was here is burned — generate a new one with:
+#   python -c "import secrets; print(secrets.token_urlsafe(50))"
+SECRET_KEY = os.environ.get('SECRET_KEY')
+if not SECRET_KEY:
+    raise ImproperlyConfigured("SECRET_KEY must be set")
 
-CSRF_TRUSTED_ORIGINS = ['http://localhost:5173', 'http://127.0.0.1:5173']
+# Fallback host list applies only when the ALLOWED_HOSTS env var is absent (dev convenience).
+_hosts_env = os.environ.get('ALLOWED_HOSTS', '')
+ALLOWED_HOSTS = [h.strip() for h in _hosts_env.split(',') if h.strip()] or ['localhost', '127.0.0.1', 'testserver']
+
+_csrf_origins = ['http://localhost:5173', 'http://127.0.0.1:5173']
+if _prod_origin := os.environ.get('PROD_ORIGIN', ''):
+    _csrf_origins.append(_prod_origin)
+CSRF_TRUSTED_ORIGINS = _csrf_origins
 
 # Google Places API key for the venue scraper. Set via environment or .env;
 # never hardcode or commit a real key. Empty string when unset.
@@ -85,6 +104,14 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     'events',
+    'axes',
+]
+
+# AxesStandaloneBackend must be first so it can intercept locked accounts before
+# ModelBackend authenticates them.
+AUTHENTICATION_BACKENDS = [
+    'axes.backends.AxesStandaloneBackend',
+    'django.contrib.auth.backends.ModelBackend',
 ]
 
 MIDDLEWARE = [
@@ -93,9 +120,36 @@ MIDDLEWARE = [
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
+    # AxesMiddleware must come AFTER AuthenticationMiddleware so it can inspect request.user.
+    'axes.middleware.AxesMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
+
+# ── Brute-force lockout (django-axes) ────────────────────────────────────────
+AXES_FAILURE_LIMIT = int(os.environ.get('AXES_FAILURE_LIMIT', '5'))
+AXES_COOLOFF_TIME = datetime.timedelta(hours=int(os.environ.get('AXES_COOLOFF_HOURS', '1')))
+# Lock the combination of username + IP so a targeted attacker on the same network
+# cannot cycle IPs to bypass a per-username lock, while the real user is not locked
+# out from a different IP.
+AXES_LOCKOUT_PARAMETERS = [['username', 'ip_address']]
+AXES_RESET_ON_SUCCESS = True
+# Behind nginx, the real client IP arrives via X-Forwarded-For; read it first so
+# all users do not share the server IP and lock each other out.
+AXES_IPWARE_META_PRECEDENCE_ORDER = ['HTTP_X_FORWARDED_FOR', 'REMOTE_ADDR']
+
+# Disable axes lockout in dev/test so the test suite is not affected.
+if DEBUG:
+    AXES_ENABLED = False
+
+# ── Session hardening ────────────────────────────────────────────────────────
+SESSION_COOKIE_AGE = int(os.environ.get('SESSION_COOKIE_AGE_SECONDS', str(8 * 60 * 60)))  # 8 hours default
+SESSION_SAVE_EVERY_REQUEST = True   # Sliding expiry — each request resets the timer
+SESSION_COOKIE_SAMESITE = 'Lax'    # Explicit (Django 4+ default but make it clear)
+# SESSION_EXPIRE_AT_BROWSER_CLOSE is left at default (False) — operators frequently
+# close and reopen browsers; forced re-login on close is unnecessarily disruptive.
+# SESSION_COOKIE_SECURE and SESSION_COOKIE_HTTPONLY are already set in the
+# `if not DEBUG:` prod-hardening block at the bottom of this file — not duplicated here.
 
 ROOT_URLCONF = 'config.urls'
 
@@ -120,11 +174,17 @@ WSGI_APPLICATION = 'config.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/6.0/ref/settings/#databases
 
+_db_url = os.environ.get('DATABASE_URL', f"sqlite:///{BASE_DIR / 'db.sqlite3'}")
 DATABASES = {
     'default': dj_database_url.config(
-        default=f"sqlite:///{BASE_DIR / 'db.sqlite3'}",
+        default=_db_url,
         conn_max_age=600,
-        ssl_require=False,
+        # Require SSL only for a real (non-sqlite) database in production.
+        # Gated on `not DEBUG` so dev/CI Postgres (which may not support SSL —
+        # e.g. the plain postgres service in CI) still connects. Production runs
+        # with DEBUG=False against a TLS-capable managed DB (Neon), so SSL is
+        # enforced there. Consistent with the other `not DEBUG` security gates.
+        ssl_require=not _db_url.startswith('sqlite') and not DEBUG,
     )
 }
 
@@ -165,6 +225,9 @@ USE_TZ = True
 
 STATIC_URL = 'static/'
 
+# Required for `collectstatic` (nginx serves this directory in production).
+STATIC_ROOT = BASE_DIR / 'staticfiles'
+
 # Default primary key field type
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
@@ -190,3 +253,23 @@ LOGGING = {
         },
     },
 }
+
+
+# Production-only security hardening. Only active when DEBUG is False so local
+# development over plain HTTP is unaffected.
+if not DEBUG:
+    # Nginx terminates TLS; tell Django the real scheme via this header.
+    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+
+    # Redirect plain HTTP to HTTPS (nginx handles it, but defence-in-depth).
+    SECURE_SSL_REDIRECT = True
+
+    # Cookie security
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    SESSION_COOKIE_HTTPONLY = True  # already Django default but be explicit
+
+    # HSTS (tell browsers to only use HTTPS for 1 year)
+    SECURE_HSTS_SECONDS = 31536000
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+    SECURE_HSTS_PRELOAD = True

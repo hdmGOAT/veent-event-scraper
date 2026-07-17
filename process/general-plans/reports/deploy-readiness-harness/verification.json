@@ -1,0 +1,55 @@
+{
+  "plan": "process/general-plans/active/deploy-readiness_PLAN_16-07-26.md",
+  "date": "2026-07-16",
+  "areas": {
+    "A": {
+      "checks": [
+        {"desc": "DEBUG=false + no SECRET_KEY -> ImproperlyConfigured at startup", "pass": true},
+        {"desc": "DEBUG=false + valid SECRET_KEY + DATABASE_URL -> settings import + check exit 0", "pass": true},
+        {"desc": "DEBUG=true + no SECRET_KEY -> settings import OK, guard does not fire", "pass": true},
+        {"desc": "ALLOWED_HOSTS env absent -> fallback ['localhost','127.0.0.1','testserver']", "pass": true},
+        {"desc": "ALLOWED_HOSTS='example.com,www.example.com' -> parsed list", "pass": true},
+        {"desc": "DATABASE_URL sqlite -> ssl_require False; non-sqlite -> ssl_require True", "pass": true}
+      ]
+    },
+    "B": {
+      "checks": [
+        {"desc": "check --deploy with DEBUG=False + real random SECRET_KEY -> zero security.W* warnings", "pass": true, "note": "Ambient DJANGO_ALLOW_ASYNC_UNSAFE in the test shell produced an unrelated async.E001; not caused by settings.py."},
+        {"desc": "STATIC_ROOT set to BASE_DIR/'staticfiles'", "pass": true},
+        {"desc": "SECURE_PROXY_SSL_HEADER, SECURE_SSL_REDIRECT, cookie-secure flags, HSTS present under DEBUG=False", "pass": true},
+        {"desc": "CSRF_TRUSTED_ORIGINS includes PROD_ORIGIN when set", "pass": true}
+      ]
+    },
+    "C": {
+      "checks": [
+        {"desc": "gunicorn present in apps/backend/requirements.txt", "pass": true},
+        {"desc": "@sveltejs/adapter-node@^5 replaces adapter-auto (peer kit ^2.4.0 compatible with project ^2.63.0)", "pass": true},
+        {"desc": "pnpm install updated pnpm-lock.yaml (+adapter-node deps, -adapter-auto)", "pass": true},
+        {"desc": "pnpm --filter frontend build reports 'Using @sveltejs/adapter-node' and emits apps/frontend/build/index.js", "pass": true, "note": "Adapter had to be wired in vite.config.ts (sveltekit() inline options), NOT svelte.config.js, which is ignored when options are passed via Vite. See deviations."},
+        {"desc": "node apps/frontend/build/index.js starts and binds a port", "pass": true}
+      ]
+    },
+    "D": {"see": "risk-gate.json and adversarial-validation.json"},
+    "E": {
+      "checks": [
+        {"desc": "apps/backend/.env.example: SECRET_KEY burned note, ALLOWED_HOSTS, PROD_ORIGIN added", "pass": true},
+        {"desc": "apps/frontend/.env.example created (DJANGO_API_URL, NODE_API_URL, ENVIRONMENT, DASHBOARD_PASSWORD, SESSION_SECRET)", "pass": true},
+        {"desc": "docs/deployment/README.md sec 4 frontend env block added", "pass": true},
+        {"desc": "docs/deployment/README.md sec 6.3 nginx /api/ auth-gate bypass warning added", "pass": true},
+        {"desc": "docs/deployment/README.md sec 5.3 SECRET_KEY-burned note added", "pass": true}
+      ]
+    }
+  },
+  "backendTests": {
+    "command": "DEBUG=true SECRET_KEY=<generated> ./venv/bin/python manage.py test events --noinput",
+    "result": "OK",
+    "ran": 197,
+    "failures": 0,
+    "errors": 0,
+    "note": "Context/plan claimed 97 tests; the suite is actually 197 (FB/IG scrapers + CRM push added since the context doc was written). IMPORTANT: tests MUST run with DEBUG=true. With DEBUG unset/false, SECURE_SSL_REDIRECT=True issues 301s that break ~48 view/API tests using the Django test client over plain HTTP. This matches the pre-change behavior where DEBUG was hardcoded True. See deviations / follow-ups."
+  },
+  "frontendCheck": {
+    "command": "pnpm --filter frontend check",
+    "result": "0 ERRORS (12 pre-existing warnings, none in new auth files)"
+  }
+}
