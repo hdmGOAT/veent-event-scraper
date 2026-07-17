@@ -1,0 +1,16 @@
+{
+  "plan": "process/general-plans/active/deploy-readiness_PLAN_16-07-26.md",
+  "date": "2026-07-16",
+  "keyFacts": [
+    "SvelteKit adapter is configured via sveltekit() inline options in apps/frontend/vite.config.ts; svelte.config.js is ignored (Vite prints: 'svelte.config.js is ignored when options are passed via your Vite config').",
+    "The pre-existing production behavior in hooks.server.ts redirects every non-tracker, non-/api route to /tracker. The auth gate had to explicitly resolve public paths before this redirect to avoid a /login <-> /tracker loop.",
+    "SvelteKit form actions return a JSON action-result (HTTP 200) for non-text/html Accept headers, and a real 303 for browser form navigations (Accept: text/html). Real browsers get the 303; only raw curl without Accept sees the 200 JSON envelope.",
+    "adapter-node enforces SvelteKit CSRF origin checking on POST; deployed nginx must forward a correct Host/Origin (standard config already in the deploy README).",
+    "Backend tests run against a shared Neon Postgres 'test_neondb'; concurrent test runs collide ('database is being accessed by other users'). Run exactly one suite at a time.",
+    "Backend test count is 197 (context doc said 97 — stale)."
+  ],
+  "envVarContracts": {
+    "backend": ["SECRET_KEY (required if DEBUG=False)", "DEBUG (default False)", "ALLOWED_HOSTS (comma list, dev fallback)", "PROD_ORIGIN (adds to CSRF_TRUSTED_ORIGINS)", "DATABASE_URL"],
+    "frontend": ["ENVIRONMENT (=production enables gate)", "DASHBOARD_PASSWORD", "SESSION_SECRET", "DJANGO_API_URL", "NODE_API_URL"]
+  }
+}

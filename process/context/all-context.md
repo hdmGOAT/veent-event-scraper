@@ -1,6 +1,6 @@
 # Veent Event Scraper - All Context
 
-Last updated: 2026-06-17 (rev 3 — monorepo + Neon Postgres + 10 scrapers + ScraperRun run-jobs + category normalization)
+Last updated: 2026-07-16 (rev 4 — env-driven Django settings + adapter-node + SvelteKit auth gate + 197 tests + CI)
 
 This file is the root context entrypoint for the repo.
 
@@ -42,11 +42,14 @@ review workflows, and UI-triggered run jobs. A pluggable scraper framework regis
 scrapers; a `manage.py scrape` command and JSON API endpoints both drive them. The backend
 also exposes display-layer category normalization (`events/categories.py`) and a staff
 `/review/` UI; Django admin remains a secondary raw-data console. The primary operator surface
-is the CSR-only SvelteKit frontend with five routes (`/`, `/events`, `/organizers`, `/venues`,
-`/scrapers`) — a Scraper Center with Run / Run All / run-history, charts, sortable tables, and
-a shared component library, backed by the JSON endpoints. The larger product vision (fuzzy
-cross-source dedup/merge, CSV + JSON/REST export, CI, production hardening) is **not yet built**
-— it is the roadmap this codebase grows into.
+is the SvelteKit frontend (now SSR-capable via `adapter-node`) with five routes (`/`, `/events`,
+`/organizers`, `/venues`, `/scrapers`) — a Scraper Center with Run / Run All / run-history,
+charts, sortable tables, and a shared component library, backed by the JSON endpoints. In
+production the dashboard and all `/api/*` calls are protected by a shared-password auth gate
+in `hooks.server.ts` (signed HttpOnly cookie; no-op in dev). Django settings are fully
+env-driven (`SECRET_KEY`, `DEBUG`, `ALLOWED_HOSTS`). CI is configured (`.github/workflows/ci.yml`).
+The larger product vision (fuzzy cross-source dedup/merge, CSV + JSON/REST export) is **not
+yet built** — it is the roadmap this codebase grows into.
 
 **Audience / interface decisions:**
 
@@ -55,7 +58,9 @@ cross-source dedup/merge, CSV + JSON/REST export, CI, production hardening) is *
 - Scraper triggering: **UI-triggered** via Scraper Center (POST to `/api/scrapers/<key>/run/`
   or `/api/scrapers/run-all/`); also triggerable via `manage.py scrape`.
 - Scraper scheduling: **manual / OS cron** (no Celery/queue).
-- Team project; tests run on Neon PostgreSQL; 97 tests currently passing.
+- Team project; tests run on Neon PostgreSQL; 197 tests currently passing.
+- CI: `.github/workflows/ci.yml` runs backend tests (requires `DEBUG=true`), migration check,
+  and `pnpm --filter frontend check` on push/PR.
 
 ---
 
@@ -151,12 +156,19 @@ veent-event-scraper/
         management/commands/
           scrape.py / run_scraper_job.py
       templates/                      -- secondary surface (legacy list/detail + /review/)
-    frontend/                         -- SvelteKit 2 + Svelte 5 (primary admin UI, CSR-only)
-      vite.config.ts                  -- Tailwind v4 plugin + runes enforced; proxy /api → :8000
+    frontend/                         -- SvelteKit 2 + Svelte 5 (primary admin UI, SSR via adapter-node)
+      vite.config.ts                  -- Tailwind v4 plugin + runes enforced; proxy /api → :8000; adapter-node wired here
       src/
         app.css                       -- @theme {} design tokens
-        routes/                       -- /, /events, /organizers, /organizers/[slug], /venues, /scrapers
+        hooks.server.ts               -- SSR handle: production auth gate (shared-password) + /api/* proxy to Django
+        routes/
+          +layout.ts                  -- (ssr kept server-side; no longer export const ssr = false globally)
+          /                           -- dashboard
+          /events / /organizers / /organizers/[slug] / /venues / /scrapers
+          login/                      -- /login page + server action (+page.svelte, +page.server.ts)
+          logout/                     -- /logout server handler (+server.ts)
         lib/
+          session.ts                  -- cookie-signing helpers: signToken / verifyToken (HMAC-SHA256, node:crypto)
           components/                 -- Sidebar, PageHeader, Badge, StatCard, BarChart, DonutChart, TableSkeleton, SortHeader
           api.ts                      -- typed fetch wrappers for all /api/* endpoints
           types.ts / format.ts / sort.ts
@@ -187,18 +199,28 @@ monorepo conversion. Do NOT use them as references. All active code lives under 
   category strings to display buckets at the API layer (no stored field mutated)
 - **Package manager (Python):** pip + `requirements.txt`, virtualenv (`venv/`)
 - **Auth:** Django's built-in `django.contrib.auth` for Django admin + `/review/` staff UI
-  (`@staff_member_required`). The SvelteKit frontend has **no auth bridge to Django** — the
-  "Admin User" display in the sidebar is static HTML; no login flow exists in the SvelteKit
-  app. JSON API auth posture is described in the API Surface section below.
+  (`@staff_member_required`). The SvelteKit frontend now has a **shared-password auth gate**
+  (`hooks.server.ts`) protecting all routes including the `/api/*` SSR proxy — but this gate
+  operates at the SvelteKit layer, not the Django layer. Django endpoints remain `@csrf_exempt`;
+  auth at the Django API level depends on nginx routing `/api/` to the SvelteKit node server
+  (port 3000) rather than directly to Django:8000. If nginx routes `/api/` directly to Django,
+  the gate is bypassed. See Auth posture in the API Surface section for the full table.
 
 **Frontend (`apps/frontend/`):**
 - **Framework:** SvelteKit 2
 - **Language:** TypeScript + Svelte 5 (runes mode forced via `vite.config.ts` `compilerOptions.runes`)
-- **Rendering:** CSR-only (`export const ssr = false` in `+layout.ts`); no SSR, no hydration concerns
+- **Rendering:** SSR-capable via `adapter-node` (produces `apps/frontend/build/index.js`; node server on port 3000).
+  Active SSR hooks in `hooks.server.ts` handle the production auth gate and the `/api/*` proxy to Django.
+  Note: adapter is wired in `vite.config.ts` (inline `sveltekit()` options), NOT in `svelte.config.js`
+  — when options are passed inline, SvelteKit ignores `svelte.config.js` entirely.
+- **Auth gate:** `hooks.server.ts` checks a signed `sess` cookie (HMAC-SHA256, `SESSION_SECRET`)
+  against `DASHBOARD_PASSWORD` in production (`ENVIRONMENT=production`). Public paths: `/login`,
+  `/logout`, `/_app/*`, `/favicon.ico`. All other routes (including `/api/*` proxy calls) require a
+  valid cookie. Dev mode (`ENVIRONMENT` absent or not `'production'`) bypasses the gate entirely.
 - **Styling:** Tailwind CSS v4 via `@tailwindcss/vite` plugin; design tokens in `src/app.css` `@theme {}`
 - **Charts:** Chart.js (wrapped in `BarChart.svelte` and `DonutChart.svelte`)
 - **Icons:** lucide-svelte
-- **Build:** Vite; dev proxy routes `/api` → Django at `:8000`
+- **Build:** Vite + adapter-node; dev proxy routes `/api` → Django at `:8000`
 - **Package manager (JS):** pnpm
 
 ## Data Model
@@ -340,16 +362,17 @@ and included at the root in `config/urls.py`.
 
 | Endpoint | Auth |
 |---|---|
-| All `GET /api/*` JSON endpoints | Public — no auth, no CSRF |
-| `POST /api/scrapers/<key>/run/` | Public, `@csrf_exempt` |
-| `POST /api/scrapers/run-all/` | Public, `@csrf_exempt` |
+| All `GET /api/*` JSON endpoints | `@csrf_exempt` Django-side; gated at SvelteKit proxy layer in production |
+| `POST /api/scrapers/<key>/run/` | `@csrf_exempt` Django-side; gated at SvelteKit proxy layer in production |
+| `POST /api/scrapers/run-all/` | `@csrf_exempt` Django-side; gated at SvelteKit proxy layer in production |
 | `/review/*` HTMX staff UI | `@staff_member_required` (Django session + CSRF) |
 | `/admin/*` | Django admin auth |
 
-**Why the trigger endpoints are public:** The SvelteKit frontend has no auth bridge to Django
-(no login flow, no session). Django session/CSRF cannot be satisfied from the SvelteKit client.
-Mutation protection is deferred — this is a **known security debt** until a real auth bridge
-is implemented. See Gotchas section.
+**Auth architecture:** Django endpoints remain `@csrf_exempt` (no Django-side API auth). The
+SvelteKit `hooks.server.ts` auth gate (shared `sess` cookie) is the sole API-level protection.
+This gate only functions when nginx routes `/api/` to the SvelteKit node server (port 3000) —
+if nginx routes `/api/` directly to Django:8000 the gate is bypassed entirely. Operators must
+ensure nginx proxies `/api/` through port 3000. See the nginx /api/ bypass gotcha below.
 
 ### Scraper / Run-Jobs endpoints
 
@@ -395,7 +418,10 @@ Secondary surface. Public views: `event_list`, `event_detail`, `venue_list`, `ve
 
 CSR-only SvelteKit 2 + Svelte 5 dashboard. Dev server proxies `/api/*` → Django at `:8000` (`vite.config.ts`). Routes and components are listed in the **Repository Structure** tree above.
 
-**Key conventions:** `ssr = false` enforced; Svelte 5 runes only (`$state`/`$props`/`$derived`/`$effect`); Tailwind v4 design tokens in `src/app.css @theme {}`; all API calls via `src/lib/api.ts` (never ad-hoc `fetch`).
+**Key conventions:** SSR-capable (adapter-node); production auth gate in `hooks.server.ts`; Svelte 5
+runes only (`$state`/`$props`/`$derived`/`$effect`); Tailwind v4 design tokens in `src/app.css @theme {}`;
+all API calls via `src/lib/api.ts` (never ad-hoc `fetch`). Session cookie: `sess` (HMAC-SHA256,
+`SESSION_SECRET`), HttpOnly, Secure in production, SameSite=Lax, 30-day maxAge.
 
 ## Key Patterns and Conventions
 
@@ -421,8 +447,16 @@ CSR-only SvelteKit 2 + Svelte 5 dashboard. Dev server proxies `/api/*` → Djang
   roadmap item.
 
 **Frontend:**
-- **CSR-only.** `export const ssr = false` in `apps/frontend/src/routes/+layout.ts`. All data
-  fetching happens in the browser via `load()` functions or inline `fetch` calls.
+- **SSR-capable (adapter-node).** The production build runs as a Node.js server (`build/index.js`,
+  port 3000). `hooks.server.ts` owns the auth gate and `/api/*` SSR proxy. Route-level `load()`
+  functions run server-side in production.
+- **Production auth gate in `hooks.server.ts`.** A shared-password gate (env `DASHBOARD_PASSWORD`
+  + `SESSION_SECRET`) checks a signed `sess` cookie on every request. Public paths (`/login`,
+  `/logout`, `/_app/*`, `/favicon.ico`) bypass the gate. Dev mode (no `ENVIRONMENT=production`)
+  bypasses it entirely. Do not add `/api/` to the bypass list.
+- **Adapter wired in `vite.config.ts`, not `svelte.config.js`.** This project passes SvelteKit
+  options inline via `sveltekit({ ... })` in `vite.config.ts`; `svelte.config.js` is ignored
+  when options are passed inline. Always edit `vite.config.ts` for adapter/compiler changes.
 - **Svelte 5 runes are enforced project-wide** (`runes: true` in `vite.config.ts`, for all
   non-`node_modules` files). Use `$state`, `$props`, `$derived`, `$effect` — not legacy `$:`,
   stores, or the Options API.
@@ -434,19 +468,36 @@ CSR-only SvelteKit 2 + Svelte 5 dashboard. Dev server proxies `/api/*` → Djang
 ## Environment and Configuration
 
 - **Config file:** `apps/backend/config/settings.py`.
-- **`.env` file:** `apps/backend/.env` (git-ignored). Contains `DATABASE_URL` (Neon Postgres
-  connection string), `SECRET_KEY`, and any scraper API keys.
+- **`.env` files:** `apps/backend/.env` (git-ignored) and `apps/frontend/.env` (git-ignored).
+  Backend `.env` contains `DATABASE_URL`, `SECRET_KEY`, `DEBUG`, `ALLOWED_HOSTS`, `PROD_ORIGIN`,
+  and any scraper API keys. Frontend `.env` contains `DJANGO_API_URL`, `NODE_API_URL`,
+  `ENVIRONMENT`, `DASHBOARD_PASSWORD`, `SESSION_SECRET`.
 - **`.gitignore`** excludes `.env` / `.env.*`, `db.sqlite3`, `/media/`, `/staticfiles/`, `venv/`.
 - **Database:** Neon PostgreSQL. Set via the `DATABASE_URL` env var; `dj_database_url.config()`
   in `settings.py` parses it. **Never configure SQLite for any real environment.**
-- **Key env vars** (names only, never commit values):
+- **Backend env vars** (names only, never commit values):
   - `DATABASE_URL` — Neon Postgres connection string
-  - `SECRET_KEY` — Django secret key
-  - `DEBUG` — set False in production
-  - `ALLOWED_HOSTS` — comma-separated allowed hosts
+  - `SECRET_KEY` — Django secret key (fully env-driven; no hardcoded fallback; the key previously
+    committed to git is burned — generate a fresh one for any production deploy)
+  - `DEBUG` — parsed as `os.environ.get('DEBUG', 'False').lower() not in ('false', '0', 'no')`;
+    defaults to `False` when absent (production-safe). **Backend tests require `DEBUG=true`** —
+    with `DEBUG=False` the `SECURE_SSL_REDIRECT=True` block issues 301 redirects that break ~48
+    view/API tests. CI sets `DEBUG: "true"` in the backend job env.
+  - `ALLOWED_HOSTS` — comma-separated; defaults to `['localhost', '127.0.0.1', 'testserver']`
+    when absent (dev convenience only)
+  - `PROD_ORIGIN` — production origin (e.g. `https://your-domain.com`); added to `CSRF_TRUSTED_ORIGINS`
   - Scraper-specific API keys as needed (e.g. `GOOGLE_PLACES_API_KEY`)
-- **Frontend:** no `.env` needed for dev; Vite proxy config in `apps/frontend/vite.config.ts`
-  proxies `/api/*` to Django at `http://localhost:8000` during `pnpm dev` (no CORS config needed).
+- **Frontend env vars** (read at node process start, not build time):
+  - `DJANGO_API_URL` — Django backend URL for the SSR proxy (default `http://localhost:8000`)
+  - `NODE_API_URL` — node API URL for `/node-api/*` proxy (default `http://localhost:8001`)
+  - `ENVIRONMENT` — set to `production` to enable the auth gate; any other value (or absent)
+    disables the gate (dev-safe default)
+  - `DASHBOARD_PASSWORD` — the shared password for the auth gate; **required in production**;
+    gate fails closed (all requests → `/login`) if absent
+  - `SESSION_SECRET` — HMAC key for signing the `sess` cookie; **required in production**;
+    missing secret causes all verify calls to fail → all requests redirect to `/login`
+- **Frontend dev:** `pnpm dev` uses Vite's dev proxy (`/api/*` → Django at `http://localhost:8000`);
+  no `.env` is needed for dev (auth gate is disabled when `ENVIRONMENT` is not `production`).
 
 ## Commands
 
@@ -455,7 +506,7 @@ CSR-only SvelteKit 2 + Svelte 5 dashboard. Dev server proxies `/api/*` → Djang
 | Start full monorepo dev (frontend + backend) | `pnpm dev` (from repo root) |
 | Backend only | `cd apps/backend && ./venv/bin/python manage.py runserver` |
 | Frontend only | `pnpm --filter frontend dev` |
-| Run backend tests | `cd apps/backend && ./venv/bin/python manage.py test events` |
+| Run backend tests | `cd apps/backend && ./venv/bin/python manage.py test events` | requires `DEBUG=true` — see Environment section |
 | Run one test class | `cd apps/backend && ./venv/bin/python manage.py test events.tests.MyTest` |
 | Frontend type-check | `pnpm --filter frontend check` |
 | Frontend build | `pnpm --filter frontend build` |
@@ -480,10 +531,11 @@ CSR-only SvelteKit 2 + Svelte 5 dashboard. Dev server proxies `/api/*` → Djang
   `"SUB1 Elite, SUB1 Competitor, Open Wave"`). Raw values are not human-readable category
   labels. Always use `normalize_category` (from `events/categories.py`) when displaying
   category data — the `/api/events/by-category/` endpoint does this automatically.
-- **Auth/security debt:** The SvelteKit frontend has no login flow. All JSON endpoints
-  (including the POST trigger/run-all/cancel) are public and `@csrf_exempt`. This is intentional
-  for now but is a **known follow-up item** — re-gate when a real Django-SvelteKit auth
-  bridge is added.
+- **Auth posture:** Django JSON endpoints remain `@csrf_exempt`. The SvelteKit auth gate
+  (`hooks.server.ts`) is the sole production protection — but only when nginx routes `/api/`
+  through the SvelteKit node server (port 3000). Direct nginx → Django:8000 bypasses the gate.
+  See the nginx /api/ bypass gotcha below. A real per-view Django-side auth bridge is a known
+  future follow-up item.
 - **Django `@staff_member_required` on JSON endpoints returns 302 → HTML.** A `fetch()` call
   that assumes `res.ok === 200 → JSON` will throw on a 302 redirect to the login page.
   Use `@csrf_exempt` for JSON mutations from session-less clients; keep `@staff_member_required`
@@ -492,18 +544,33 @@ CSR-only SvelteKit 2 + Svelte 5 dashboard. Dev server proxies `/api/*` → Djang
   polling model (polling until the DB row is terminal) is designed to tolerate this.
 - **Frontend has no tests yet.** `pnpm --filter frontend check` (svelte-check + tsc) and
   `pnpm --filter frontend build` are the only automated frontend verification steps.
-- **No CI** is configured yet. Setting up CI to run `manage.py test` + migration check +
-  `pnpm check` on push is a planned but unscheduled item.
-- Production hardening (real `SECRET_KEY`, `DEBUG=False`, env config) is unaddressed by design
-  at this stage.
-- **97 tests currently passing** as of 2026-06-17 (`apps/backend/events/tests.py`).
-  Run with: `cd apps/backend && ./venv/bin/python manage.py test events`.
+- **CI is configured** (`.github/workflows/ci.yml`). Backend job sets `DEBUG: "true"` in env —
+  required because `DEBUG=False` activates `SECURE_SSL_REDIRECT=True` which issues 301 redirects
+  breaking ~48 view/API tests. CI also runs a migration check and `pnpm --filter frontend check`.
+- **197 tests currently passing** as of 2026-07-16 (`apps/backend/events/tests.py`).
+  Run with: `cd apps/backend && DEBUG=true ./venv/bin/python manage.py test events`.
+- **SvelteKit inline-Vite-config gotcha:** when `sveltekit()` options are passed inline in
+  `vite.config.ts`, SvelteKit **ignores `svelte.config.js` entirely**. The adapter must be set
+  in `vite.config.ts`. Editing only `svelte.config.js` produces "No adapter specified" and no
+  `build/index.js`. This project wires `adapter-node` in `vite.config.ts`; `svelte.config.js`
+  is kept in sync for consistency but is not the authoritative adapter source.
+- **Single-gate architecture and the nginx /api/ bypass risk:** `hooks.server.ts` gates
+  the dashboard AND all `/api/*` because the SvelteKit node server proxies `/api/*` to Django.
+  This only holds if nginx routes `/api/` to the SvelteKit node server (port 3000). If nginx
+  routes `/api/` directly to Django:8000, the auth gate is bypassed entirely. The recommended
+  nginx config routes all traffic through port 3000 (SvelteKit upstream) and binds Django's
+  gunicorn to `127.0.0.1:8000` (localhost-only, reachable only via the proxy).
+- **Backend tests require `DEBUG=true`:** the `if not DEBUG:` block in `settings.py` enables
+  `SECURE_SSL_REDIRECT=True`, which causes Django's test client to receive 301 redirects instead
+  of 200/302 responses for ~48 view and API tests. Always run backend tests with `DEBUG=true`
+  (or `DEBUG=true` in `apps/backend/.env`). CI enforces this via the backend job env.
 
 ## Scan Metadata
 
-- Generated: 2026-06-16 (rev 2); revised 2026-06-17 (rev 3)
+- Generated: 2026-06-16 (rev 2); revised 2026-06-17 (rev 3); revised 2026-07-16 (rev 4)
 - Package managers: pnpm (monorepo root + frontend), pip/venv (backend)
 - Active scrapers: 10 (google_places, allevents_cdo, happeningnext_cdo, racemeister_partners, racemeister_events, myruntime, ticket2me, planout, luma, eventbrite)
 - Migrations: 0001–0012 applied
-- Backend tests: 97 (all passing, Neon Postgres)
+- Backend tests: 197 (all passing with DEBUG=true, Neon Postgres)
 - Frontend tests: 0 (svelte-check + build are the only automated verification)
+- CI: configured (.github/workflows/ci.yml)

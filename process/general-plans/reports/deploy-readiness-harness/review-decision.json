@@ -1,0 +1,20 @@
+{
+  "plan": "process/general-plans/active/deploy-readiness_PLAN_16-07-26.md",
+  "area": "D — SvelteKit shared-password auth (high risk)",
+  "date": "2026-07-16",
+  "reviewer": "vc-execute-agent (self-review against approved plan)",
+  "decision": "approve-with-required-operator-followups",
+  "rationale": "All 12 auth-gate runtime checks and all 7 adversarial checks passed against the production adapter-node build. Signing uses HMAC-SHA256 with timing-safe comparison; password compare is timing-safe; missing secrets fail closed. Two runtime-only bugs (login/tracker loop, adapter in wrong config file) were found and fixed during verification.",
+  "blockingIssues": [],
+  "requiredOperatorFollowups": [
+    "Rotate SECRET_KEY: generate a fresh value (python -c \"import secrets; print(secrets.token_urlsafe(50))\"). The committed key is burned. NOT done in code per plan.",
+    "Run backend tests / CI with DEBUG=true, or CI must otherwise disable SECURE_SSL_REDIRECT; else ~48 view tests 301-fail.",
+    "Remove or IP-restrict the nginx /api/ location block, or the auth gate is bypassed for direct API calls (documented in deploy README).",
+    "Set DASHBOARD_PASSWORD and SESSION_SECRET in the frontend production env (fail-closed if absent).",
+    "pnpm install already run locally; ensure pnpm-lock.yaml change is committed."
+  ],
+  "deviationsFromPlan": [
+    "C-3: adapter wired in apps/frontend/vite.config.ts instead of apps/frontend/svelte.config.js, because the project passes sveltekit() options inline via Vite, which makes svelte.config.js inert. svelte.config.js was still updated to adapter-node for consistency. This achieves the plan's explicit, approved contract (adapter-node -> build/index.js).",
+    "hooks.server.ts: added an early resolve(event) for public paths so /login does not fall through to the pre-existing tracker redirect (loop fix). The plan's D-5 intent (login reachable, gate first) is preserved; proxy code unchanged."
+  ]
+}
