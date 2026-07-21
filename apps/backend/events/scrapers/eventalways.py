@@ -17,7 +17,6 @@ from __future__ import annotations
 import json
 import logging
 import re
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from datetime import datetime
 from typing import Iterable
 from zoneinfo import ZoneInfo
@@ -72,24 +71,16 @@ def _resolve_proxy_url() -> str | None:
 def _fetch_html(url: str, proxy: str | None = None) -> str:
     from scrapling.fetchers import StealthyFetcher
 
-    fetch_timeout = 90  # seconds per URL before giving up on Cloudflare
-
     try:
-        with ThreadPoolExecutor(max_workers=1) as ex:
-            future = ex.submit(
-                StealthyFetcher.fetch,
-                url,
-                headless=True,
-                solve_cloudflare=True,
-                network_idle=True,
-                proxy=proxy,
-            )
-            try:
-                page = future.result(timeout=fetch_timeout)
-            except FuturesTimeoutError:
-                logger.warning("Cloudflare solve timed out after %ss for %s — skipping", fetch_timeout, url)
-                future.cancel()
-                return ""
+        page = StealthyFetcher.fetch(
+            url,
+            headless=True,
+            solve_cloudflare=True,
+            network_idle=True,
+            proxy=proxy,
+            timeout=60000,
+            retries=2,
+        )
         return page.html_content or ""
     except Exception as exc:
         logger.error("EventAlways: fetch failed %s: %s", url, exc)
