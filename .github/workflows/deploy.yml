@@ -1,9 +1,9 @@
 name: Deploy
 
-# Runs after CI passes on main — never deploys a broken build.
+# Runs after Build pushes images to GHCR — CI must pass first (Build depends on it).
 on:
   workflow_run:
-    workflows: [CI]
+    workflows: [Build]
     branches: [main]
     types: [completed]
 
@@ -70,10 +70,11 @@ jobs:
             git pull --ff-only
           "
 
-      - name: Build and restart containers
+      - name: Pull images and restart containers
         run: |
           ssh -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} "
             set -euo pipefail
-            docker compose -f ${{ vars.DEPLOY_PATH }}/docker-compose.yml \
-              up -d --build --remove-orphans
+            echo ${{ secrets.GHCR_TOKEN }} | docker login ghcr.io -u ${{ github.repository_owner }} --password-stdin
+            docker compose -f ${{ vars.DEPLOY_PATH }}/docker-compose.yml pull
+            docker compose -f ${{ vars.DEPLOY_PATH }}/docker-compose.yml up -d --remove-orphans
           "

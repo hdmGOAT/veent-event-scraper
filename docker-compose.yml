@@ -28,8 +28,7 @@ services:
       retries: 5
 
   backend:
-    build:
-      context: ./apps/backend
+    image: ghcr.io/hdmgoat/veent-backend:latest
     # required:false so compose commands work before .env exists; if it is still
     # missing at `up` time Django fails fast with a clear "SECRET_KEY must be set".
     env_file:
@@ -52,9 +51,7 @@ services:
     restart: unless-stopped
 
   frontend:
-    build:
-      context: .
-      dockerfile: apps/frontend/Dockerfile
+    image: ghcr.io/hdmgoat/veent-frontend:latest
     environment:
       # `production` enables the per-user auth gate; any other value = dev (no gate).
       ENVIRONMENT: "${ENVIRONMENT:-production}"
