@@ -70,7 +70,7 @@ def _wait_for_run(key: str, run_id: int, poll: int = 30) -> None:
 
 def _scrape_round(keys: list[str], default_interval: int, per_key_intervals: dict[str, int]) -> None:
     """Run all keys sequentially, one at a time, respecting per-key intervals."""
-    last_run: dict[str, float] = {}
+    last_run: dict[str, float] = {k: float("-inf") for k in keys}
     while not _SHUTDOWN.is_set():
         round_start = time.monotonic()
         for key in keys:
