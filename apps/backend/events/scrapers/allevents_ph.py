@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from datetime import datetime, timedelta
 from typing import Iterable
 from zoneinfo import ZoneInfo
@@ -126,17 +127,27 @@ class AllEventsPHScraper(BaseScraper):
             except Exception:
                 pass
 
+        fetch_timeout = 90  # seconds per URL before giving up on Cloudflare
+
         for city in _CITIES:
             url = f"https://allevents.in/{city['slug']}/all"
             logger.info("Fetching %s", url)
             try:
-                page = StealthyFetcher.fetch(
-                    url,
-                    headless=True,
-                    solve_cloudflare=True,
-                    network_idle=True,
-                    proxy=_proxy_url,
-                )
+                with ThreadPoolExecutor(max_workers=1) as ex:
+                    future = ex.submit(
+                        StealthyFetcher.fetch,
+                        url,
+                        headless=True,
+                        solve_cloudflare=True,
+                        network_idle=True,
+                        proxy=_proxy_url,
+                    )
+                    try:
+                        page = future.result(timeout=fetch_timeout)
+                    except FuturesTimeoutError:
+                        logger.warning("Cloudflare solve timed out after %ss for %s — skipping", fetch_timeout, url)
+                        future.cancel()
+                        continue
                 html = page.html_content or ""
                 if "Just a moment" in html:
                     logger.warning("Cloudflare blocked %s — skipping", url)

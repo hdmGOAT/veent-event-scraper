@@ -14,13 +14,17 @@ Run:
 """
 from __future__ import annotations
 
+import logging
 import re
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from dataclasses import replace
 from datetime import datetime, timezone as dt_timezone, timedelta
 from typing import Iterable
 
 from .proxy_manager import get_proxy_enabled, get_proxy_session
 from .base import BaseScraper, ScrapedEvent, ScrapedOrganizer, ScrapedVenue, save_organizers
+
+logger = logging.getLogger(__name__)
 
 BASE_URL = "https://happeningnext.com/cagayan%2Bde%2Boro"
 _PHT = dt_timezone(timedelta(hours=8))
@@ -59,15 +63,25 @@ class HappeningNextCDOScraper(BaseScraper):
             except Exception:
                 pass
 
-        StealthyFetcher.fetch(
-            BASE_URL,
-            headless=True,
-            network_idle=True,
-            timeout=90_000,
-            solve_cloudflare=True,
-            page_action=_scrape_all,
-            proxy=_proxy_url,
-        )
+        fetch_timeout = 90  # seconds per URL before giving up on Cloudflare
+
+        with ThreadPoolExecutor(max_workers=1) as ex:
+            future = ex.submit(
+                StealthyFetcher.fetch,
+                BASE_URL,
+                headless=True,
+                network_idle=True,
+                timeout=90_000,
+                solve_cloudflare=True,
+                page_action=_scrape_all,
+                proxy=_proxy_url,
+            )
+            try:
+                future.result(timeout=fetch_timeout)
+            except FuturesTimeoutError:
+                logger.warning("Cloudflare solve timed out after %ss for %s — skipping", fetch_timeout, BASE_URL)
+                future.cancel()
+                return
 
         yield from collected
 
