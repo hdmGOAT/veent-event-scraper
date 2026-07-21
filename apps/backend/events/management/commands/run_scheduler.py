@@ -175,6 +175,17 @@ class Command(BaseCommand):
     )
 
     def handle(self, *args, **options):
+        # On startup, any runs still marked QUEUED/RUNNING are orphaned from a
+        # previous scheduler process — their subprocesses no longer exist.
+        from events.models import ScraperRun
+        from django.utils import timezone
+        stale = ScraperRun.objects.filter(
+            status__in=[ScraperRun.Status.QUEUED, ScraperRun.Status.RUNNING]
+        )
+        count = stale.update(status=ScraperRun.Status.FAILED, finished_at=timezone.now(), updated_at=timezone.now())
+        if count:
+            logger.info("[scheduler] marked %d orphaned run(s) as failed on startup", count)
+
         threads = []
 
         # ── Scrape jobs ───────────────────────────────────────────────────────
