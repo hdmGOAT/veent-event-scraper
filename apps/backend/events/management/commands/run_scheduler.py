@@ -124,29 +124,47 @@ def _parse_push_totals(output: str) -> tuple[int, int, int]:
     return 0, 0, 0
 
 
-def _push_loop(interval: int) -> None:
+def _run_management_command(label: str, *args: str) -> tuple[int, str]:
+    """Run a management command and return (returncode, combined output)."""
     from django.conf import settings
     manage_py = str(settings.BASE_DIR / "manage.py")
-    logger.info("[scheduler] push — every %ss", interval)
+    result = subprocess.run(
+        [sys.executable, manage_py, *args],
+        cwd=str(settings.BASE_DIR),
+        capture_output=True,
+        text=True,
+    )
+    return result.returncode, result.stdout + result.stderr
+
+
+def _push_loop(interval: int) -> None:
+    logger.info("[scheduler] categorize+push — every %ss", interval)
     while not _SHUTDOWN.is_set():
+        # Step 1: categorize uncategorized events
+        logger.info("[scheduler] running categorize_events")
+        try:
+            code, output = _run_management_command("categorize_events", "categorize_events")
+            if code != 0:
+                logger.error("[scheduler] categorize_events exited with code %s\n%s", code, output)
+            else:
+                logger.info("[scheduler] categorize_events complete")
+        except Exception:
+            logger.exception("[scheduler] categorize_events failed")
+
+        # Step 2: push to CRM
         logger.info("[scheduler] running push_crm_leads")
         try:
-            result = subprocess.run(
-                [sys.executable, manage_py, "push_crm_leads"],
-                cwd=str(settings.BASE_DIR),
-                capture_output=True,
-                text=True,
-            )
-            output = result.stdout + result.stderr
-            if result.returncode != 0:
-                logger.error("[scheduler] push_crm_leads exited with code %s\n%s", result.returncode, output)
-                notify_push_failed(exit_code=result.returncode, error_output=output)
+            code, output = _run_management_command("push_crm_leads", "push_crm_leads")
+            if code != 0:
+                logger.error("[scheduler] push_crm_leads exited with code %s\n%s", code, output)
+                notify_push_failed(exit_code=code, error_output=output)
             else:
                 pushed, skipped, review = _parse_push_totals(output)
                 logger.info("[scheduler] push complete — pushed=%s skipped=%s review=%s", pushed, skipped, review)
                 notify_push_complete(pushed=pushed, skipped=skipped, review=review)
         except Exception:
             logger.exception("[scheduler] push_crm_leads failed")
+
         _SHUTDOWN.wait(timeout=interval)
 
 
