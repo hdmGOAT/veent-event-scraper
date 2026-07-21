@@ -406,3 +406,17 @@ def notify_push_complete(pushed: int, skipped: int, review: int) -> None:
         ],
     )
     _fire({"embeds": [embed]})
+
+
+def notify_push_failed(exit_code: int, error_output: str) -> None:
+    """Fire a Discord notification when a scheduled CRM push fails. Never raises."""
+    if not _webhook_url():
+        return
+    snippet = error_output.strip()[-500:] if error_output.strip() else "No output captured."
+    embed = _build_embed(
+        title="❌ CRM push failed",
+        description=f"```\n{snippet}\n```",
+        color=_COLOR_RED,
+        fields=[{"name": "Exit code", "value": str(exit_code), "inline": True}],
+    )
+    _fire({"embeds": [embed]})

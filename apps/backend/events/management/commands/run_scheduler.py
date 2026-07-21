@@ -34,7 +34,7 @@ import time
 import django
 from django.core.management.base import BaseCommand
 
-from events.notifications import notify_push_complete
+from events.notifications import notify_push_complete, notify_push_failed
 from events.runner import trigger_scraper_run
 from events.scrapers import SCRAPERS
 
@@ -96,6 +96,7 @@ def _push_loop(interval: int) -> None:
             output = result.stdout + result.stderr
             if result.returncode != 0:
                 logger.error("[scheduler] push_crm_leads exited with code %s\n%s", result.returncode, output)
+                notify_push_failed(exit_code=result.returncode, error_output=output)
             else:
                 pushed, skipped, review = _parse_push_totals(output)
                 logger.info("[scheduler] push complete — pushed=%s skipped=%s review=%s", pushed, skipped, review)
