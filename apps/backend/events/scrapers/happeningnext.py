@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import logging
 import re
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from dataclasses import replace
 from datetime import datetime, timezone as dt_timezone, timedelta
 from typing import Iterable
@@ -63,25 +62,16 @@ class HappeningNextCDOScraper(BaseScraper):
             except Exception:
                 pass
 
-        fetch_timeout = 90  # seconds per URL before giving up on Cloudflare
-
-        with ThreadPoolExecutor(max_workers=1) as ex:
-            future = ex.submit(
-                StealthyFetcher.fetch,
-                BASE_URL,
-                headless=True,
-                network_idle=True,
-                timeout=90_000,
-                solve_cloudflare=True,
-                page_action=_scrape_all,
-                proxy=_proxy_url,
-            )
-            try:
-                future.result(timeout=fetch_timeout)
-            except FuturesTimeoutError:
-                logger.warning("Cloudflare solve timed out after %ss for %s — skipping", fetch_timeout, BASE_URL)
-                future.cancel()
-                return
+        StealthyFetcher.fetch(
+            BASE_URL,
+            headless=True,
+            network_idle=True,
+            solve_cloudflare=True,
+            page_action=_scrape_all,
+            proxy=_proxy_url,
+            timeout=60000,
+            retries=2,
+        )
 
         yield from collected
 
