@@ -50,19 +50,6 @@ services:
       - "8000"
     restart: unless-stopped
 
-  frontend:
-    image: ghcr.io/hdmgoat/veent-frontend:latest
-    environment:
-      # `production` enables the per-user auth gate; any other value = dev (no gate).
-      ENVIRONMENT: "${ENVIRONMENT:-production}"
-      # Django reached over the internal Docker network, never exposed publicly.
-      DJANGO_API_URL: "http://backend:8000"
-    depends_on:
-      - backend
-    expose:
-      - "3000"
-    restart: unless-stopped
-
   caddy:
     image: caddy:2
     ports:
@@ -75,7 +62,6 @@ services:
       - caddy_data:/data
       - caddy_config:/config
     depends_on:
-      - frontend
       - backend
     restart: unless-stopped
 
