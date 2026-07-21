@@ -37,7 +37,12 @@ import time
 
 from django.core.management.base import BaseCommand
 
-from events.notifications import notify_push_complete, notify_push_failed
+from events.notifications import (
+    notify_push_complete,
+    notify_push_failed,
+    patch_scraper_progress,
+    post_scraper_progress,
+)
 from events.runner import trigger_scraper_run
 from events.scrapers import SCRAPERS
 
@@ -60,16 +65,35 @@ def _parse_interval(value: str) -> int:
 def _wait_for_run(key: str, run_id: int, timeout: int | None = None, poll: int = 30) -> None:
     """Block until the scraper subprocess finishes or timeout is exceeded.
 
+    Tracks keyword_index from ScraperRun.extra_counts: posts a progress Discord
+    message on first detection, then PATCHes it on each index change.
+
     If ``timeout`` seconds elapse, calls ``cancel_run`` and moves on.
     """
     from events.models import ScraperRun
     from events.runner import cancel_run
     elapsed = 0
+    progress_msg_id: str | None = None
+    last_keyword_index: int | None = None
     while not _SHUTDOWN.is_set():
-        status = ScraperRun.objects.filter(id=run_id).values_list("status", flat=True).first()
+        run_row = ScraperRun.objects.filter(id=run_id).values("status", "extra_counts").first()
+        if run_row is None:
+            return
+        status = run_row["status"]
         if status not in (ScraperRun.Status.QUEUED, ScraperRun.Status.RUNNING):
             logger.info("[scheduler] scrape/%s finished (status=%s)", key, status)
             return
+        # Progress tracking for search-query scrapers
+        extra = run_row.get("extra_counts") or {}
+        kw_index = extra.get("keyword_index")
+        kw_total = extra.get("keyword_total")
+        if kw_index is not None and kw_total:
+            if progress_msg_id is None:
+                progress_msg_id = post_scraper_progress(key, run_id, kw_index, kw_total)
+                last_keyword_index = kw_index
+            elif kw_index != last_keyword_index:
+                patch_scraper_progress(progress_msg_id, key, run_id, kw_index, kw_total)
+                last_keyword_index = kw_index
         if timeout and elapsed >= timeout:
             logger.warning(
                 "[scheduler] scrape/%s timed out after %ss — cancelling run_id=%s",

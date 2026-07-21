@@ -390,6 +390,57 @@ def patch_run_all_progress(message_id: str, runs: list, bandwidth_by_run: dict) 
     thread.start()
 
 
+def post_scraper_progress(key: str, run_id: int, index: int, total: int) -> str | None:
+    """Post a query-progress embed and return the Discord message ID. Never raises."""
+    url = _webhook_url()
+    if not url:
+        return None
+    try:
+        embed = _build_embed(
+            title=f"\U0001f504 {key} — running",
+            description=f"Query **{index}** / {total}",
+            color=_COLOR_BLUE,
+            fields=[{"name": "Run ID", "value": str(run_id), "inline": True}],
+        )
+        payload = json.dumps({"embeds": [embed]}).encode("utf-8")
+        req = urllib.request.Request(
+            url.rstrip("/") + "?wait=true", data=payload,
+            headers={"Content-Type": "application/json", "User-Agent": "DiscordBot (veent-event-scraper, 1.0)"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
+            body = json.loads(resp.read().decode("utf-8"))
+        return str(body.get("id")) if body.get("id") else None
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Discord progress post failed: %s", exc)
+        return None
+
+
+def patch_scraper_progress(message_id: str, key: str, run_id: int, index: int, total: int) -> None:
+    """Edit an existing progress embed with updated query index. Never raises."""
+    url = _webhook_url()
+    if not url or not message_id:
+        return
+    try:
+        webhook_id, token = _parse_webhook(url)
+        edit_url = f"https://discord.com/api/webhooks/{webhook_id}/{token}/messages/{message_id}"
+        embed = _build_embed(
+            title=f"\U0001f504 {key} — running",
+            description=f"Query **{index}** / {total}",
+            color=_COLOR_BLUE,
+            fields=[{"name": "Run ID", "value": str(run_id), "inline": True}],
+        )
+        payload = json.dumps({"embeds": [embed]}).encode("utf-8")
+        req = urllib.request.Request(
+            edit_url, data=payload,
+            headers={"Content-Type": "application/json", "User-Agent": "DiscordBot (veent-event-scraper, 1.0)"},
+            method="PATCH",
+        )
+        urllib.request.urlopen(req, timeout=_TIMEOUT)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Discord progress patch failed: %s", exc)
+
+
 def notify_push_complete(pushed: int, skipped: int, review: int) -> None:
     """Fire a Discord notification after a scheduled CRM push completes. Never raises."""
     if not _webhook_url():
