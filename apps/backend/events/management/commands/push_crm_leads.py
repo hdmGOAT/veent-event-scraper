@@ -216,6 +216,10 @@ class Command(BaseCommand):
             starts_at__gte=timezone.now()
         ).select_related("organizer_ref", "venue").exclude(
             organizer_ref__isnull=True
+        ).exclude(
+            agent_categories__isnull=True
+        ).exclude(
+            agent_categories=[]
         )
         if options["status"]:
             qs = qs.filter(organizer_ref__status=options["status"])
