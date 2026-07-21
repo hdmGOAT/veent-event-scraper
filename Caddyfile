@@ -1,0 +1,29 @@
+# Caddy reverse proxy with automatic HTTPS.
+#
+# {$DOMAIN} is supplied by docker-compose (from .env). For a real domain Caddy
+# obtains + renews Let's Encrypt certs automatically; for `localhost` it serves
+# a local self-signed cert. No certbot, no manual renewal.
+#
+# Routing:
+#   /admin/*, /static/*  → Django (admin UI + WhiteNoise static assets)
+#   everything else      → SvelteKit (auth gate + /api proxy to Django)
+#
+# Django is NEVER exposed directly — it is only reachable on the internal
+# Docker network via the SvelteKit proxy.
+
+{$DOMAIN} {
+	encode gzip
+
+	@admin path /admin /admin/*
+	handle @admin {
+		reverse_proxy backend:8000
+	}
+
+	handle /static/* {
+		reverse_proxy backend:8000
+	}
+
+	handle {
+		reverse_proxy frontend:3000
+	}
+}

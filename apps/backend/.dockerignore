@@ -1,0 +1,15 @@
+# Build context is apps/backend/. Keep the image lean and secrets out.
+venv/
+.venv/
+__pycache__/
+*.pyc
+*.log
+logs/
+.env
+.env.*
+!.env.example
+*.sqlite3
+*.sqlite3-journal
+staticfiles/
+scripts/fb_profile/
+scripts/fb_cookies.json
