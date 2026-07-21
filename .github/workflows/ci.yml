@@ -52,8 +52,6 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Check for missing migrations
-        # Exits non-zero if model changes exist without a corresponding migration file.
-        # Does not need a DB connection — reads model code and migration files only.
         run: python manage.py makemigrations --check --dry-run
 
       - name: Run tests
@@ -86,3 +84,121 @@ jobs:
 
       - name: Build
         run: pnpm --filter frontend build
+
+  # ── Build: push images to GHCR (main only) ──────────────────────────────
+  build:
+    name: Build & push images
+    runs-on: ubuntu-latest
+    needs: [backend, frontend]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set lowercase owner
+        run: echo "OWNER=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push backend
+        uses: docker/build-push-action@v6
+        with:
+          context: ./apps/backend
+          push: true
+          tags: ghcr.io/${{ env.OWNER }}/veent-backend:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and push frontend
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/frontend/Dockerfile
+          push: true
+          tags: ghcr.io/${{ env.OWNER }}/veent-frontend:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ── Deploy: pull images on VM (main only) ────────────────────────────────
+  deploy:
+    name: Deploy to VM
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    timeout-minutes: 15
+
+    steps:
+      - name: Set up SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "${{ secrets.SSH_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Write .env on VM
+        run: |
+          ssh -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} \
+            "cat > ${{ vars.DEPLOY_PATH }}/.env" << 'EOF'
+          DOMAIN=${{ secrets.DOMAIN }}
+          SECRET_KEY=${{ secrets.SECRET_KEY }}
+          DEBUG=${{ secrets.DEBUG }}
+          ALLOWED_HOSTS=${{ secrets.ALLOWED_HOSTS }}
+          PROD_ORIGIN=${{ secrets.PROD_ORIGIN }}
+          POSTGRES_USER=${{ secrets.POSTGRES_USER }}
+          POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }}
+          POSTGRES_DB=${{ secrets.POSTGRES_DB }}
+          DATABASE_URL=postgresql://${{ secrets.POSTGRES_USER }}:${{ secrets.POSTGRES_PASSWORD }}@postgres:5432/${{ secrets.POSTGRES_DB }}
+          ENVIRONMENT=${{ secrets.ENVIRONMENT }}
+          GROQ_API_KEY=${{ secrets.GROQ_API_KEY }}
+          GROQ_MODEL=${{ secrets.GROQ_MODEL }}
+          GROQ_CATEGORIZE_MODEL=${{ secrets.GROQ_CATEGORIZE_MODEL }}
+          CRM_INGEST_URL=${{ secrets.CRM_INGEST_URL }}
+          CRM_INGEST_SECRET=${{ secrets.CRM_INGEST_SECRET }}
+          DATAIMPULSE_USER=${{ secrets.DATAIMPULSE_USER }}
+          DATAIMPULSE_PASS=${{ secrets.DATAIMPULSE_PASS }}
+          PLACES_API_KEY=${{ secrets.PLACES_API_KEY }}
+          ALLEVENTS_API_KEY=${{ secrets.ALLEVENTS_API_KEY }}
+          FB_COOKIES_FILE=/cookies/facebook.json
+          IG_COOKIES_FILE=/cookies/instagram.txt
+          EOF
+
+      - name: Write cookie files on VM
+        run: |
+          ssh -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} \
+            "mkdir -p ${{ vars.DEPLOY_PATH }}/cookies"
+          echo "${{ secrets.FB_COOKIES_B64 }}" | base64 -d | \
+            ssh -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} \
+            "cat > ${{ vars.DEPLOY_PATH }}/cookies/facebook.json"
+          echo "${{ secrets.IG_COOKIES_B64 }}" | base64 -d | \
+            ssh -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} \
+            "cat > ${{ vars.DEPLOY_PATH }}/cookies/instagram.txt"
+
+      - name: Pull latest code
+        run: |
+          ssh -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} "
+            set -euo pipefail
+            cd ${{ vars.DEPLOY_PATH }}
+            git remote set-url origin ${{ vars.REPO_URL }}
+            git pull --ff-only
+          "
+
+      - name: Pull images and restart containers
+        run: |
+          ssh -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} "
+            set -euo pipefail
+            echo ${{ secrets.GHCR_TOKEN }} | docker login ghcr.io -u hdmgoat --password-stdin
+            docker compose -f ${{ vars.DEPLOY_PATH }}/docker-compose.yml pull
+            docker compose -f ${{ vars.DEPLOY_PATH }}/docker-compose.yml up -d --remove-orphans
+          "
