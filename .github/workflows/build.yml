@@ -26,6 +26,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Set lowercase owner
+        run: echo "OWNER=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
+
       - name: Log in to GHCR
         uses: docker/login-action@v3
         with:
@@ -41,7 +44,7 @@ jobs:
         with:
           context: ./apps/backend
           push: true
-          tags: ghcr.io/${{ github.repository_owner }}/veent-backend:latest
+          tags: ghcr.io/${{ env.OWNER }}/veent-backend:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -51,6 +54,6 @@ jobs:
           context: .
           file: apps/frontend/Dockerfile
           push: true
-          tags: ghcr.io/${{ github.repository_owner }}/veent-frontend:latest
+          tags: ghcr.io/${{ env.OWNER }}/veent-frontend:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
