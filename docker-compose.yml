@@ -48,20 +48,6 @@ services:
       - "3000"
     restart: unless-stopped
 
-  n8n:
-    image: docker.n8n.io/n8nio/n8n
-    environment:
-      N8N_HOST: "${DOMAIN:-localhost}"
-      N8N_PORT: "5678"
-      N8N_PROTOCOL: "https"
-      N8N_PATH: "/n8n/"
-      WEBHOOK_URL: "https://${DOMAIN:-localhost}/n8n/"
-    volumes:
-      - n8n_data:/home/node/.n8n
-    expose:
-      - "5678"
-    restart: unless-stopped
-
   caddy:
     image: caddy:2
     ports:
@@ -76,10 +62,8 @@ services:
     depends_on:
       - frontend
       - backend
-      - n8n
     restart: unless-stopped
 
 volumes:
-  n8n_data:
   caddy_data:
   caddy_config:
