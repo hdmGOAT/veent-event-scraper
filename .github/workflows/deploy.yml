@@ -1,0 +1,64 @@
+name: Deploy
+
+# Runs after CI passes on main — never deploys a broken build.
+on:
+  workflow_run:
+    workflows: [CI]
+    branches: [main]
+    types: [completed]
+
+jobs:
+  deploy:
+    name: Deploy to VM
+    runs-on: ubuntu-latest
+    if: github.event.workflow_run.conclusion == 'success'
+
+    steps:
+      - name: Deploy
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            set -euo pipefail
+            DEPLOY_PATH="${{ vars.DEPLOY_PATH }}"
+
+            # Pull latest code — update origin first so a repo move is handled automatically.
+            cd "$DEPLOY_PATH"
+            git remote set-url origin "${{ vars.REPO_URL }}"
+            git pull --ff-only
+
+            # Write .env from GitHub secrets on every deploy — never SSH in to edit config.
+            # <<'EOF' prevents the remote shell from expanding $ inside secret values.
+            cat > "$DEPLOY_PATH/.env" << 'EOF'
+            DOMAIN=${{ secrets.DOMAIN }}
+            SECRET_KEY=${{ secrets.SECRET_KEY }}
+            DEBUG=${{ secrets.DEBUG }}
+            ALLOWED_HOSTS=${{ secrets.ALLOWED_HOSTS }}
+            PROD_ORIGIN=${{ secrets.PROD_ORIGIN }}
+            POSTGRES_USER=${{ secrets.POSTGRES_USER }}
+            POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }}
+            POSTGRES_DB=${{ secrets.POSTGRES_DB }}
+            DATABASE_URL=postgresql://${{ secrets.POSTGRES_USER }}:${{ secrets.POSTGRES_PASSWORD }}@postgres:5432/${{ secrets.POSTGRES_DB }}
+            ENVIRONMENT=${{ secrets.ENVIRONMENT }}
+            GROQ_API_KEY=${{ secrets.GROQ_API_KEY }}
+            GROQ_MODEL=${{ secrets.GROQ_MODEL }}
+            GROQ_CATEGORIZE_MODEL=${{ secrets.GROQ_CATEGORIZE_MODEL }}
+            CRM_INGEST_URL=${{ secrets.CRM_INGEST_URL }}
+            CRM_INGEST_SECRET=${{ secrets.CRM_INGEST_SECRET }}
+            DATAIMPULSE_USER=${{ secrets.DATAIMPULSE_USER }}
+            DATAIMPULSE_PASS=${{ secrets.DATAIMPULSE_PASS }}
+            PLACES_API_KEY=${{ secrets.PLACES_API_KEY }}
+            ALLEVENTS_API_KEY=${{ secrets.ALLEVENTS_API_KEY }}
+            FB_COOKIES_FILE=/cookies/facebook.json
+            IG_COOKIES_FILE=/cookies/instagram.txt
+            EOF
+
+            # Write cookie files from secrets — no manual SCP needed.
+            mkdir -p "$DEPLOY_PATH/cookies"
+            echo "${{ secrets.FB_COOKIES_B64 }}" | base64 -d > "$DEPLOY_PATH/cookies/facebook.json"
+            echo "${{ secrets.IG_COOKIES_B64 }}" | base64 -d > "$DEPLOY_PATH/cookies/instagram.txt"
+
+            # Rebuild and restart — --remove-orphans cleans up removed services (e.g. n8n).
+            docker compose -f "$DEPLOY_PATH/docker-compose.yml" up -d --build --remove-orphans

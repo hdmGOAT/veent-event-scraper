@@ -116,6 +116,10 @@ AUTHENTICATION_BACKENDS = [
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    # WhiteNoise serves collected static files (Django admin + templates) directly
+    # from the app server, so no separate static host/volume is needed in the
+    # container deployment. Must sit immediately after SecurityMiddleware.
+    'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -225,8 +229,26 @@ USE_TZ = True
 
 STATIC_URL = 'static/'
 
-# Required for `collectstatic` (nginx serves this directory in production).
+# Required for `collectstatic`. Served by WhiteNoise (see MIDDLEWARE) in the
+# container deployment; nginx may serve it directly in the native deployment.
 STATIC_ROOT = BASE_DIR / 'staticfiles'
+
+# WhiteNoise compresses static assets and appends content hashes for far-future
+# caching. The manifest backend requires `collectstatic` to have run (the
+# container entrypoint does), and its `{% static %}` lookups fail without a
+# manifest — so it is used only in production. Dev/CI (DEBUG=true) keep the plain
+# storage so tests that render templates don't need a collectstatic step.
+STORAGES = {
+    'default': {
+        'BACKEND': 'django.core.files.storage.FileSystemStorage',
+    },
+    'staticfiles': {
+        'BACKEND': (
+            'django.contrib.staticfiles.storage.StaticFilesStorage' if DEBUG
+            else 'whitenoise.storage.CompressedManifestStaticFilesStorage'
+        ),
+    },
+}
 
 # Default primary key field type
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'

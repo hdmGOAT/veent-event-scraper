@@ -1,0 +1,23 @@
+# Applies to the repo-root build context (frontend image). Keep the context
+# small and secrets out of the image.
+**/node_modules
+**/.venv
+**/venv
+**/__pycache__
+**/*.pyc
+.git
+.turbo
+apps/frontend/.svelte-kit
+apps/frontend/build
+apps/backend/staticfiles
+apps/backend/logs
+**/.env
+**/.env.*
+!**/.env.example
+*.sqlite3
+cookies/
+process/
+docs/
+.claude/
+.codex/
+.agents/
