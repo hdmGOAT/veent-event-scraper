@@ -1,37 +1,40 @@
 """Interval-based scheduler for scrapers and CRM pushes.
 
-Scrape jobs
------------
-Controlled by three env vars:
+Scrapers run sequentially one at a time to avoid overloading the VM.
+After all scrapers complete, the scheduler waits SCRAPER_INTERVAL before
+the next round. A separate thread handles CRM pushes on its own timer.
 
+Env vars
+--------
     SCRAPER_KEYS=facebook_events,instagram_posts,luma
-        Comma-separated list of scraper keys to run (see events/scrapers/__init__.py).
+        Comma-separated scraper keys (see events/scrapers/__init__.py).
+        Scrapers run in this order, one at a time.
 
     SCRAPER_INTERVAL=6h
-        Default interval applied to every key in SCRAPER_KEYS.
+        How long to wait between full scrape rounds.
 
-    SCRAPER_INTERVAL_<KEY>=24h   (optional, per-scraper override)
-        Overrides SCRAPER_INTERVAL for a single scraper.
-        e.g. SCRAPER_INTERVAL_LUMA=24h
+    SCRAPER_INTERVAL_<KEY>=24h   (optional per-scraper override)
+        Skips a key in a round if it ran less than this long ago.
+        e.g. SCRAPER_INTERVAL_LUMA=24h  — luma only runs every 24h
+        even though the round interval is 6h.
 
-Push jobs
----------
     PUSH_INTERVAL=1h
-        How often to run `manage.py push_crm_leads`. Omit to disable.
+        How often to run `manage.py push_crm_leads`. Runs in a
+        separate thread so it doesn't block the scrape round.
 
-Interval format: 6h  /  30m  /  3600s  /  plain integer (seconds).
+Interval format: 6h / 30m / 3600s / plain integer (seconds).
 
 Run via the ``scheduler`` Docker Compose service — blocks indefinitely.
 """
 import logging
 import os
+import re
 import signal
 import subprocess
 import sys
 import threading
 import time
 
-import django
 from django.core.management.base import BaseCommand
 
 from events.notifications import notify_push_complete, notify_push_failed
@@ -54,27 +57,55 @@ def _parse_interval(value: str) -> int:
     return int(v)
 
 
-def _scrape_loop(key: str, interval: int) -> None:
-    logger.info("[scheduler] scrape/%s — every %ss", key, interval)
+def _wait_for_run(key: str, run_id: int, poll: int = 30) -> None:
+    """Block until the scraper subprocess finishes (polls ScraperRun status)."""
+    from events.models import ScraperRun
     while not _SHUTDOWN.is_set():
-        logger.info("[scheduler] triggering scrape: %s", key)
-        try:
-            run, already_active = trigger_scraper_run(key, triggered_by=None)
-            if already_active:
-                logger.info("[scheduler] scrape/%s already active, skipping", key)
-            else:
-                logger.info("[scheduler] scrape/%s started (run_id=%s)", key, run.id)
-        except Exception:
-            logger.exception("[scheduler] scrape/%s failed to trigger", key)
-        _SHUTDOWN.wait(timeout=interval)
+        status = ScraperRun.objects.filter(id=run_id).values_list("status", flat=True).first()
+        if status not in (ScraperRun.Status.QUEUED, ScraperRun.Status.RUNNING):
+            logger.info("[scheduler] scrape/%s finished (status=%s)", key, status)
+            return
+        _SHUTDOWN.wait(timeout=poll)
+
+
+def _scrape_round(keys: list[str], default_interval: int, per_key_intervals: dict[str, int]) -> None:
+    """Run all keys sequentially, one at a time, respecting per-key intervals."""
+    last_run: dict[str, float] = {}
+    while not _SHUTDOWN.is_set():
+        round_start = time.monotonic()
+        for key in keys:
+            if _SHUTDOWN.is_set():
+                break
+            min_interval = per_key_intervals.get(key, default_interval)
+            since_last = time.monotonic() - last_run.get(key, 0)
+            if since_last < min_interval:
+                logger.info(
+                    "[scheduler] scrape/%s skipped (ran %.0fs ago, interval=%ss)",
+                    key, since_last, min_interval,
+                )
+                continue
+            logger.info("[scheduler] triggering scrape: %s", key)
+            try:
+                run, already_active = trigger_scraper_run(key, triggered_by=None)
+                if already_active:
+                    logger.info("[scheduler] scrape/%s already active, skipping", key)
+                else:
+                    logger.info("[scheduler] scrape/%s started (run_id=%s) — waiting for completion", key, run.id)
+                    _wait_for_run(key, run.id)
+                    last_run[key] = time.monotonic()
+            except Exception:
+                logger.exception("[scheduler] scrape/%s failed to trigger", key)
+
+        if _SHUTDOWN.is_set():
+            break
+        elapsed = time.monotonic() - round_start
+        sleep = max(0, default_interval - elapsed)
+        logger.info("[scheduler] round complete — next round in %.0fs", sleep)
+        _SHUTDOWN.wait(timeout=sleep)
 
 
 def _parse_push_totals(output: str) -> tuple[int, int, int]:
-    """Extract (created, skipped, review) from push_crm_leads stdout."""
-    import re
-    m = re.search(
-        r"Totals:.*?created=(\d+).*?skipped=(\d+).*?review=(\d+)", output
-    )
+    m = re.search(r"Totals:.*?created=(\d+).*?skipped=(\d+).*?review=(\d+)", output)
     if m:
         return int(m.group(1)), int(m.group(2)), int(m.group(3))
     return 0, 0, 0
@@ -108,7 +139,7 @@ def _push_loop(interval: int) -> None:
 
 class Command(BaseCommand):
     help = (
-        "Run scrapers and CRM pushes on schedules defined by env vars. "
+        "Run scrapers sequentially and CRM pushes on schedules defined by env vars. "
         "Blocks until the process is killed."
     )
 
@@ -124,40 +155,43 @@ class Command(BaseCommand):
                 default_interval = _parse_interval(default_interval_raw)
             except (ValueError, TypeError):
                 logger.error(
-                    "[scheduler] SCRAPER_INTERVAL=%r is not a valid interval — scrape jobs disabled",
+                    "[scheduler] SCRAPER_INTERVAL=%r invalid — scrape jobs disabled",
                     default_interval_raw,
                 )
                 default_interval = None
 
             if default_interval is not None:
+                keys = []
+                per_key_intervals: dict[str, int] = {}
                 for key in [k.strip() for k in keys_raw.split(",") if k.strip()]:
                     if key not in SCRAPERS:
-                        logger.warning(
-                            "[scheduler] SCRAPER_KEYS: unknown scraper key %r — skipping", key
-                        )
+                        logger.warning("[scheduler] unknown scraper key %r — skipping", key)
                         continue
+                    keys.append(key)
                     override_raw = os.environ.get(f"SCRAPER_INTERVAL_{key.upper()}", "").strip()
                     if override_raw:
                         try:
-                            interval = _parse_interval(override_raw)
+                            per_key_intervals[key] = _parse_interval(override_raw)
                         except (ValueError, TypeError):
                             logger.warning(
-                                "[scheduler] SCRAPER_INTERVAL_%s=%r invalid — using default %ss",
-                                key.upper(), override_raw, default_interval,
+                                "[scheduler] SCRAPER_INTERVAL_%s=%r invalid — using default",
+                                key.upper(), override_raw,
                             )
-                            interval = default_interval
-                    else:
-                        interval = default_interval
 
+                if keys:
+                    logger.info(
+                        "[scheduler] %d scrapers queued sequentially, round interval=%ss",
+                        len(keys), default_interval,
+                    )
                     threads.append(threading.Thread(
-                        target=_scrape_loop,
-                        args=(key, interval),
-                        name=f"sched-scrape-{key}",
+                        target=_scrape_round,
+                        args=(keys, default_interval, per_key_intervals),
+                        name="sched-scrape",
                         daemon=True,
                     ))
         elif keys_raw or default_interval_raw:
             logger.warning(
-                "[scheduler] Both SCRAPER_KEYS and SCRAPER_INTERVAL must be set to schedule scrapes — skipping"
+                "[scheduler] Both SCRAPER_KEYS and SCRAPER_INTERVAL must be set — scrape jobs disabled"
             )
 
         # ── Push job ──────────────────────────────────────────────────────────
@@ -173,7 +207,7 @@ class Command(BaseCommand):
                 ))
             except (ValueError, TypeError):
                 logger.error(
-                    "[scheduler] PUSH_INTERVAL=%r is not a valid interval — push job disabled",
+                    "[scheduler] PUSH_INTERVAL=%r invalid — push job disabled",
                     push_interval_raw,
                 )
 
