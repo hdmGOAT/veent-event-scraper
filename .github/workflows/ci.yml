@@ -57,39 +57,11 @@ jobs:
       - name: Run tests
         run: python manage.py test events --verbosity=2
 
-  # ── Frontend: type-check + production build ──────────────────────────────
-  frontend:
-    name: Frontend (SvelteKit)
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: "10.33.0"
-
-      - name: Set up Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: pnpm
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Type-check
-        run: pnpm --filter frontend check
-
-      - name: Build
-        run: pnpm --filter frontend build
-
   # ── Build: push images to GHCR (main only) ──────────────────────────────
   build:
     name: Build & push images
     runs-on: ubuntu-latest
-    needs: [backend, frontend]
+    needs: [backend]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     timeout-minutes: 30
     permissions:
@@ -118,16 +90,6 @@ jobs:
           context: ./apps/backend
           push: true
           tags: ghcr.io/${{ env.OWNER }}/veent-backend:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      - name: Build and push frontend
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: apps/frontend/Dockerfile
-          push: true
-          tags: ghcr.io/${{ env.OWNER }}/veent-frontend:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
