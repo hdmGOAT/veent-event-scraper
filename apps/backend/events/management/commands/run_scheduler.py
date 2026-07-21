@@ -57,18 +57,31 @@ def _parse_interval(value: str) -> int:
     return int(v)
 
 
-def _wait_for_run(key: str, run_id: int, poll: int = 30) -> None:
-    """Block until the scraper subprocess finishes (polls ScraperRun status)."""
+def _wait_for_run(key: str, run_id: int, timeout: int | None = None, poll: int = 30) -> None:
+    """Block until the scraper subprocess finishes or timeout is exceeded.
+
+    If ``timeout`` seconds elapse, calls ``cancel_run`` and moves on.
+    """
     from events.models import ScraperRun
+    from events.runner import cancel_run
+    elapsed = 0
     while not _SHUTDOWN.is_set():
         status = ScraperRun.objects.filter(id=run_id).values_list("status", flat=True).first()
         if status not in (ScraperRun.Status.QUEUED, ScraperRun.Status.RUNNING):
             logger.info("[scheduler] scrape/%s finished (status=%s)", key, status)
             return
+        if timeout and elapsed >= timeout:
+            logger.warning(
+                "[scheduler] scrape/%s timed out after %ss — cancelling run_id=%s",
+                key, timeout, run_id,
+            )
+            cancel_run(run_id)
+            return
         _SHUTDOWN.wait(timeout=poll)
+        elapsed += poll
 
 
-def _scrape_round(keys: list[str], default_interval: int, per_key_intervals: dict[str, int]) -> None:
+def _scrape_round(keys: list[str], default_interval: int, per_key_intervals: dict[str, int], timeout: int | None = None) -> None:
     """Run all keys sequentially, one at a time, respecting per-key intervals."""
     last_run: dict[str, float] = {k: float("-inf") for k in keys}
     while not _SHUTDOWN.is_set():
@@ -91,7 +104,7 @@ def _scrape_round(keys: list[str], default_interval: int, per_key_intervals: dic
                     logger.info("[scheduler] scrape/%s already active, skipping", key)
                 else:
                     logger.info("[scheduler] scrape/%s started (run_id=%s) — waiting for completion", key, run.id)
-                    _wait_for_run(key, run.id)
+                    _wait_for_run(key, run.id, timeout=timeout)
                     last_run[key] = time.monotonic()
             except Exception:
                 logger.exception("[scheduler] scrape/%s failed to trigger", key)
@@ -179,13 +192,23 @@ class Command(BaseCommand):
                             )
 
                 if keys:
+                    timeout_raw = os.environ.get("SCRAPER_TIMEOUT", "").strip()
+                    scraper_timeout = None
+                    if timeout_raw:
+                        try:
+                            scraper_timeout = _parse_interval(timeout_raw)
+                        except (ValueError, TypeError):
+                            logger.error(
+                                "[scheduler] SCRAPER_TIMEOUT=%r invalid — no timeout applied",
+                                timeout_raw,
+                            )
                     logger.info(
-                        "[scheduler] %d scrapers queued sequentially, round interval=%ss",
-                        len(keys), default_interval,
+                        "[scheduler] %d scrapers queued sequentially, round interval=%ss, timeout=%s",
+                        len(keys), default_interval, f"{scraper_timeout}s" if scraper_timeout else "none",
                     )
                     threads.append(threading.Thread(
                         target=_scrape_round,
-                        args=(keys, default_interval, per_key_intervals),
+                        args=(keys, default_interval, per_key_intervals, scraper_timeout),
                         name="sched-scrape",
                         daemon=True,
                     ))

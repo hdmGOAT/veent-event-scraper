@@ -128,6 +128,7 @@ jobs:
           GROQ_CATEGORIZE_MODEL=${{ secrets.GROQ_CATEGORIZE_MODEL }}
           CRM_INGEST_URL=${{ secrets.CRM_INGEST_URL }}
           CRM_INGEST_SECRET=${{ secrets.CRM_INGEST_SECRET }}
+
           DATAIMPULSE_USER=${{ secrets.DATAIMPULSE_USER }}
           DATAIMPULSE_PASS=${{ secrets.DATAIMPULSE_PASS }}
           PLACES_API_KEY=${{ secrets.PLACES_API_KEY }}
@@ -136,6 +137,7 @@ jobs:
           IG_COOKIES_FILE=/cookies/instagram.txt
           SCRAPER_KEYS=${{ secrets.SCRAPER_KEYS }}
           SCRAPER_INTERVAL=${{ secrets.SCRAPER_INTERVAL }}
+          SCRAPER_TIMEOUT=${{ secrets.SCRAPER_TIMEOUT }}
           PUSH_INTERVAL=${{ secrets.PUSH_INTERVAL }}
           DISCORD_WEBHOOK_URL=${{ secrets.DISCORD_WEBHOOK_URL }}
           EOF

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import re
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from typing import Iterable
 
 from bs4 import BeautifulSoup
@@ -30,13 +31,23 @@ _BASE = "https://allevents.in"
 def _fetch_html(url: str, proxy: str | None = None) -> str:
     from scrapling.fetchers import StealthyFetcher
 
-    page = StealthyFetcher.fetch(
-        url,
-        headless=True,
-        solve_cloudflare=True,
-        network_idle=True,
-        proxy=proxy,
-    )
+    fetch_timeout = 90  # seconds per URL before giving up on Cloudflare
+
+    with ThreadPoolExecutor(max_workers=1) as ex:
+        future = ex.submit(
+            StealthyFetcher.fetch,
+            url,
+            headless=True,
+            solve_cloudflare=True,
+            network_idle=True,
+            proxy=proxy,
+        )
+        try:
+            page = future.result(timeout=fetch_timeout)
+        except FuturesTimeoutError:
+            logger.warning("Cloudflare solve timed out after %ss for %s — skipping", fetch_timeout, url)
+            future.cancel()
+            raise RuntimeError(f"Cloudflare solve timed out for {url}")
     html = page.html_content or ""
     if "Just a moment" in html:
         raise RuntimeError(f"Cloudflare blocked {url}")
