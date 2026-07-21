@@ -137,6 +137,7 @@ jobs:
           SCRAPER_KEYS=${{ secrets.SCRAPER_KEYS }}
           SCRAPER_INTERVAL=${{ secrets.SCRAPER_INTERVAL }}
           PUSH_INTERVAL=${{ secrets.PUSH_INTERVAL }}
+          DISCORD_WEBHOOK_URL=${{ secrets.DISCORD_WEBHOOK_URL }}
           EOF
 
       - name: Write cookie files on VM
