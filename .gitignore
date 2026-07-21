@@ -45,4 +45,4 @@ apps/backend/scripts/fb_cookies.json
 
 # Docker cookie mount — keep the directory, never commit the session files.
 /cookies/*
-!/cookies/.gitkeep
+!/cookies/.gitkeepsync-secrets-*.log

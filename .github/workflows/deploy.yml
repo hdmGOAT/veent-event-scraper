@@ -37,7 +37,10 @@ jobs:
             DEBUG=${{ secrets.DEBUG }}
             ALLOWED_HOSTS=${{ secrets.ALLOWED_HOSTS }}
             PROD_ORIGIN=${{ secrets.PROD_ORIGIN }}
-            DATABASE_URL=${{ secrets.DATABASE_URL }}
+            POSTGRES_USER=${{ secrets.POSTGRES_USER }}
+            POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }}
+            POSTGRES_DB=${{ secrets.POSTGRES_DB }}
+            DATABASE_URL=postgresql://${{ secrets.POSTGRES_USER }}:${{ secrets.POSTGRES_PASSWORD }}@postgres:5432/${{ secrets.POSTGRES_DB }}
             ENVIRONMENT=${{ secrets.ENVIRONMENT }}
             GROQ_API_KEY=${{ secrets.GROQ_API_KEY }}
             GROQ_MODEL=${{ secrets.GROQ_MODEL }}

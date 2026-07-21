@@ -3,15 +3,30 @@
 #   caddy     → TLS termination + reverse proxy (automatic Let's Encrypt)
 #   frontend  → SvelteKit dashboard: auth gate + /api proxy to Django
 #   backend   → Django (gunicorn) + Playwright/Chromium scrapers
-#   n8n       → pipeline scheduler (calls backend directly on the internal net)
-#
-# The database is external (Neon) — set DATABASE_URL in .env.
+#   postgres  → local Postgres database
 #
 # Quickstart:
 #   cp .env.example .env      # then fill in secrets
 #   docker compose up -d --build
 
 services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: "${POSTGRES_USER:-veent}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}"
+      POSTGRES_DB: "${POSTGRES_DB:-veent}"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    expose:
+      - "5432"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-veent}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   backend:
     build:
       context: ./apps/backend
@@ -29,6 +44,9 @@ services:
       # FB/IG session cookie files referenced by FB_COOKIES_FILE / IG_COOKIES_FILE.
       # Point those vars at /cookies/... in .env.
       - ./cookies:/cookies:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
     expose:
       - "8000"
     restart: unless-stopped
@@ -65,5 +83,6 @@ services:
     restart: unless-stopped
 
 volumes:
+  postgres_data:
   caddy_data:
   caddy_config:
