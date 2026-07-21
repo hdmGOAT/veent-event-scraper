@@ -388,3 +388,21 @@ def patch_run_all_progress(message_id: str, runs: list, bandwidth_by_run: dict) 
     payload = {"embeds": [embed]}
     thread = threading.Thread(target=_patch_scoreboard, args=(message_id, payload))
     thread.start()
+
+
+def notify_push_complete(pushed: int, skipped: int, review: int) -> None:
+    """Fire a Discord notification after a scheduled CRM push completes. Never raises."""
+    if not _webhook_url():
+        return
+    color = _COLOR_GREEN if pushed > 0 else _COLOR_BLUE
+    embed = _build_embed(
+        title="📤 CRM push complete",
+        description="",
+        color=color,
+        fields=[
+            {"name": "Pushed", "value": str(pushed), "inline": True},
+            {"name": "Skipped", "value": str(skipped), "inline": True},
+            {"name": "Review", "value": str(review), "inline": True},
+        ],
+    )
+    _fire({"embeds": [embed]})

@@ -134,6 +134,9 @@ jobs:
           ALLEVENTS_API_KEY=${{ secrets.ALLEVENTS_API_KEY }}
           FB_COOKIES_FILE=/cookies/facebook.json
           IG_COOKIES_FILE=/cookies/instagram.txt
+          SCRAPER_KEYS=${{ secrets.SCRAPER_KEYS }}
+          SCRAPER_INTERVAL=${{ secrets.SCRAPER_INTERVAL }}
+          PUSH_INTERVAL=${{ secrets.PUSH_INTERVAL }}
           EOF
 
       - name: Write cookie files on VM

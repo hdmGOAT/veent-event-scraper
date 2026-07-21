@@ -1,13 +1,13 @@
-# Veent Event Scraper — full stack in four containers.
+# Veent Event Scraper — scraper-only stack.
 #
-#   caddy     → TLS termination + reverse proxy (automatic Let's Encrypt)
-#   frontend  → SvelteKit dashboard: auth gate + /api proxy to Django
-#   backend   → Django (gunicorn) + Playwright/Chromium scrapers
-#   postgres  → local Postgres database
+#   postgres   → local Postgres database
+#   backend    → Django (gunicorn) + Playwright/Chromium scrapers
+#   scheduler  → interval-based scraper runner (manage.py run_scheduler)
+#   caddy      → TLS termination + reverse proxy (automatic Let's Encrypt)
 #
 # Quickstart:
 #   cp .env.example .env      # then fill in secrets
-#   docker compose up -d --build
+#   docker compose up -d
 
 services:
   postgres:
@@ -48,6 +48,19 @@ services:
         condition: service_healthy
     expose:
       - "8000"
+    restart: unless-stopped
+
+  scheduler:
+    image: ghcr.io/hdmgoat/veent-backend:latest
+    command: python manage.py run_scheduler
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      - ./cookies:/cookies:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
 
   caddy:
