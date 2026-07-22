@@ -210,11 +210,26 @@ class Command(BaseCommand):
         if count:
             logger.info("[scheduler] marked %d orphaned run(s) as failed on startup", count)
 
+        # Read scheduler config from DB if available; fall back to env vars below.
+        # Wrapped broadly so a slow/unreachable DB at startup can never break the
+        # env-var fallback path.
+        try:
+            from events.models import ScraperConfig
+            _db_cfg = ScraperConfig.objects.first()
+        except Exception:
+            _db_cfg = None
+
         threads = []
 
         # ── Scrape jobs ───────────────────────────────────────────────────────
-        keys_raw = os.environ.get("SCRAPER_KEYS", "").strip()
-        default_interval_raw = os.environ.get("SCRAPER_INTERVAL", "").strip()
+        keys_raw = (
+            _db_cfg.scraper_keys.strip() if _db_cfg and _db_cfg.scraper_keys.strip()
+            else os.environ.get("SCRAPER_KEYS", "").strip()
+        )
+        default_interval_raw = (
+            _db_cfg.scraper_interval.strip() if _db_cfg and _db_cfg.scraper_interval.strip()
+            else os.environ.get("SCRAPER_INTERVAL", "").strip()
+        )
 
         if keys_raw and default_interval_raw:
             try:
@@ -234,7 +249,10 @@ class Command(BaseCommand):
                         logger.warning("[scheduler] unknown scraper key %r — skipping", key)
                         continue
                     keys.append(key)
-                    override_raw = os.environ.get(f"SCRAPER_INTERVAL_{key.upper()}", "").strip()
+                    override_raw = (
+                        (_db_cfg.per_key_intervals or {}).get(key, "")
+                        if _db_cfg else ""
+                    ) or os.environ.get(f"SCRAPER_INTERVAL_{key.upper()}", "").strip()
                     if override_raw:
                         try:
                             per_key_intervals[key] = _parse_interval(override_raw)
@@ -245,7 +263,10 @@ class Command(BaseCommand):
                             )
 
                 if keys:
-                    timeout_raw = os.environ.get("SCRAPER_TIMEOUT", "").strip()
+                    timeout_raw = (
+                        _db_cfg.scraper_timeout.strip() if _db_cfg and _db_cfg.scraper_timeout.strip()
+                        else os.environ.get("SCRAPER_TIMEOUT", "").strip()
+                    )
                     scraper_timeout = None
                     if timeout_raw:
                         try:
@@ -271,7 +292,10 @@ class Command(BaseCommand):
             )
 
         # ── Push job ──────────────────────────────────────────────────────────
-        push_interval_raw = os.environ.get("PUSH_INTERVAL", "").strip()
+        push_interval_raw = (
+            _db_cfg.push_interval.strip() if _db_cfg and _db_cfg.push_interval.strip()
+            else os.environ.get("PUSH_INTERVAL", "").strip()
+        )
         if push_interval_raw:
             try:
                 push_interval = _parse_interval(push_interval_raw)

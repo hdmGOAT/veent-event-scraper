@@ -1,6 +1,6 @@
 from django.urls import path
 
-from . import views
+from . import crm_views, views
 
 app_name = "events"
 
@@ -49,6 +49,16 @@ urlpatterns = [
     path("api/search-queries/<int:pk>/run/", views.api_search_query_run, name="api_search_query_run"),
     path("api/search-queries/<int:pk>/", views.api_search_query_detail, name="api_search_query_detail"),
     path("api/search-queries/", views.api_search_queries, name="api_search_queries"),
+    # CRM API — authenticated by static X-API-Key header (see crm_views.crm_api_required).
+    # Intentionally separate from the /api/ prefix which is session-cookie-protected.
+    # More-specific paths (trigger/cancel/<key>) before the catch-all list path.
+    path("crm/scrapers/<str:key>/trigger/", crm_views.crm_scraper_trigger, name="crm_scraper_trigger"),
+    path("crm/scrapers/<str:key>/cancel/", crm_views.crm_scraper_cancel, name="crm_scraper_cancel"),
+    path("crm/scrapers/<str:key>/", crm_views.crm_scraper_detail, name="crm_scraper_detail"),
+    path("crm/scrapers/", crm_views.crm_scrapers_list, name="crm_scrapers_list"),
+    path("crm/settings/", crm_views.crm_settings, name="crm_settings"),
+    path("crm/pipeline/", crm_views.crm_pipeline, name="crm_pipeline"),
+    path("crm/health/", crm_views.crm_health, name="crm_health"),
     # n8n automation webhooks
     path("webhooks/scrape/", views.scraper_webhook, name="scraper_webhook"),
     path("webhooks/ingest-events/", views.ingest_events_webhook, name="ingest_events_webhook"),
