@@ -304,8 +304,8 @@ class MyRuntimeScraper(BaseScraper):
         organizers = _build_organizers(data)
         logger.info("MyRuntime: found %d unique organizers", len(organizers))
 
-        events_result = save_events(self.source, events)
         organizers_result = save_organizers(self.source, organizers)
+        events_result = save_events(self.source, events)
 
         return {
             **events_result,

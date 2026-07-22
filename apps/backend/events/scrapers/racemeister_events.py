@@ -173,8 +173,8 @@ class RacemeisterEventsScraper(BaseScraper):
         organizers = _build_organizers(items)
         logger.info("Racemeister: found %d unique organizers", len(organizers))
 
-        events_result = save_events(self.source, events)
         organizers_result = save_organizers(self.source, organizers)
+        events_result = save_events(self.source, events)
         return {
             **events_result,
             "organizers_created": organizers_result["created"],

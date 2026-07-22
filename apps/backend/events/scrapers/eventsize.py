@@ -662,8 +662,8 @@ class EventsizeScraper(BaseScraper):
 
     def run(self, **_kwargs) -> dict:
         events, organizers = self._collect()
-        events_result = save_events(self.source, events)
         organizers_result = save_organizers(self.source, organizers)
+        events_result = save_events(self.source, events)
         return {
             **events_result,
             "organizers_created": organizers_result["created"],

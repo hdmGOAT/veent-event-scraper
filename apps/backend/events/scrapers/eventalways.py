@@ -354,8 +354,8 @@ class EventAlwaysScraper(BaseScraper):
             len(events),
             len(organizers),
         )
-        events_result = save_events(self.source, events)
         organizers_result = save_organizers(self.source, list(organizers.values()))
+        events_result = save_events(self.source, events)
         return {
             **events_result,
             "organizers_created": organizers_result["created"],
