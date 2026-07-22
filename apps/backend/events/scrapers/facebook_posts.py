@@ -28,6 +28,7 @@ import urllib.parse
 from datetime import datetime, timezone as dt_timezone
 from typing import Iterable
 
+import requests
 from playwright.sync_api import sync_playwright
 from playwright_stealth import Stealth
 
