@@ -337,6 +337,7 @@ def crm_pipeline(request):
         .values("source")
         .annotate(
             total_future=Count("id", filter=Q(starts_at__gte=now)),
+            total_pushed=Count("id", filter=Q(crm_pushed_at__isnull=False)),
             pending_push=Count(
                 "id",
                 filter=(
@@ -402,4 +403,34 @@ def crm_health(request):
             "active_run_count": len(active_runs),
             "proxy_enabled": get_proxy_enabled(),
         }
+    )
+
+
+@csrf_exempt
+@crm_api_required
+@require_POST
+def crm_push_trigger(request):
+    """Kick off categorize_events + push_crm_leads in a background subprocess.
+
+    Returns immediately with ``{"status": "started"}`` — the push runs
+    asynchronously so the HTTP response is not held open. A second POST while a
+    push is already running is accepted (push_crm_leads is idempotent).
+    """
+    import subprocess
+    import sys
+    from django.conf import settings as django_settings
+
+    manage_py = str(django_settings.BASE_DIR / "manage.py")
+
+    def _run_bg(*args):
+        subprocess.Popen(
+            [sys.executable, manage_py, *args],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            close_fds=True,
+        )
+
+    _run_bg("categorize_events")
+    _run_bg("push_crm_leads")
+    return JsonResponse({"status": "started"})
     )
