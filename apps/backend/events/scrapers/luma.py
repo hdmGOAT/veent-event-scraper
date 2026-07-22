@@ -171,8 +171,8 @@ class LumaScraper(BaseScraper):
         events = [e for entry in items if (e := self._entry_to_event(entry))]
         organizers = _build_organizers(items)
         logger.info("Luma: %d events, %d organizers", len(events), len(organizers))
-        events_result = save_events(self.source, events)
         organizers_result = save_organizers(self.source, organizers)
+        events_result = save_events(self.source, events)
         return {
             **events_result,
             "organizers_created": organizers_result["created"],
