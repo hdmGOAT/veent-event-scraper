@@ -13,12 +13,14 @@ import fcntl
 import functools
 import json
 import logging
+import re
 import subprocess
 import sys
 import tempfile
 import threading
 from datetime import timedelta
 from pathlib import Path
+from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +38,94 @@ from .scrapers.proxy_manager import get_proxy_enabled
 from .views import _serialize_run
 
 _ACTIVE_STATUSES = ["queued", "running"]
+
+# ---------------------------------------------------------------------------
+# Push-eligibility helpers — mirrors push_crm_leads skip logic exactly so
+# crm_pipeline.pending_push reflects what the command would actually push.
+# ---------------------------------------------------------------------------
+_PUSH_GARBAGE_HANDLES = frozenset(
+    {"login", "top", "profilephp", "pages", "groups", "events", "search"}
+)
+_PUSH_BAD_FB_PATH_RE = re.compile(
+    r"^/(profile\.php|login|search)(/|$)", re.IGNORECASE
+)
+
+
+def _fb_handle(url: str) -> str:
+    """Return the derived handle for a Facebook URL, or '' if invalid/garbage."""
+    parsed = urlparse(url)
+    if _PUSH_BAD_FB_PATH_RE.match(parsed.path):
+        return ""
+    segments = [s for s in parsed.path.split("/") if s]
+    if not segments:
+        return ""
+    # Bare numeric user/page ID with no /people/ or /p/ prefix → unresolvable
+    if (
+        segments[-1].isdigit()
+        and not (segments[0] in ("people", "p") and len(segments) >= 3)
+    ):
+        return ""
+    if segments[0] == "people" and len(segments) >= 3 and segments[-1].isdigit():
+        handle = segments[1].lower()
+    elif segments[0] == "p" and len(segments) >= 2:
+        handle = re.sub(r"-\d{7,}$", "", segments[-1].lower())
+    else:
+        handle = segments[-1].lower().lstrip("@")
+        if handle.isdigit() and len(segments) >= 2:
+            handle = segments[-2].lower()
+    if not handle or handle in _PUSH_GARBAGE_HANDLES or handle.isdigit():
+        return ""
+    return handle
+
+
+def _ig_handle(url: str) -> str:
+    """Return the Instagram handle, or '' if garbage."""
+    segs = [s for s in urlparse(url).path.split("/") if s]
+    handle = segs[-1].lower().lstrip("@") if segs else ""
+    if not handle or handle in _PUSH_GARBAGE_HANDLES or handle.isdigit():
+        return ""
+    return handle
+
+
+def _website_handle(url: str) -> str:
+    """Return the domain slug for a website URL, or '' if garbage."""
+    netloc = urlparse(url).netloc.lower().removeprefix("www.")
+    label = netloc.split(".")[0] if netloc else ""
+    if not label or label in _PUSH_GARBAGE_HANDLES:
+        return ""
+    return label
+
+
+def _event_push_eligible(event) -> bool:
+    """Return True iff push_crm_leads would build a valid lead for this event."""
+    org = event.organizer_ref
+
+    # Facebook (organizer field)
+    fb = org.facebook_url or ""
+    if fb.startswith("http") and "facebook.com" in fb and _fb_handle(fb):
+        return True
+
+    # Facebook fallback (event.organizer_url scraped directly from the event card)
+    ev_url = event.organizer_url or ""
+    if ev_url.startswith("http") and "facebook.com" in ev_url and _fb_handle(ev_url):
+        return True
+
+    # Instagram
+    ig = org.instagram_url or ""
+    if ig.startswith("http") and _ig_handle(ig):
+        return True
+
+    # Website
+    ws = org.website or ""
+    if ws.startswith("http") and _website_handle(ws):
+        return True
+
+    # Email / phone as last resort (no URL)
+    has_email = bool(
+        org.email and re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", org.email)
+    )
+    has_phone = bool(org.phone and org.phone.strip())
+    return has_email or has_phone
 
 
 # ---------------------------------------------------------------------------
@@ -347,24 +437,6 @@ def crm_pipeline(request):
         .annotate(
             total_future=Count("id", filter=Q(starts_at__gte=now)),
             total_pushed=Count("id", filter=Q(crm_pushed_at__isnull=False)),
-            pending_push=Count(
-                "id",
-                filter=(
-                    Q(crm_pushed_at__isnull=True, starts_at__gte=now)
-                    & ~Q(agent_categories=[])
-                    & ~Q(agent_categories__isnull=True)
-                    & Q(organizer_ref__isnull=False)
-                    & Q(organizer_ref__status="pending")
-                    & (
-                        Q(organizer_ref__facebook_url__gt="")
-                        | Q(organizer_url__gt="")
-                        | Q(organizer_ref__instagram_url__gt="")
-                        | Q(organizer_ref__website__gt="")
-                        | Q(organizer_ref__email__gt="")
-                        | Q(organizer_ref__phone__gt="")
-                    )
-                ),
-            ),
             uncategorized=Count(
                 "id",
                 filter=Q(agent_categories=[], starts_at__gte=now),
@@ -372,6 +444,37 @@ def crm_pipeline(request):
         )
         .order_by("-total_future")
     )
+
+    # Compute pending_push in Python so it exactly mirrors push_crm_leads eligibility
+    # (organizer URL validation, garbage-handle detection, email/phone fallback).
+    _eligible_qs = (
+        Event.objects.filter(
+            starts_at__gte=now,
+            crm_pushed_at__isnull=True,
+            organizer_ref__isnull=False,
+            organizer_ref__status="pending",
+        )
+        .exclude(agent_categories=[])
+        .exclude(agent_categories__isnull=True)
+        .exclude(source="")
+        .select_related("organizer_ref")
+        .only(
+            "source",
+            "organizer_url",
+            "organizer_ref__facebook_url",
+            "organizer_ref__instagram_url",
+            "organizer_ref__website",
+            "organizer_ref__email",
+            "organizer_ref__phone",
+        )
+    )
+    pending_by_source: dict[str, int] = {}
+    for _ev in _eligible_qs.iterator():
+        if _event_push_eligible(_ev):
+            pending_by_source[_ev.source] = pending_by_source.get(_ev.source, 0) + 1
+
+    for row in by_source:
+        row["pending_push"] = pending_by_source.get(row["source"], 0)
 
     # Top 10 categories by count from AI-assigned agent_categories.
     from collections import Counter
