@@ -410,14 +410,18 @@ def crm_settings(request):
                         status=400,
                     )
 
-        cfg, _created = ScraperConfig.objects.get_or_create(id=1)
-        for field in _SETTINGS_STR_FIELDS:
-            if field in body:
-                setattr(cfg, field, body[field])
-        if "per_key_intervals" in body:
-            cfg.per_key_intervals = body["per_key_intervals"]
-        cfg.updated_by = request.headers.get("X-Caller", "")
-        cfg.save()
+        try:
+            cfg, _created = ScraperConfig.objects.get_or_create(id=1)
+            for field in _SETTINGS_STR_FIELDS:
+                if field in body:
+                    setattr(cfg, field, body[field])
+            if "per_key_intervals" in body:
+                cfg.per_key_intervals = body["per_key_intervals"]
+            cfg.updated_by = request.headers.get("X-Caller", "")
+            cfg.save()
+        except Exception as exc:
+            logger.exception("[crm_settings] PATCH failed")
+            return JsonResponse({"error": str(exc)}, status=500)
 
         return JsonResponse(_read_settings())
 
