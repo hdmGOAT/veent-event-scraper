@@ -59,6 +59,7 @@ urlpatterns = [
     path("crm/settings/", crm_views.crm_settings, name="crm_settings"),
     path("crm/pipeline/", crm_views.crm_pipeline, name="crm_pipeline"),
     path("crm/health/", crm_views.crm_health, name="crm_health"),
+    path("crm/push/", crm_views.crm_push_trigger, name="crm_push_trigger"),
     # n8n automation webhooks
     path("webhooks/scrape/", views.scraper_webhook, name="scraper_webhook"),
     path("webhooks/ingest-events/", views.ingest_events_webhook, name="ingest_events_webhook"),
