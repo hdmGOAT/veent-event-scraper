@@ -78,6 +78,11 @@ CSRF_TRUSTED_ORIGINS = _csrf_origins
 # never hardcode or commit a real key. Empty string when unset.
 PLACES_API_KEY = os.environ.get('PLACES_API_KEY', '')
 
+# CRM API key — shared static secret for the /crm/ endpoints consumed by the
+# Veent CRM (SvelteKit). Validated against the X-API-Key header in
+# events.crm_views.crm_api_required. Empty = /crm/ API disabled (returns 403).
+CRM_API_KEY = os.environ.get("CRM_API_KEY", "")
+
 # AllEvents API key (Azure APIM subscription key).
 # Sign up at https://allevents.developer.azure-api.net — Starter plan is free.
 # Add ALLEVENTS_API_KEY=<your-key> to your .env file.

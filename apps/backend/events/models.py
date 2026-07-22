@@ -384,3 +384,44 @@ class BandwidthLog(models.Model):
     def __str__(self):
         mb = self.bytes_transferred / 1_048_576
         return f"{self.source} / {self.proxy_type} / {mb:.1f} MB"
+
+
+class ScraperConfig(models.Model):
+    """Singleton DB record mirroring the scheduler env-var settings.
+
+    The scheduler reads this at round start (falls back to env vars when no row exists).
+    Managed by the CRM via the /crm/settings/ PATCH endpoint.
+    Only one row should ever exist (id=1, via get_or_create).
+    """
+    scraper_keys = models.CharField(
+        max_length=2000, blank=True,
+        help_text="Comma-separated scraper keys. Mirrors SCRAPER_KEYS env var.",
+    )
+    scraper_interval = models.CharField(
+        max_length=20, blank=True,
+        help_text="Round interval. Format: 6h / 30m / 3600s. Mirrors SCRAPER_INTERVAL.",
+    )
+    push_interval = models.CharField(
+        max_length=20, blank=True,
+        help_text="CRM push interval. Format: 1h / 30m. Mirrors PUSH_INTERVAL.",
+    )
+    scraper_timeout = models.CharField(
+        max_length=20, blank=True,
+        help_text="Per-scraper timeout. Format: 90m / 3600s. Mirrors SCRAPER_TIMEOUT.",
+    )
+    per_key_intervals = models.JSONField(
+        default=dict, blank=True,
+        help_text='Per-scraper interval overrides. {"luma": "24h"}. Mirrors SCRAPER_INTERVAL_<KEY> env vars.',
+    )
+    updated_at = models.DateTimeField(auto_now=True)
+    updated_by = models.CharField(
+        max_length=255, blank=True,
+        help_text="Email of the CRM user who last updated this record.",
+    )
+
+    class Meta:
+        verbose_name = "Scraper config"
+        verbose_name_plural = "Scraper config"
+
+    def __str__(self):
+        return f"ScraperConfig (updated {self.updated_at:%Y-%m-%d %H:%M})"

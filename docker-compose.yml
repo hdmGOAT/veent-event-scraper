@@ -46,8 +46,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-    expose:
-      - "8000"
+    ports:
+      - "8000:8000"
     restart: unless-stopped
 
   scheduler:
