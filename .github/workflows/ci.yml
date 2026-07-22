@@ -172,3 +172,10 @@ jobs:
             docker compose -f ${{ vars.DEPLOY_PATH }}/docker-compose.yml pull
             docker compose -f ${{ vars.DEPLOY_PATH }}/docker-compose.yml up -d --remove-orphans
           "
+
+      - name: Run database migrations
+        run: |
+          ssh -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} "
+            set -euo pipefail
+            docker compose -f ${{ vars.DEPLOY_PATH }}/docker-compose.yml exec -T backend python manage.py migrate --noinput
+          "
