@@ -140,6 +140,8 @@ jobs:
           SCRAPER_TIMEOUT=${{ secrets.SCRAPER_TIMEOUT }}
           PUSH_INTERVAL=${{ secrets.PUSH_INTERVAL }}
           DISCORD_WEBHOOK_URL=${{ secrets.DISCORD_WEBHOOK_URL }}
+          CRM_API_KEY=${{ secrets.CRM_API_KEY }}
+          HTTPS=false
           EOF
 
       - name: Write cookie files on VM
