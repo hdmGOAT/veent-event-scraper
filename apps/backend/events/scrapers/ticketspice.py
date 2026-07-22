@@ -19,7 +19,7 @@ import logging
 import re
 import time
 from datetime import datetime, timezone as dt_timezone
-from urllib.parse import urlparse, quote_plus
+from urllib.parse import urlparse, quote_plus, unquote
 
 import requests
 from bs4 import BeautifulSoup
@@ -162,6 +162,8 @@ def _google_search_urls(queries: list[str], pages_per_query: int) -> set[str]:
                     network_idle=False,
                     page_action=_collect,
                     proxy=_proxy_url,
+                    timeout=60000,
+                    retries=0,
                 )
             except Exception as exc:
                 logger.warning(
@@ -178,6 +180,48 @@ def _google_search_urls(queries: list[str], pages_per_query: int) -> set[str]:
                 break  # No new results → stop paginating this query
 
     logger.info("TicketSpice: Google discovery → %d URLs", len(found))
+
+    # Fallback: if Google returned nothing (CAPTCHA / browser failure), try the
+    # DuckDuckGo HTML endpoint over plain requests (no proxy, no browser).
+    if not found:
+        logger.info("TicketSpice: Google returned 0 URLs — trying DuckDuckGo HTML fallback")
+        found = _ddg_search_urls(queries)
+        logger.info("TicketSpice: DuckDuckGo discovery → %d URLs", len(found))
+
+    return found
+
+
+_DDG_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+_DDG_URL_RE = re.compile(r'([a-zA-Z0-9\-]+\.ticketspice\.com[^\s<"\'%&]{1,150})')
+
+
+def _ddg_search_urls(queries: list[str]) -> set[str]:
+    """DuckDuckGo HTML fallback: extract TicketSpice event URLs via plain requests."""
+    session = requests.Session()
+    session.headers.update({"User-Agent": _DDG_UA})
+
+    found: set[str] = set()
+    for query in queries:
+        ddg_url = f"https://html.duckduckgo.com/html/?q={quote_plus(query)}"
+        try:
+            resp = session.get(ddg_url, timeout=_TIMEOUT)
+            resp.raise_for_status()
+        except Exception as exc:
+            logger.warning("TicketSpice DDG: error for query=%r: %s", query, exc)
+            continue
+
+        for raw in _DDG_URL_RE.findall(resp.text):
+            candidate = unquote(raw)
+            url = candidate if candidate.startswith("http") else f"https://{candidate}"
+            try:
+                parsed = urlparse(url)
+            except Exception:
+                continue
+            if _is_event_url(parsed):
+                found.add(_clean_url(url))
+
+        time.sleep(_DELAY)
+
     return found
 
 

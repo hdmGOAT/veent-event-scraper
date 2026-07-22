@@ -65,6 +65,7 @@ _SESSION_HEADERS = {
 _API_HEADERS = {
     "User-Agent": _SESSION_HEADERS["User-Agent"],
     "Accept": "application/json",
+    "X-Requested-With": "XMLHttpRequest",
     "Referer": "https://eventsize.com/",
 }
 
@@ -203,6 +204,8 @@ def _google_search_urls(queries: list[str], pages_per_query: int) -> set[str]:
                     network_idle=False,
                     page_action=_collect,
                     proxy=_proxy_url,
+                    timeout=60000,
+                    retries=0,
                 )
             except Exception as exc:
                 logger.warning(
@@ -234,12 +237,11 @@ def _api_discover_urls(locations: list[str]) -> dict[str, str]:
     """
     found: dict[str, str] = {}
     session = get_session()
-    session.headers.update(_API_HEADERS)
 
     for location in locations:
         url = _API_BASE.format(location=quote_plus(location))
         try:
-            resp = session.get(url, timeout=_TIMEOUT)
+            resp = session.get(url, timeout=_TIMEOUT, headers=_API_HEADERS)
             if resp.status_code == 429:
                 logger.warning("Eventsize API: 429 rate limited at %s (skip)", location)
                 time.sleep(_API_DELAY)
@@ -262,10 +264,10 @@ def _api_discover_urls(locations: list[str]) -> dict[str, str]:
             for offer in offers:
                 if not isinstance(offer, dict):
                     continue
-                shortcode = (offer.get("shortcode") or "").strip()
-                if not shortcode:
+                event_id = offer.get("id")
+                if event_id in (None, ""):
                     continue
-                u = _event_url(shortcode)
+                u = f"https://eventsize.com/event/{event_id}"
                 if u not in found:
                     found[u] = str(offer.get("timestamp") or "")
                     new_here += 1
