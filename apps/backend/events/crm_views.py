@@ -433,4 +433,3 @@ def crm_push_trigger(request):
     _run_bg("categorize_events")
     _run_bg("push_crm_leads")
     return JsonResponse({"status": "started"})
-    )
