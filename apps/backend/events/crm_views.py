@@ -339,7 +339,13 @@ def crm_pipeline(request):
             total_future=Count("id", filter=Q(starts_at__gte=now)),
             pending_push=Count(
                 "id",
-                filter=Q(crm_pushed_at__isnull=True, starts_at__gte=now),
+                filter=(
+                    Q(crm_pushed_at__isnull=True, starts_at__gte=now)
+                    & ~Q(agent_categories=[])
+                    & ~Q(agent_categories__isnull=True)
+                    & Q(organizer_ref__isnull=False)
+                    & Q(organizer_ref__status="pending")
+                ),
             ),
             uncategorized=Count(
                 "id",
