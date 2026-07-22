@@ -286,8 +286,9 @@ if not DEBUG:
     # Nginx terminates TLS; tell Django the real scheme via this header.
     SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 
-    # Redirect plain HTTP to HTTPS (nginx handles it, but defence-in-depth).
-    SECURE_SSL_REDIRECT = True
+    # Redirect plain HTTP to HTTPS. Set HTTPS=false to disable when running
+    # without TLS (e.g. direct IP access with no Caddy/nginx in front).
+    SECURE_SSL_REDIRECT = os.environ.get("HTTPS", "true").lower() not in ("false", "0", "no")
 
     # Cookie security
     SESSION_COOKIE_SECURE = True
