@@ -355,6 +355,14 @@ def crm_pipeline(request):
                     & ~Q(agent_categories__isnull=True)
                     & Q(organizer_ref__isnull=False)
                     & Q(organizer_ref__status="pending")
+                    & (
+                        Q(organizer_ref__facebook_url__gt="")
+                        | Q(organizer_url__gt="")
+                        | Q(organizer_ref__instagram_url__gt="")
+                        | Q(organizer_ref__website__gt="")
+                        | Q(organizer_ref__email__gt="")
+                        | Q(organizer_ref__phone__gt="")
+                    )
                 ),
             ),
             uncategorized=Count(
