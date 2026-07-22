@@ -157,7 +157,7 @@ class AllEventsPHOrganizersScraper(BaseScraper):
         events_qs = list(
             Event.objects.filter(source="allevents_in", organizer_url="")
             .exclude(url="")
-            .order_by("id")
+            .order_by("id")[:50]
         )
         total = len(events_qs)
         logger.info("Phase 1: enriching %d events with organizer info", total)
