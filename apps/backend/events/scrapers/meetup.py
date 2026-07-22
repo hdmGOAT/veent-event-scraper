@@ -23,7 +23,7 @@ from typing import Iterable
 from playwright.sync_api import sync_playwright
 from playwright_stealth import Stealth
 
-from .proxy_manager import get_proxy_enabled, get_proxy_session
+from .proxy_manager import get_proxy_enabled, resolve_playwright_proxy
 from .base import (
     BaseScraper,
     ScrapedEvent,
@@ -310,46 +310,82 @@ class MeetupScraper(BaseScraper):
         _proxy_arg = None
         if get_proxy_enabled():
             try:
-                _sess = get_proxy_session()
-                _purl = _sess.proxies.get("https") or _sess.proxies.get("http")
-                if _purl:
-                    _proxy_arg = {"server": _purl}
+                # resolve_playwright_proxy() handles DataImpulse vs free-proxy
+                # logic and returns a Playwright-ready dict that actually works
+                # with Chromium's CONNECT tunnel (unlike the plain requests
+                # preflight, which passed proxies that then failed the tunnel).
+                _proxy_arg = resolve_playwright_proxy(source="meetup")
             except Exception:
                 pass  # no proxy available — continue without
 
+        def _on_response(response):
+            url = response.url
+            if "meetup.com" not in url:
+                return
+            if response.status != 200:
+                return
+            ct = response.headers.get("content-type", "")
+            if "json" not in ct:
+                return
+            try:
+                body = response.json()
+                all_payloads.append(body)
+            except Exception:
+                pass
+
         with sync_playwright() as pw:
-            browser = pw.chromium.launch(
-                headless=True,
-                **({"proxy": _proxy_arg} if _proxy_arg else {}),
-            )
-            context = browser.new_context(
-                user_agent=(
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/124.0.0.0 Safari/537.36"
-                ),
-                locale="en-US",
-                timezone_id="Asia/Manila",
-            )
 
-            def _on_response(response):
-                url = response.url
-                if "meetup.com" not in url:
-                    return
-                if response.status != 200:
-                    return
-                ct = response.headers.get("content-type", "")
-                if "json" not in ct:
-                    return
-                try:
-                    body = response.json()
-                    all_payloads.append(body)
-                except Exception:
-                    pass
+            def _launch(proxy_arg):
+                """Launch a browser+context+page wired to _on_response."""
+                browser = pw.chromium.launch(
+                    headless=True,
+                    **({"proxy": proxy_arg} if proxy_arg else {}),
+                )
+                context = browser.new_context(
+                    user_agent=(
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) "
+                        "Chrome/124.0.0.0 Safari/537.36"
+                    ),
+                    locale="en-US",
+                    timezone_id="Asia/Manila",
+                )
+                page = context.new_page()
+                Stealth().use_sync(page)
+                page.on("response", _on_response)
+                return browser, context, page
 
-            page = context.new_page()
-            Stealth().use_sync(page)
-            page.on("response", _on_response)
+            def _scrape_url(page, url):
+                """Load one URL, scroll to lazy-load, and grab __NEXT_DATA__."""
+                page.goto(url, wait_until="load", timeout=_PAGE_TIMEOUT_MS)
+                page.wait_for_timeout(_INITIAL_WAIT_MS)
+
+                # Scroll to trigger lazy-loading / infinite scroll
+                for i in range(_SCROLL_ROUNDS):
+                    page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                    page.wait_for_timeout(_SCROLL_PAUSE_MS)
+                    # Try clicking "See more" / "Load more" buttons
+                    for selector in [
+                        "button:has-text('See more')",
+                        "button:has-text('Load more')",
+                        "button:has-text('Show more')",
+                        "[data-testid='load-more']",
+                    ]:
+                        try:
+                            btn = page.query_selector(selector)
+                            if btn and btn.is_visible():
+                                btn.click()
+                                page.wait_for_timeout(2_000)
+                        except Exception:
+                            pass
+
+                # Also grab __NEXT_DATA__ from the page HTML
+                html = page.content()
+                next_data = _extract_next_data(html)
+                if next_data:
+                    all_payloads.append(next_data)
+
+            browser, context, page = _launch(_proxy_arg)
 
             for url in _SEARCH_URLS:
                 if url in seen_urls:
@@ -357,36 +393,30 @@ class MeetupScraper(BaseScraper):
                 seen_urls.add(url)
                 logger.info("Meetup: loading %s", url)
                 try:
-                    page.goto(url, wait_until="load", timeout=_PAGE_TIMEOUT_MS)
-                    page.wait_for_timeout(_INITIAL_WAIT_MS)
-
-                    # Scroll to trigger lazy-loading / infinite scroll
-                    for i in range(_SCROLL_ROUNDS):
-                        page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                        page.wait_for_timeout(_SCROLL_PAUSE_MS)
-                        # Try clicking "See more" / "Load more" buttons
-                        for selector in [
-                            "button:has-text('See more')",
-                            "button:has-text('Load more')",
-                            "button:has-text('Show more')",
-                            "[data-testid='load-more']",
-                        ]:
-                            try:
-                                btn = page.query_selector(selector)
-                                if btn and btn.is_visible():
-                                    btn.click()
-                                    page.wait_for_timeout(2_000)
-                            except Exception:
-                                pass
-
-                    # Also grab __NEXT_DATA__ from the page HTML
-                    html = page.content()
-                    next_data = _extract_next_data(html)
-                    if next_data:
-                        all_payloads.append(next_data)
-
+                    _scrape_url(page, url)
                 except Exception as exc:
-                    logger.error("Meetup: failed to load %s: %s", url, exc)
+                    err_str = str(exc)
+                    if "ERR_TUNNEL" in err_str or "ERR_PROXY" in err_str:
+                        # The proxy's CONNECT tunnel failed — re-elect a fresh
+                        # proxy, relaunch the browser, and retry this URL once.
+                        logger.warning(
+                            "Meetup: proxy tunnel failed for %s — re-electing proxy and retrying",
+                            url,
+                        )
+                        try:
+                            from .proxy_manager import (
+                                reset_proxy_session,
+                                resolve_playwright_proxy,
+                            )
+                            reset_proxy_session()
+                            new_proxy = resolve_playwright_proxy(source="meetup")
+                            browser.close()
+                            browser, context, page = _launch(new_proxy)
+                            _scrape_url(page, url)
+                        except Exception as exc2:
+                            logger.error("Meetup: retry also failed for %s: %s", url, exc2)
+                    else:
+                        logger.error("Meetup: failed to load %s: %s", url, exc)
 
             browser.close()
 
