@@ -9,9 +9,18 @@ The surface is additive only: it reuses existing models, ``runner`` functions,
 and the ``_serialize_run`` helper from ``events.views``. No existing ``/api/``
 behaviour is changed.
 """
+import fcntl
 import functools
 import json
+import logging
+import subprocess
+import sys
+import tempfile
+import threading
 from datetime import timedelta
+from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 from django.conf import settings
 from django.db.models import Count, Q
@@ -406,30 +415,50 @@ def crm_health(request):
     )
 
 
+_PUSH_LOCK_PATH = Path(tempfile.gettempdir()) / "veent_crm_push.lock"
+
+
+def _push_job(manage_py: str) -> None:
+    """Run categorize_events then push_crm_leads sequentially in a worker thread.
+
+    A file-level exclusive lock prevents a second concurrent trigger from
+    running the same pair of commands while an earlier one is still in flight —
+    avoiding double-submission of the same events before crm_pushed_at is
+    stamped by the first job.
+    """
+    lock_fd = open(_PUSH_LOCK_PATH, "w")
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)  # blocks until prior job finishes
+        for cmd in ("categorize_events", "push_crm_leads"):
+            result = subprocess.run(
+                [sys.executable, manage_py, cmd],
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode != 0:
+                logger.error(
+                    "[crm_push] %s failed (rc=%d):\n%s",
+                    cmd, result.returncode, (result.stderr or result.stdout)[:1000],
+                )
+                return
+            logger.info("[crm_push] %s complete: %s", cmd, result.stdout.strip()[-300:])
+    finally:
+        fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        lock_fd.close()
+
+
 @csrf_exempt
 @crm_api_required
 @require_POST
 def crm_push_trigger(request):
-    """Kick off categorize_events + push_crm_leads in a background subprocess.
+    """Kick off categorize_events → push_crm_leads sequentially in a background thread.
 
-    Returns immediately with ``{"status": "started"}`` — the push runs
-    asynchronously so the HTTP response is not held open. A second POST while a
-    push is already running is accepted (push_crm_leads is idempotent).
+    Returns immediately with ``{"status": "started"}``. A file lock ensures a
+    second concurrent trigger waits for the first to finish rather than running
+    the same pair of commands in parallel.
     """
-    import subprocess
-    import sys
     from django.conf import settings as django_settings
 
     manage_py = str(django_settings.BASE_DIR / "manage.py")
-
-    def _run_bg(*args):
-        subprocess.Popen(
-            [sys.executable, manage_py, *args],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            close_fds=True,
-        )
-
-    _run_bg("categorize_events")
-    _run_bg("push_crm_leads")
+    threading.Thread(target=_push_job, args=(manage_py,), name="crm-push", daemon=True).start()
     return JsonResponse({"status": "started"})
