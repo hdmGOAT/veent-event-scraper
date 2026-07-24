@@ -54,12 +54,16 @@ _SHUTDOWN = threading.Event()
 def _parse_interval(value: str) -> int:
     v = value.strip().lower()
     if v.endswith("h"):
-        return int(v[:-1]) * 3600
-    if v.endswith("m"):
-        return int(v[:-1]) * 60
-    if v.endswith("s"):
-        return int(v[:-1])
-    return int(v)
+        result = int(v[:-1]) * 3600
+    elif v.endswith("m"):
+        result = int(v[:-1]) * 60
+    elif v.endswith("s"):
+        result = int(v[:-1])
+    else:
+        result = int(v)
+    if result <= 0:
+        raise ValueError(f"interval must be positive, got {result!r}")
+    return result
 
 
 def _wait_for_run(key: str, run_id: int, timeout: int | None = None, poll: int = 30) -> None:
