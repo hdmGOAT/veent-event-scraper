@@ -105,10 +105,90 @@ def _wait_for_run(key: str, run_id: int, timeout: int | None = None, poll: int =
         elapsed += poll
 
 
-def _scrape_round(keys: list[str], default_interval: int, per_key_intervals: dict[str, int], timeout: int | None = None) -> None:
-    """Run all keys sequentially, one at a time, respecting per-key intervals."""
-    last_run: dict[str, float] = {k: float("-inf") for k in keys}
+def _read_scrape_config() -> tuple[list[str], int, dict[str, int], int | None] | None:
+    """Read scraper config from DB (falling back to env vars).
+
+    Returns (keys, default_interval, per_key_intervals, timeout) or None if
+    config is missing or invalid.
+    """
+    try:
+        from events.models import ScraperConfig
+        _db_cfg = ScraperConfig.objects.first()
+    except Exception:
+        _db_cfg = None
+
+    keys_raw = (
+        _db_cfg.scraper_keys.strip() if _db_cfg and _db_cfg.scraper_keys.strip()
+        else os.environ.get("SCRAPER_KEYS", "").strip()
+    )
+    default_interval_raw = (
+        _db_cfg.scraper_interval.strip() if _db_cfg and _db_cfg.scraper_interval.strip()
+        else os.environ.get("SCRAPER_INTERVAL", "").strip()
+    )
+    timeout_raw = (
+        _db_cfg.scraper_timeout.strip() if _db_cfg and _db_cfg.scraper_timeout.strip()
+        else os.environ.get("SCRAPER_TIMEOUT", "").strip()
+    )
+    per_key_raw = (_db_cfg.per_key_intervals or {}) if _db_cfg else {}
+
+    if not keys_raw or not default_interval_raw:
+        logger.warning("[scheduler] scraper keys or interval not configured — retrying in 60s")
+        return None
+
+    try:
+        default_interval = _parse_interval(default_interval_raw)
+    except (ValueError, TypeError):
+        logger.error("[scheduler] SCRAPER_INTERVAL=%r invalid — retrying in 60s", default_interval_raw)
+        return None
+
+    scraper_timeout = None
+    if timeout_raw:
+        try:
+            scraper_timeout = _parse_interval(timeout_raw)
+        except (ValueError, TypeError):
+            logger.error("[scheduler] SCRAPER_TIMEOUT=%r invalid — no timeout applied", timeout_raw)
+
+    keys = []
+    per_key_intervals: dict[str, int] = {}
+    for key in [k.strip() for k in keys_raw.split(",") if k.strip()]:
+        if key not in SCRAPERS:
+            logger.warning("[scheduler] unknown scraper key %r — skipping", key)
+            continue
+        keys.append(key)
+        override_raw = per_key_raw.get(key, "") or os.environ.get(f"SCRAPER_INTERVAL_{key.upper()}", "").strip()
+        if override_raw:
+            try:
+                per_key_intervals[key] = _parse_interval(override_raw)
+            except (ValueError, TypeError):
+                logger.warning("[scheduler] per-key interval for %r invalid — using default", key)
+
+    if not keys:
+        logger.warning("[scheduler] no valid scraper keys configured — retrying in 60s")
+        return None
+
+    return keys, default_interval, per_key_intervals, scraper_timeout
+
+
+def _scrape_round() -> None:
+    """Run scrapers sequentially, re-reading config from DB at each round start.
+
+    Config is re-read at the top of every round so changes made via the CRM
+    dashboard (scraper_keys, intervals, timeout) take effect automatically
+    without restarting the scheduler container.
+    """
+    last_run: dict[str, float] = {}
     while not _SHUTDOWN.is_set():
+        cfg = _read_scrape_config()
+        if cfg is None:
+            _SHUTDOWN.wait(timeout=60)
+            continue
+
+        keys, default_interval, per_key_intervals, scraper_timeout = cfg
+        logger.info(
+            "[scheduler] %d scrapers queued sequentially, round interval=%ss, timeout=%s",
+            len(keys), default_interval, f"{scraper_timeout}s" if scraper_timeout else "none",
+        )
+
         round_start = time.monotonic()
         for key in keys:
             if _SHUTDOWN.is_set():
@@ -127,8 +207,11 @@ def _scrape_round(keys: list[str], default_interval: int, per_key_intervals: dic
                 if already_active:
                     logger.info("[scheduler] scrape/%s already active, skipping", key)
                 else:
-                    logger.info("[scheduler] scrape/%s started (run_id=%s) — waiting for completion", key, run.id)
-                    _wait_for_run(key, run.id, timeout=timeout)
+                    logger.info(
+                        "[scheduler] scrape/%s started (run_id=%s) — waiting for completion",
+                        key, run.id,
+                    )
+                    _wait_for_run(key, run.id, timeout=scraper_timeout)
                     last_run[key] = time.monotonic()
             except Exception:
                 logger.exception("[scheduler] scrape/%s failed to trigger", key)
@@ -161,9 +244,32 @@ def _run_management_command(label: str, *args: str) -> tuple[int, str]:
     return result.returncode, result.stdout + result.stderr
 
 
-def _push_loop(interval: int) -> None:
-    logger.info("[scheduler] categorize+push — every %ss", interval)
+def _push_loop() -> None:
     while not _SHUTDOWN.is_set():
+        # Re-read push interval from DB each iteration so dashboard changes take effect.
+        try:
+            from events.models import ScraperConfig
+            _db_cfg = ScraperConfig.objects.first()
+        except Exception:
+            _db_cfg = None
+
+        push_interval_raw = (
+            _db_cfg.push_interval.strip() if _db_cfg and _db_cfg.push_interval.strip()
+            else os.environ.get("PUSH_INTERVAL", "").strip()
+        )
+        if not push_interval_raw:
+            logger.warning("[scheduler] PUSH_INTERVAL not configured — retrying in 60s")
+            _SHUTDOWN.wait(timeout=60)
+            continue
+        try:
+            interval = _parse_interval(push_interval_raw)
+        except (ValueError, TypeError):
+            logger.error("[scheduler] PUSH_INTERVAL=%r invalid — retrying in 60s", push_interval_raw)
+            _SHUTDOWN.wait(timeout=60)
+            continue
+
+        logger.info("[scheduler] categorize+push — every %ss", interval)
+
         # Step 1: categorize uncategorized events
         logger.info("[scheduler] running categorize_events")
         try:
@@ -210,114 +316,15 @@ class Command(BaseCommand):
         if count:
             logger.info("[scheduler] marked %d orphaned run(s) as failed on startup", count)
 
-        # Read scheduler config from DB if available; fall back to env vars below.
-        # Wrapped broadly so a slow/unreachable DB at startup can never break the
-        # env-var fallback path.
-        try:
-            from events.models import ScraperConfig
-            _db_cfg = ScraperConfig.objects.first()
-        except Exception:
-            _db_cfg = None
-
         threads = []
 
         # ── Scrape jobs ───────────────────────────────────────────────────────
-        keys_raw = (
-            _db_cfg.scraper_keys.strip() if _db_cfg and _db_cfg.scraper_keys.strip()
-            else os.environ.get("SCRAPER_KEYS", "").strip()
-        )
-        default_interval_raw = (
-            _db_cfg.scraper_interval.strip() if _db_cfg and _db_cfg.scraper_interval.strip()
-            else os.environ.get("SCRAPER_INTERVAL", "").strip()
-        )
-
-        if keys_raw and default_interval_raw:
-            try:
-                default_interval = _parse_interval(default_interval_raw)
-            except (ValueError, TypeError):
-                logger.error(
-                    "[scheduler] SCRAPER_INTERVAL=%r invalid — scrape jobs disabled",
-                    default_interval_raw,
-                )
-                default_interval = None
-
-            if default_interval is not None:
-                keys = []
-                per_key_intervals: dict[str, int] = {}
-                for key in [k.strip() for k in keys_raw.split(",") if k.strip()]:
-                    if key not in SCRAPERS:
-                        logger.warning("[scheduler] unknown scraper key %r — skipping", key)
-                        continue
-                    keys.append(key)
-                    override_raw = (
-                        (_db_cfg.per_key_intervals or {}).get(key, "")
-                        if _db_cfg else ""
-                    ) or os.environ.get(f"SCRAPER_INTERVAL_{key.upper()}", "").strip()
-                    if override_raw:
-                        try:
-                            per_key_intervals[key] = _parse_interval(override_raw)
-                        except (ValueError, TypeError):
-                            logger.warning(
-                                "[scheduler] SCRAPER_INTERVAL_%s=%r invalid — using default",
-                                key.upper(), override_raw,
-                            )
-
-                if keys:
-                    timeout_raw = (
-                        _db_cfg.scraper_timeout.strip() if _db_cfg and _db_cfg.scraper_timeout.strip()
-                        else os.environ.get("SCRAPER_TIMEOUT", "").strip()
-                    )
-                    scraper_timeout = None
-                    if timeout_raw:
-                        try:
-                            scraper_timeout = _parse_interval(timeout_raw)
-                        except (ValueError, TypeError):
-                            logger.error(
-                                "[scheduler] SCRAPER_TIMEOUT=%r invalid — no timeout applied",
-                                timeout_raw,
-                            )
-                    logger.info(
-                        "[scheduler] %d scrapers queued sequentially, round interval=%ss, timeout=%s",
-                        len(keys), default_interval, f"{scraper_timeout}s" if scraper_timeout else "none",
-                    )
-                    threads.append(threading.Thread(
-                        target=_scrape_round,
-                        args=(keys, default_interval, per_key_intervals, scraper_timeout),
-                        name="sched-scrape",
-                        daemon=True,
-                    ))
-        elif keys_raw or default_interval_raw:
-            logger.warning(
-                "[scheduler] Both SCRAPER_KEYS and SCRAPER_INTERVAL must be set — scrape jobs disabled"
-            )
+        # Config is re-read from DB at the start of each round inside _scrape_round,
+        # so changes via the CRM dashboard take effect without restarting the scheduler.
+        threads.append(threading.Thread(target=_scrape_round, name="sched-scrape", daemon=True))
 
         # ── Push job ──────────────────────────────────────────────────────────
-        push_interval_raw = (
-            _db_cfg.push_interval.strip() if _db_cfg and _db_cfg.push_interval.strip()
-            else os.environ.get("PUSH_INTERVAL", "").strip()
-        )
-        if push_interval_raw:
-            try:
-                push_interval = _parse_interval(push_interval_raw)
-                threads.append(threading.Thread(
-                    target=_push_loop,
-                    args=(push_interval,),
-                    name="sched-push",
-                    daemon=True,
-                ))
-            except (ValueError, TypeError):
-                logger.error(
-                    "[scheduler] PUSH_INTERVAL=%r invalid — push job disabled",
-                    push_interval_raw,
-                )
-
-        if not threads:
-            logger.warning(
-                "[scheduler] nothing scheduled. Set SCRAPER_KEYS + SCRAPER_INTERVAL "
-                "and/or PUSH_INTERVAL to activate."
-            )
-            _SHUTDOWN.wait()
-            return
+        threads.append(threading.Thread(target=_push_loop, name="sched-push", daemon=True))
 
         def _handle_signal(signum, frame):
             logger.info("[scheduler] signal %s — shutting down", signum)
